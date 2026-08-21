@@ -1,0 +1,110 @@
+name: Build, verify, and release
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: sift-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  verify:
+    name: Verify public boundary
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore locked dependencies
+        run: dotnet restore Stratus.Sift.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build Stratus.Sift.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Stratus.Sift.slnx --configuration Release --no-build
+
+      - name: Verify source boundary
+        shell: pwsh
+        run: ./eng/Verify-PublicBoundary.ps1
+
+  release:
+    name: Build Windows release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set release version
+        id: version
+        shell: pwsh
+        run: '"version=0.1.${{ github.run_number }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'
+
+      - name: Build release
+        shell: pwsh
+        run: ./eng/Build-Release.ps1 -Version '${{ steps.version.outputs.version }}'
+
+      - name: Verify release boundary
+        shell: pwsh
+        run: ./eng/Verify-PublicBoundary.ps1 -ArtifactPath ./artifacts/release/stratus-sift-win-x64.exe
+
+      - name: Guard public visibility
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $visibility = gh repo view '${{ github.repository }}' --json visibility --jq .visibility
+          if ($visibility -ne 'PRIVATE' -and (Test-Path -LiteralPath 'PUBLICATION-BLOCKED.md')) {
+            throw 'Public releases remain blocked by PUBLICATION-BLOCKED.md.'
+          }
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $assets = @(
+            'artifacts/release/stratus-sift-win-x64.exe',
+            'artifacts/release/stratus-sift-win-x64.zip',
+            'artifacts/release/SHA256SUMS.txt'
+          )
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag @assets --clobber
+          }
+          else {
+            gh release create $tag @assets --target $env:GITHUB_SHA --generate-notes --title "Stratus Sift $env:RELEASE_VERSION"
+          }
