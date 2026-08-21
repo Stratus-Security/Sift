@@ -17,7 +17,7 @@ env:
 
 jobs:
   verify:
-    name: Verify public boundary
+    name: Verify source and tests
     runs-on: windows-latest
     permissions:
       contents: read
@@ -33,6 +33,8 @@ jobs:
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Restore locked dependencies
         run: dotnet restore Stratus.Sift.slnx --locked-mode
@@ -47,13 +49,34 @@ jobs:
         shell: pwsh
         run: ./eng/Verify-PublicBoundary.ps1
 
-  release:
-    name: Build Windows release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  build-release:
+    name: Build ${{ matrix.rid }}
     needs: verify
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-latest
+            executable: stratus-sift-win-x64.exe
+          - rid: win-arm64
+            runner: windows-11-arm
+            executable: stratus-sift-win-arm64.exe
+          - rid: linux-x64
+            runner: ubuntu-24.04
+            executable: stratus-sift-linux-x64
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+            executable: stratus-sift-linux-arm64
+          - rid: osx-x64
+            runner: macos-15-intel
+            executable: stratus-sift-osx-x64
+          - rid: osx-arm64
+            runner: macos-15
+            executable: stratus-sift-osx-arm64
 
     steps:
       - name: Checkout
@@ -66,19 +89,108 @@ jobs:
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Set release version
         id: version
         shell: pwsh
         run: '"version=0.1.${{ github.run_number }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'
 
-      - name: Build release
+      - name: Build Native AOT release
         shell: pwsh
-        run: ./eng/Build-Release.ps1 -Version '${{ steps.version.outputs.version }}'
+        run: ./eng/Build-Release.ps1 -Version '${{ steps.version.outputs.version }}' -RuntimeIdentifier '${{ matrix.rid }}'
 
-      - name: Verify release boundary
+      - name: Smoke test native executable
         shell: pwsh
-        run: ./eng/Verify-PublicBoundary.ps1 -ArtifactPath ./artifacts/release/stratus-sift-win-x64.exe
+        run: |
+          $executable = Resolve-Path './artifacts/release/${{ matrix.rid }}/${{ matrix.executable }}'
+          if (-not $IsWindows) {
+            chmod 755 $executable
+          }
+          $version = (& $executable --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -ne '${{ steps.version.outputs.version }}') {
+            throw "Unexpected version: $version"
+          }
+          $json = (& $executable scan README.md --format json | Out-String) | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $json.summary.objectsScanned -ne 1) {
+            throw 'The native scan smoke test failed.'
+          }
+
+      - name: Verify executable boundary
+        shell: pwsh
+        run: ./eng/Verify-PublicBoundary.ps1 -ArtifactPath './artifacts/release/${{ matrix.rid }}/${{ matrix.executable }}'
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.rid }}
+          path: artifacts/release/${{ matrix.rid }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - verify
+      - build-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set release version
+        id: version
+        shell: pwsh
+        run: '"version=0.1.${{ github.run_number }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'
+
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: artifacts/release
+          merge-multiple: true
+
+      - name: Verify assets and write checksums
+        shell: pwsh
+        run: |
+          $releaseRoot = Resolve-Path 'artifacts/release'
+          $partialChecksums = @(Get-ChildItem $releaseRoot -File -Filter 'SHA256SUMS-*.txt')
+          if ($partialChecksums.Count -ne 6) {
+            throw "Expected six platform checksum files, found $($partialChecksums.Count)."
+          }
+          foreach ($checksumFile in $partialChecksums) {
+            foreach ($line in [System.IO.File]::ReadAllLines($checksumFile.FullName)) {
+              if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
+                throw "Invalid checksum line in $($checksumFile.Name): $line"
+              }
+              $asset = Join-Path $releaseRoot $Matches[2]
+              $actual = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $Matches[1]) {
+                throw "Checksum mismatch for $($Matches[2])."
+              }
+            }
+          }
+          $assets = @(Get-ChildItem $releaseRoot -File | Where-Object Name -NotLike 'SHA256SUMS-*.txt' | Sort-Object Name)
+          if ($assets.Count -ne 12) {
+            throw "Expected twelve release assets, found $($assets.Count)."
+          }
+          $checksums = foreach ($asset in $assets) {
+            $hash = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($asset.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path $releaseRoot 'SHA256SUMS.txt'),
+            $checksums,
+            [System.Text.UTF8Encoding]::new($false))
+          Remove-Item $partialChecksums.FullName -Force
 
       - name: Guard public visibility
         shell: pwsh
@@ -97,11 +209,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $tag = "v$env:RELEASE_VERSION"
-          $assets = @(
-            'artifacts/release/stratus-sift-win-x64.exe',
-            'artifacts/release/stratus-sift-win-x64.zip',
-            'artifacts/release/SHA256SUMS.txt'
-          )
+          $assets = @(Get-ChildItem 'artifacts/release' -File | Sort-Object Name | ForEach-Object FullName)
           if (gh release view $tag 2>$null) {
             gh release upload $tag @assets --clobber
           }

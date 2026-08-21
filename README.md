@@ -1,40 +1,69 @@
 # Stratus Sift
 
-Stratus Sift is a focused filesystem content scanner for security assessments. It scans local folders and reachable UNC/SMB paths for high-signal secrets and sensitive data without requiring the Stratus Shield platform.
+Sift searches files for secrets and sensitive data. It runs on its own and does not need Stratus Shield.
 
-## Quick start
+Matched values are hidden by default. Use `--show-secrets` only when you can protect the output.
+
+## Download
+
+Download the archive for your system from the [latest release](https://github.com/Stratus-Security/Sift/releases/latest).
+
+| System | x64 | Arm64 |
+| --- | --- | --- |
+| Windows | [ZIP](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-x64.zip) | [ZIP](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-arm64.zip) |
+| Linux | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-x64.tar.gz) | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-arm64.tar.gz) |
+| macOS | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-x64.tar.gz) | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-arm64.tar.gz) |
+
+You can check a download against [SHA256SUMS.txt](https://github.com/Stratus-Security/Sift/releases/latest/download/SHA256SUMS.txt). Release binaries are not code-signed yet.
+
+## Use Sift
+
+Windows:
 
 ```powershell
-stratus-sift scan C:\Shares --format text
-stratus-sift scan \\server\share --format snaffler --output findings.log
-stratus-sift scan . --format json --output findings.json
+.\stratus-sift-win-x64.exe scan C:\Shares
+.\stratus-sift-win-x64.exe scan \\server\share --format snaffler --output findings.log
 ```
 
-Values are redacted by default. Use `--show-secrets` only when the output will be handled securely. Run `stratus-sift --help` for all options.
+Linux or macOS:
 
-## Supported scope
+```bash
+tar -xzf stratus-sift-linux-x64.tar.gz
+./stratus-sift-linux-x64 scan /srv/shared
+```
 
-- Windows x64 executable releases.
-- Local files and folders, mapped drives, and UNC/SMB paths available to the current process.
-- Text-oriented files up to 10 MiB by default.
-- Human-readable, JSON, NDJSON, and Snaffler-style output.
-- Bounded parallelism, inaccessible-path handling, cancellation, extension filters, and enumeration-only mode.
+On Linux and macOS, mount network shares before scanning them. Sift can scan Windows UNC paths directly when it runs on Windows.
 
-SharePoint, Slack, Jira, browser collection, Active Directory discovery, credential orchestration, and managed-agent functionality are not part of this release.
+Useful options:
 
-## Build and test
+```text
+--format text|json|ndjson|snaffler
+--output <path>
+--enumerate-only
+--extensions .txt,.json,.env
+--exclude-dirs cache,temp
+--show-secrets
+```
 
-Requires the .NET 10 SDK.
+Run `stratus-sift --help` to see every option.
+
+## What it scans
+
+Sift scans local files, folders, mounted shares and Windows UNC paths that your account can already access. It reads text-oriented files up to 10 MiB by default and skips common build and source-control folders.
+
+It does not include SharePoint, Slack, Jira, browser collection, Active Directory discovery, credential management or Stratus Shield agent features.
+
+## Build from source
+
+Install the .NET 10 SDK, PowerShell 7.2 and the Native AOT tools for your system. AOT builds must run on the target operating system.
 
 ```powershell
-dotnet restore .\Stratus.Sift.slnx
+dotnet restore .\Stratus.Sift.slnx --locked-mode
 dotnet build .\Stratus.Sift.slnx --configuration Release --no-restore
 dotnet test .\Stratus.Sift.slnx --configuration Release --no-build
-dotnet publish .\src\Stratus.Sift.Cli\Stratus.Sift.Cli.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true
+.\eng\Build-Release.ps1 -Version 0.1.0 -RuntimeIdentifier win-x64
 ```
 
-## Security boundary
+Use `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64` or `win-arm64` for `RuntimeIdentifier`. The build script only accepts the runtime that matches the current machine.
 
-This repository contains only scanner-owned contracts, detection logic, filesystem traversal, output formatting, tests, and release automation. It does not contain Stratus Shield source, APIs, tenant models, policies, findings, workflow, graph, evidence-management, connector-management, or remediation code.
-
-Security reports should follow [SECURITY.md](SECURITY.md). Contributions are accepted under [CONTRIBUTING.md](CONTRIBUTING.md).
+Sift is licensed under [AGPL-3.0-only](LICENSE). Security reports belong in [SECURITY.md](SECURITY.md). See [CONTRIBUTING.md](CONTRIBUTING.md) before sending a change.

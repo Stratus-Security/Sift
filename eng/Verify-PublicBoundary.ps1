@@ -74,8 +74,9 @@ if (-not [string]::IsNullOrWhiteSpace($ArtifactPath)) {
     if (-not (Test-Path -LiteralPath $resolvedArtifact -PathType Leaf)) {
         throw "Release artifact not found: $resolvedArtifact"
     }
-    if ([System.IO.Path]::GetExtension($resolvedArtifact) -ne '.exe') {
-        throw 'Only the release executable may be supplied for binary boundary verification.'
+    $artifactExtension = [System.IO.Path]::GetExtension($resolvedArtifact)
+    if ($artifactExtension -notin @('', '.exe')) {
+        throw 'Only an unpacked release executable may be supplied for binary boundary verification.'
     }
 
     $bytes = [System.IO.File]::ReadAllBytes($resolvedArtifact)

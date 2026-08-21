@@ -13,23 +13,21 @@ internal sealed record SiftRule(
 
 internal static partial class SiftRuleCatalog
 {
-    private static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(250);
-
     internal static IReadOnlyList<SiftRule> Default { get; } =
     [
-        Rule("private-key", "Private key", "critical", "high", @"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
-        Rule("aws-access-key", "AWS access key", "high", "high", @"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
-        Rule("aws-secret-key", "AWS secret access key", "critical", "high", @"(?im)\b(?:aws_secret_access_key|awsSecretAccessKey)\b\s*[:=]\s*[""']?(?<secret>[A-Za-z0-9/+=]{40})", "secret"),
-        Rule("github-token", "GitHub token", "critical", "high", @"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{20,255})\b"),
-        Rule("slack-token", "Slack token", "high", "high", @"\bxox[baprs]-[A-Za-z0-9-]{10,200}\b"),
-        Rule("openai-key", "OpenAI API key", "critical", "high", @"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,200}\b"),
-        Rule("stripe-key", "Stripe secret key", "critical", "high", @"\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}\b"),
-        Rule("jwt", "JSON Web Token", "medium", "medium", @"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b"),
-        Rule("connection-password", "Connection-string password", "critical", "high", @"(?im)\b(?:password|pwd)\s*=\s*[""']?(?<secret>[^;\s,""']{4,})", "secret"),
-        Rule("secret-assignment", "Secret assignment", "high", "medium", @"(?im)\b(?:api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password|passwd)\b\s*[:=]\s*[""']?(?<secret>[A-Za-z0-9_./+=:@-]{8,})", "secret"),
-        Rule("basic-auth-uri", "Credentialed service URI", "high", "high", @"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:(?<secret>[^\s/@]{4,})@[^\s]+", "secret"),
-        Rule("payment-card", "Payment card number", "high", "medium", @"\b(?:\d[ -]*?){13,19}\b", Validator: IsValidPaymentCard),
-        Rule("iban", "International bank account number", "medium", "medium", @"(?i)\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b", Validator: IsValidIban),
+        Rule("private-key", "Private key", "critical", "high", PrivateKeyPattern()),
+        Rule("aws-access-key", "AWS access key", "high", "high", AwsAccessKeyPattern()),
+        Rule("aws-secret-key", "AWS secret access key", "critical", "high", AwsSecretKeyPattern(), "secret"),
+        Rule("github-token", "GitHub token", "critical", "high", GitHubTokenPattern()),
+        Rule("slack-token", "Slack token", "high", "high", SlackTokenPattern()),
+        Rule("openai-key", "OpenAI API key", "critical", "high", OpenAiKeyPattern()),
+        Rule("stripe-key", "Stripe secret key", "critical", "high", StripeKeyPattern()),
+        Rule("jwt", "JSON Web Token", "medium", "medium", JsonWebTokenPattern()),
+        Rule("connection-password", "Connection-string password", "critical", "high", ConnectionPasswordPattern(), "secret"),
+        Rule("secret-assignment", "Secret assignment", "high", "medium", SecretAssignmentPattern(), "secret"),
+        Rule("basic-auth-uri", "Credentialed service URI", "high", "high", BasicAuthUriPattern(), "secret"),
+        Rule("payment-card", "Payment card number", "high", "medium", PaymentCardPattern(), Validator: IsValidPaymentCard),
+        Rule("iban", "International bank account number", "medium", "medium", IbanPattern(), Validator: IsValidIban),
     ];
 
     private static SiftRule Rule(
@@ -37,7 +35,7 @@ internal static partial class SiftRuleCatalog
         string name,
         string severity,
         string confidence,
-        string pattern,
+        Regex pattern,
         string? secretGroup = null,
         Func<string, bool>? Validator = null)
         => new(
@@ -45,9 +43,87 @@ internal static partial class SiftRuleCatalog
             name,
             severity,
             confidence,
-            new Regex(pattern, RegexOptions.Compiled | RegexOptions.CultureInvariant, MatchTimeout),
+            pattern,
             secretGroup,
             Validator);
+
+    [GeneratedRegex(
+        @"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex PrivateKeyPattern();
+
+    [GeneratedRegex(
+        @"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex AwsAccessKeyPattern();
+
+    [GeneratedRegex(
+        @"\b(?:aws_secret_access_key|awsSecretAccessKey)\b\s*[:=]\s*[""']?(?<secret>[A-Za-z0-9/+=]{40})",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex AwsSecretKeyPattern();
+
+    [GeneratedRegex(
+        @"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{20,255})\b",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex GitHubTokenPattern();
+
+    [GeneratedRegex(
+        @"\bxox[baprs]-[A-Za-z0-9-]{10,200}\b",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex SlackTokenPattern();
+
+    [GeneratedRegex(
+        @"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,200}\b",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex OpenAiKeyPattern();
+
+    [GeneratedRegex(
+        @"\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}\b",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex StripeKeyPattern();
+
+    [GeneratedRegex(
+        @"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex JsonWebTokenPattern();
+
+    [GeneratedRegex(
+        @"\b(?:password|pwd)\s*=\s*[""']?(?<secret>[^;\s,""']{4,})",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex ConnectionPasswordPattern();
+
+    [GeneratedRegex(
+        @"\b(?:api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password|passwd)\b\s*[:=]\s*[""']?(?<secret>[A-Za-z0-9_./+=:@-]{8,})",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex SecretAssignmentPattern();
+
+    [GeneratedRegex(
+        @"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:(?<secret>[^\s/@]{4,})@[^\s]+",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex BasicAuthUriPattern();
+
+    [GeneratedRegex(
+        @"\b(?:\d[ -]*?){13,19}\b",
+        RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex PaymentCardPattern();
+
+    [GeneratedRegex(
+        @"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        matchTimeoutMilliseconds: 250)]
+    private static partial Regex IbanPattern();
 
     internal static bool IsValidPaymentCard(string value)
     {

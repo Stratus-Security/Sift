@@ -1,24 +1,12 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Stratus.Sift.Contracts;
 
 namespace Stratus.Sift.Cli;
 
 internal static class OutputWriter
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
-    private static readonly JsonSerializerOptions NdjsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     internal static async Task WriteAsync(
         ScanRunResult result,
         CliOptions options,
@@ -39,6 +27,7 @@ internal static class OutputWriter
             return;
         }
 
+        PlatformGuard.EnsurePathSupported(options.OutputPath);
         var outputPath = Path.GetFullPath(options.OutputPath);
         var parent = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrWhiteSpace(parent))
@@ -51,46 +40,37 @@ internal static class OutputWriter
     }
 
     private static string BuildJson(ScanRunResult result)
-        => JsonSerializer.Serialize(new
-        {
-            schemaVersion = SiftContractVersions.V1,
-            tool = "stratus-sift",
-            version = Version,
-            target = result.Target,
-            summary = result.ToSummary(),
-            observations = result.Observations,
-            errors = result.Errors,
-        }, JsonOptions) + Environment.NewLine;
+        => JsonSerializer.Serialize(
+            new JsonOutputDocument(
+                SiftContractVersions.V1,
+                "stratus-sift",
+                Version,
+                result.Target,
+                result.ToSummary(),
+                [.. result.Observations],
+                [.. result.Errors]),
+            SiftJsonContext.Default.JsonOutputDocument) + Environment.NewLine;
 
     private static string BuildNdjson(ScanRunResult result)
     {
         var builder = new StringBuilder();
         foreach (var observation in result.Observations)
         {
-            builder.AppendLine(JsonSerializer.Serialize(new
-            {
-                type = "observation",
-                schemaVersion = SiftContractVersions.V1,
-                observation,
-            }, NdjsonOptions));
+            builder.AppendLine(JsonSerializer.Serialize(
+                new NdjsonObservationDocument("observation", SiftContractVersions.V1, observation),
+                SiftNdjsonContext.Default.NdjsonObservationDocument));
         }
 
         foreach (var error in result.Errors)
         {
-            builder.AppendLine(JsonSerializer.Serialize(new
-            {
-                type = "error",
-                schemaVersion = SiftContractVersions.V1,
-                error,
-            }, NdjsonOptions));
+            builder.AppendLine(JsonSerializer.Serialize(
+                new NdjsonErrorDocument("error", SiftContractVersions.V1, error),
+                SiftNdjsonContext.Default.NdjsonErrorDocument));
         }
 
-        builder.AppendLine(JsonSerializer.Serialize(new
-        {
-            type = "summary",
-            schemaVersion = SiftContractVersions.V1,
-            summary = result.ToSummary(),
-        }, NdjsonOptions));
+        builder.AppendLine(JsonSerializer.Serialize(
+            new NdjsonSummaryDocument("summary", SiftContractVersions.V1, result.ToSummary()),
+            SiftNdjsonContext.Default.NdjsonSummaryDocument));
         return builder.ToString();
     }
 

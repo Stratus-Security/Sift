@@ -5,6 +5,10 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string] $Version,
 
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')]
+    [string] $RuntimeIdentifier,
+
     [string] $OutputPath
 )
 
@@ -12,8 +16,18 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot 'artifacts'))
+$runtimeParts = $RuntimeIdentifier.Split('-', 2)
+$targetSystem = $runtimeParts[0]
+$targetArchitecture = $runtimeParts[1]
+$hostSystem = if ($IsWindows) { 'win' } elseif ($IsLinux) { 'linux' } elseif ($IsMacOS) { 'osx' } else { 'unsupported' }
+$hostArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+
+if ($hostSystem -ne $targetSystem -or $hostArchitecture -ne $targetArchitecture) {
+    throw "Native AOT builds must run on the target platform. This host is $hostSystem-$hostArchitecture, not $RuntimeIdentifier."
+}
+
 $resolvedOutput = if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    Join-Path $artifactRoot 'release'
+    Join-Path $artifactRoot "release\$RuntimeIdentifier"
 }
 elseif ([System.IO.Path]::IsPathRooted($OutputPath)) {
     [System.IO.Path]::GetFullPath($OutputPath)
@@ -33,47 +47,69 @@ if (Test-Path -LiteralPath $resolvedOutput) {
 }
 
 New-Item -ItemType Directory -Path $resolvedOutput | Out-Null
-$publishPath = Join-Path $artifactRoot 'publish-win-x64'
+$publishPath = Join-Path $artifactRoot "publish-$RuntimeIdentifier"
 if (Test-Path -LiteralPath $publishPath) {
     Remove-Item -LiteralPath $publishPath -Recurse -Force
 }
 
 New-Item -ItemType Directory -Path $publishPath | Out-Null
+$projectPath = Join-Path $repositoryRoot 'src/Stratus.Sift.Cli/Stratus.Sift.Cli.csproj'
 try {
-    & dotnet restore (Join-Path $repositoryRoot 'Stratus.Sift.slnx') --locked-mode
-    & dotnet publish (Join-Path $repositoryRoot 'src\Stratus.Sift.Cli\Stratus.Sift.Cli.csproj') `
+    & dotnet restore $projectPath --locked-mode
+    & dotnet publish $projectPath `
         --configuration Release `
-        --runtime win-x64 `
+        --runtime $RuntimeIdentifier `
         --self-contained true `
         --no-restore `
         --output $publishPath `
         -p:Version=$Version `
         -p:AssemblyVersion="$Version.0" `
         -p:FileVersion="$Version.0" `
-        -p:PublishSingleFile=true `
-        -p:PublishTrimmed=false `
-        -p:IncludeNativeLibrariesForSelfExtract=true `
+        -p:PublishAot=true `
+        -p:PublishTrimmed=true `
         -p:ContinuousIntegrationBuild=true `
         -p:PathMap="$repositoryRoot=/_/" `
         -p:DebugType=None `
-        -p:DebugSymbols=false
+        -p:DebugSymbols=false `
+        -p:StripSymbols=true
 
-    $publishedExecutable = Join-Path $publishPath 'stratus-sift.exe'
+    $publishedName = if ($IsWindows) { 'stratus-sift.exe' } else { 'stratus-sift' }
+    $publishedExecutable = Join-Path $publishPath $publishedName
     if (-not (Test-Path -LiteralPath $publishedExecutable -PathType Leaf)) {
-        throw 'The Windows x64 publish did not produce stratus-sift.exe.'
+        throw "The $RuntimeIdentifier publish did not produce $publishedName."
     }
 
-    $unexpectedFiles = @(Get-ChildItem -LiteralPath $publishPath -File | Where-Object Name -ne 'stratus-sift.exe')
+    $unexpectedFiles = @(Get-ChildItem -LiteralPath $publishPath -File | Where-Object Name -ne $publishedName)
     if ($unexpectedFiles.Count -gt 0) {
-        throw "Unexpected files were produced beside the single executable: $($unexpectedFiles.Name -join ', ')"
+        throw "Unexpected files were produced beside the native executable: $($unexpectedFiles.Name -join ', ')"
     }
 
-    $releaseExecutable = Join-Path $resolvedOutput 'stratus-sift-win-x64.exe'
-    Copy-Item -LiteralPath $publishedExecutable -Destination $releaseExecutable
-    $archivePath = Join-Path $resolvedOutput 'stratus-sift-win-x64.zip'
-    Compress-Archive -LiteralPath $releaseExecutable -DestinationPath $archivePath -CompressionLevel Optimal
+    $releaseName = "stratus-sift-$RuntimeIdentifier"
+    if ($IsWindows) {
+        $releaseName += '.exe'
+    }
 
-    $checksumPath = Join-Path $resolvedOutput 'SHA256SUMS.txt'
+    $releaseExecutable = Join-Path $resolvedOutput $releaseName
+    Copy-Item -LiteralPath $publishedExecutable -Destination $releaseExecutable
+    if (-not $IsWindows) {
+        & chmod 755 $releaseExecutable
+    }
+
+    $archivePath = if ($IsWindows) {
+        Join-Path $resolvedOutput "stratus-sift-$RuntimeIdentifier.zip"
+    }
+    else {
+        Join-Path $resolvedOutput "stratus-sift-$RuntimeIdentifier.tar.gz"
+    }
+
+    if ($IsWindows) {
+        Compress-Archive -LiteralPath $releaseExecutable -DestinationPath $archivePath -CompressionLevel Optimal
+    }
+    else {
+        & tar -czf $archivePath -C $resolvedOutput $releaseName
+    }
+
+    $checksumPath = Join-Path $resolvedOutput "SHA256SUMS-$RuntimeIdentifier.txt"
     $checksums = foreach ($file in @($releaseExecutable, $archivePath)) {
         $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $([System.IO.Path]::GetFileName($file))"
@@ -86,4 +122,4 @@ finally {
     }
 }
 
-Write-Host "Built Stratus Sift $Version release assets in $resolvedOutput."
+Write-Host "Built Stratus Sift $Version for $RuntimeIdentifier in $resolvedOutput."

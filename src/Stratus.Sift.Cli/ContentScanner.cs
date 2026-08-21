@@ -39,6 +39,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
 
     internal async Task<ScanRunResult> ScanAsync(CliOptions options, CancellationToken cancellationToken)
     {
+        PlatformGuard.EnsureSupported(options.Path);
         var startedAtUtc = DateTimeOffset.UtcNow;
         var observations = new ConcurrentBag<ContentObservation>();
         var errors = new ConcurrentBag<ScanError>();
