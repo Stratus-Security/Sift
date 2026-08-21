@@ -34,13 +34,13 @@ Sift does not create access that you do not already have. Inaccessible paths are
 
 ## Download
 
-Download the archive for your system from the [latest release](https://github.com/Stratus-Security/Sift/releases/latest).
+Download the binary for your system from the [latest release](https://github.com/Stratus-Security/Sift/releases/latest).
 
 | System | x64 | Arm64 |
 | --- | --- | --- |
-| Windows | [ZIP](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-x64.zip) | [ZIP](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-arm64.zip) |
-| Linux | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-x64.tar.gz) | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-arm64.tar.gz) |
-| macOS | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-x64.tar.gz) | [tar.gz](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-arm64.tar.gz) |
+| Windows | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-x64.exe) | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-arm64.exe) |
+| Linux | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-arm64) |
+| macOS | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-arm64) |
 
 Check downloaded files against [SHA256SUMS.txt](https://github.com/Stratus-Security/Sift/releases/latest/download/SHA256SUMS.txt). Release binaries are not code-signed yet.
 
@@ -53,12 +53,14 @@ Windows:
 .\stratus-sift-win-x64.exe scan \\server\share --format snaffler --output findings.log
 ```
 
-Linux or macOS:
+Linux:
 
 ```bash
-tar -xzf stratus-sift-linux-x64.tar.gz
+chmod +x stratus-sift-linux-x64
 ./stratus-sift-linux-x64 scan /srv/shared
 ```
+
+macOS uses the same commands with the matching `stratus-sift-osx-*` binary.
 
 On Linux and macOS, mount network shares before scanning them. Windows can scan UNC paths directly.
 

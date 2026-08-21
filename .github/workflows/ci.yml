@@ -172,7 +172,11 @@ jobs:
             throw "Expected six platform checksum files, found $($partialChecksums.Count)."
           }
           foreach ($checksumFile in $partialChecksums) {
-            foreach ($line in [System.IO.File]::ReadAllLines($checksumFile.FullName)) {
+            $lines = [System.IO.File]::ReadAllLines($checksumFile.FullName)
+            if ($lines.Count -ne 1) {
+              throw "Expected one binary checksum in $($checksumFile.Name), found $($lines.Count)."
+            }
+            foreach ($line in $lines) {
               if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
                 throw "Invalid checksum line in $($checksumFile.Name): $line"
               }
@@ -184,8 +188,8 @@ jobs:
             }
           }
           $assets = @(Get-ChildItem $releaseRoot -File | Where-Object Name -NotLike 'SHA256SUMS-*.txt' | Sort-Object Name)
-          if ($assets.Count -ne 12) {
-            throw "Expected twelve release assets, found $($assets.Count)."
+          if ($assets.Count -ne 6) {
+            throw "Expected six release binaries, found $($assets.Count)."
           }
           $checksums = foreach ($asset in $assets) {
             $hash = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash.ToLowerInvariant()

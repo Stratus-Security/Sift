@@ -107,25 +107,9 @@ try {
         & chmod 755 $releaseExecutable
     }
 
-    $archivePath = if ($IsWindows) {
-        Join-Path $resolvedOutput "stratus-sift-$RuntimeIdentifier.zip"
-    }
-    else {
-        Join-Path $resolvedOutput "stratus-sift-$RuntimeIdentifier.tar.gz"
-    }
-
-    if ($IsWindows) {
-        Compress-Archive -LiteralPath $releaseExecutable -DestinationPath $archivePath -CompressionLevel Optimal
-    }
-    else {
-        & tar -czf $archivePath -C $resolvedOutput $releaseName
-    }
-
     $checksumPath = Join-Path $resolvedOutput "SHA256SUMS-$RuntimeIdentifier.txt"
-    $checksums = foreach ($file in @($releaseExecutable, $archivePath)) {
-        $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
-        "$hash  $([System.IO.Path]::GetFileName($file))"
-    }
+    $hash = (Get-FileHash -LiteralPath $releaseExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+    $checksums = @("$hash  $releaseName")
     [System.IO.File]::WriteAllLines($checksumPath, $checksums, [System.Text.UTF8Encoding]::new($false))
 }
 finally {
