@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Stratus.Sift.Contracts/Stratus.Sift.Contracts.csproj" />
+    <Project Path="src/Stratus.Sift.Cli/Stratus.Sift.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Stratus.Sift.Cli.Tests/Stratus.Sift.Cli.Tests.csproj" />
+  </Folder>
+</Solution>

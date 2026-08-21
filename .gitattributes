@@ -1,0 +1,13 @@
+* text=auto
+*.cs text eol=lf
+*.csproj text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.props text eol=lf
+*.ps1 text eol=lf
+*.slnx text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.exe binary
+*.zip binary
