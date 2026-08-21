@@ -64,7 +64,7 @@ jobs:
         include:
           - rid: win-x64
             runner: windows-latest
-            executable: sift-win-x64.exe
+            executable: sift.exe
           - rid: win-arm64
             runner: windows-11-arm
             executable: sift-win-arm64.exe

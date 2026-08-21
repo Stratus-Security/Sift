@@ -96,9 +96,14 @@ try {
         throw "Unexpected files were produced beside the native executable: $($unexpectedFiles.Name -join ', ')"
     }
 
-    $releaseName = "sift-$RuntimeIdentifier"
-    if ($IsWindows) {
-        $releaseName += '.exe'
+    $releaseName = if ($RuntimeIdentifier -eq 'win-x64') {
+        'sift.exe'
+    }
+    elseif ($IsWindows) {
+        "sift-$RuntimeIdentifier.exe"
+    }
+    else {
+        "sift-$RuntimeIdentifier"
     }
 
     $releaseExecutable = Join-Path $resolvedOutput $releaseName

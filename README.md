@@ -38,7 +38,7 @@ Download the binary for your system from the [latest release](https://github.com
 
 | System | x64 | Arm64 |
 | --- | --- | --- |
-| Windows | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-win-x64.exe) | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-win-arm64.exe) |
+| Windows | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/sift.exe) | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-win-arm64.exe) |
 | Linux | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-linux-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-linux-arm64) |
 | macOS | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-osx-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-osx-arm64) |
 
@@ -49,7 +49,7 @@ Check downloaded files against [SHA256SUMS.txt](https://github.com/Stratus-Secur
 Windows x64:
 
 ```powershell
-Invoke-WebRequest https://github.com/Stratus-Security/Sift/releases/latest/download/sift-win-x64.exe -OutFile sift.exe
+Invoke-WebRequest https://github.com/Stratus-Security/Sift/releases/latest/download/sift.exe -OutFile sift.exe
 .\sift.exe scan C:\Shares
 .\sift.exe scan \\server\share --format snaffler --output findings.log
 ```
