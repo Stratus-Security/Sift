@@ -14,7 +14,6 @@ internal sealed record CliOptions(
     string Path,
     OutputFormat Format,
     string? OutputPath,
-    bool ShowSecrets,
     bool EnumerateOnly,
     bool IncludeBinary,
     bool Recurse,
@@ -52,7 +51,6 @@ internal static class CliArguments
         Options:
           --format <text|json|ndjson|snaffler>  Output format (default: text)
           --output <path>                      Write output to a file
-          --show-secrets                       Include matched values; redacted by default
           --enumerate-only                     List scope without reading content
           --include-binary                     Attempt to scan files containing binary bytes
           --no-recurse                         Scan only the target directory
@@ -91,7 +89,6 @@ internal static class CliArguments
         var path = args[1];
         var format = OutputFormat.Text;
         string? outputPath = null;
-        var showSecrets = false;
         var enumerateOnly = false;
         var includeBinary = false;
         var recurse = true;
@@ -122,10 +119,6 @@ internal static class CliArguments
                     {
                         return new CliParseResult(Error: "--output requires a path.");
                     }
-                    break;
-
-                case "--show-secrets":
-                    showSecrets = true;
                     break;
 
                 case "--enumerate-only":
@@ -192,7 +185,6 @@ internal static class CliArguments
             path,
             format,
             outputPath,
-            showSecrets,
             enumerateOnly,
             includeBinary,
             recurse,

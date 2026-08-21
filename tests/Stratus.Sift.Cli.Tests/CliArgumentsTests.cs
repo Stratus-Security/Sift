@@ -12,7 +12,6 @@ public sealed class CliArgumentsTests
         Assert.Null(result.Error);
         Assert.NotNull(result.Options);
         Assert.Equal(OutputFormat.Text, result.Options.Format);
-        Assert.False(result.Options.ShowSecrets);
         Assert.True(result.Options.Recurse);
         Assert.Equal(10 * 1024 * 1024, result.Options.MaximumFileSizeBytes);
         Assert.Contains(".json", result.Options.Extensions);
@@ -25,6 +24,14 @@ public sealed class CliArgumentsTests
         var result = CliArguments.Parse(["scan", ".", "--colour", "purple"]);
 
         Assert.Equal("Unknown option: --colour", result.Error);
+    }
+
+    [Fact]
+    public void Parse_DoesNotExposeAMaskingMode()
+    {
+        var result = CliArguments.Parse(["scan", ".", "--show-secrets"]);
+
+        Assert.Equal("Unknown option: --show-secrets", result.Error);
     }
 
     [Theory]

@@ -274,8 +274,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
                 }
 
                 var lineNumber = FindLineNumber(newlineOffsets, secretMatch.Index);
-                var redacted = Redact(value);
-                var snippet = BuildSnippet(content, match.Index, match.Length, value, redacted, options.ShowSecrets);
+                var snippet = BuildSnippet(content, match.Index, match.Length);
                 var detectedAtUtc = DateTimeOffset.UtcNow;
                 observations.Add(new ContentObservation(
                     ObservationId: CreateObservationId(rule.Id, path, lineNumber, secretMatch.Index),
@@ -285,10 +284,9 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
                     LineNumber: lineNumber,
                     Severity: rule.Severity,
                     Confidence: rule.Confidence,
-                    RedactedValue: redacted,
+                    Value: value,
                     Snippet: snippet,
-                    DetectedAtUtc: detectedAtUtc,
-                    Evidence: options.ShowSecrets ? value : null));
+                    DetectedAtUtc: detectedAtUtc));
             }
         }
 
@@ -373,35 +371,16 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
         return newlinesBefore + 1;
     }
 
-    private static string Redact(string value)
-    {
-        if (value.Length <= 4)
-        {
-            return new string('*', value.Length);
-        }
-
-        var visible = Math.Min(3, value.Length / 4);
-        return $"{value[..visible]}{new string('*', Math.Clamp(value.Length - (visible * 2), 4, 24))}{value[^visible..]}";
-    }
-
     private static string BuildSnippet(
         string content,
         int matchIndex,
-        int matchLength,
-        string value,
-        string redacted,
-        bool showSecrets)
+        int matchLength)
     {
         var lineStart = content.LastIndexOf('\n', Math.Max(0, matchIndex - 1));
         lineStart = lineStart < 0 ? 0 : lineStart + 1;
         var lineEnd = content.IndexOf('\n', matchIndex + matchLength);
         lineEnd = lineEnd < 0 ? content.Length : lineEnd;
         var line = content[lineStart..lineEnd].Replace("\r", string.Empty, StringComparison.Ordinal).Trim();
-        if (!showSecrets)
-        {
-            line = line.Replace(value, redacted, StringComparison.Ordinal);
-        }
-
         return line.Length <= 240 ? line : string.Concat(line.AsSpan(0, 237), "...");
     }
 

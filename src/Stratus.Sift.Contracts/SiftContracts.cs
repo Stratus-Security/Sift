@@ -2,7 +2,7 @@ namespace Stratus.Sift.Contracts;
 
 public static class SiftContractVersions
 {
-    public const string V1 = "1.0";
+    public const string V2 = "2.0";
 }
 
 public sealed record ContentScanRequest(
@@ -37,10 +37,9 @@ public sealed record ContentObservation(
     int? LineNumber,
     string Severity,
     string Confidence,
-    string RedactedValue,
+    string Value,
     string Snippet,
-    DateTimeOffset DetectedAtUtc,
-    string? Evidence = null);
+    DateTimeOffset DetectedAtUtc);
 
 public sealed record ContentScanProgress(
     string RequestId,

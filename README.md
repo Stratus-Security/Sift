@@ -4,7 +4,7 @@ Sift searches accessible data for secrets and sensitive information. It is inten
 
 The workflow is simple: choose a source, enumerate what is reachable, scan its content, then review a small set of useful observations. Output can be written in human-readable, JSON, NDJSON or Snaffler-compatible form.
 
-Matched values are hidden by default. Use `--show-secrets` only when you can protect the output.
+Findings include the exact matched value and its surrounding line so a pentester can verify and document it.
 
 ## Scan sources
 
@@ -28,7 +28,7 @@ These source modules are being moved into the public package in stages. The down
 1. **Target**: the file, folder, share or connected source to inspect.
 2. **Discovery**: the content Sift can reach with the supplied account or token. Enumeration mode lists the scope without reading file content.
 3. **Rules**: focused detectors for credentials, private keys, tokens, payment data and other sensitive values.
-4. **Observation**: a rule match with its location, severity, confidence and redacted context.
+4. **Observation**: a rule match with its location, severity, confidence, exact value and surrounding context.
 
 Sift does not create access that you do not already have. Inaccessible paths are reported and skipped. Reparse points are not followed during recursive file-system scans.
 
@@ -70,7 +70,6 @@ Useful options:
 --enumerate-only
 --extensions .txt,.json,.env
 --exclude-dirs cache,temp
---show-secrets
 ```
 
 Run `stratus-sift --help` to see every option.
@@ -79,13 +78,13 @@ Run `stratus-sift --help` to see every option.
 
 Text output is intended for interactive triage. JSON and NDJSON use versioned, source-neutral contracts so results can be processed by other tools. Snaffler output is provided for workflows that already consume that style of finding log.
 
-Sift records the matching rule and redacted context, not a copy of the scanned file. The exact matched value is only included when `--show-secrets` is explicitly set.
+Sift records the matching rule, exact matched value and surrounding line, not a copy of the scanned file. Treat console output and saved reports as sensitive assessment material.
 
 ## Repository modules
 
 - `Stratus.Sift.Contracts` defines versioned scan requests, targets, progress, observations and summaries.
 - `Stratus.Sift.Cli` contains file discovery, content classification, output formatting and platform checks.
-- `tests` covers argument handling, detection, redaction, output contracts and supported platforms.
+- `tests` covers argument handling, detection, evidence output, output contracts and supported platforms.
 - `eng` contains release and public-boundary verification scripts.
 
 Sift is licensed under [AGPL-3.0-only](LICENSE). Report security problems through [SECURITY.md](SECURITY.md) and read [CONTRIBUTING.md](CONTRIBUTING.md) before sending a change.

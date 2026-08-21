@@ -6,7 +6,7 @@ namespace Stratus.Sift.Cli.Tests;
 public sealed class ContentScannerTests
 {
     [Fact]
-    public async Task ScanAsync_DetectsAndRedactsSecretByDefault()
+    public async Task ScanAsync_DetectsAndIncludesMatchedValue()
     {
         using var directory = new TemporaryDirectory();
         var secret = string.Concat("sk", "-proj-", "abcdefghijklmnopqrstuvwx");
@@ -15,25 +15,22 @@ public sealed class ContentScannerTests
         var result = await new ContentScanner().ScanAsync(Options(directory.Path), CancellationToken.None);
 
         var observation = Assert.Single(result.Observations, item => item.RuleId == "openai-key");
-        Assert.Null(observation.Evidence);
-        Assert.DoesNotContain(secret, observation.Snippet, StringComparison.Ordinal);
-        Assert.Contains("***", observation.RedactedValue, StringComparison.Ordinal);
+        Assert.Equal(secret, observation.Value);
+        Assert.Contains(secret, observation.Snippet, StringComparison.Ordinal);
         Assert.Equal(1, observation.LineNumber);
     }
 
     [Fact]
-    public async Task ScanAsync_ShowSecretsRequiresExplicitOption()
+    public async Task ScanAsync_IncludesTokenInObservationAndSnippet()
     {
         using var directory = new TemporaryDirectory();
         var secret = string.Concat("gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890");
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "settings.json"), secret);
 
-        var result = await new ContentScanner().ScanAsync(
-            Options(directory.Path) with { ShowSecrets = true },
-            CancellationToken.None);
+        var result = await new ContentScanner().ScanAsync(Options(directory.Path), CancellationToken.None);
 
         var observation = Assert.Single(result.Observations, item => item.RuleId == "github-token");
-        Assert.Equal(secret, observation.Evidence);
+        Assert.Equal(secret, observation.Value);
         Assert.Contains(secret, observation.Snippet, StringComparison.Ordinal);
     }
 
@@ -52,7 +49,7 @@ public sealed class ContentScannerTests
     }
 
     [Fact]
-    public async Task OutputWriter_JsonOmitsEvidenceWhenRedacted()
+    public async Task OutputWriter_JsonIncludesMatchedValue()
     {
         using var directory = new TemporaryDirectory();
         await File.WriteAllTextAsync(
@@ -66,9 +63,28 @@ public sealed class ContentScannerTests
 
         var output = writer.ToString();
         using var document = JsonDocument.Parse(output);
-        Assert.Equal("1.0", document.RootElement.GetProperty("schemaVersion").GetString());
-        Assert.DoesNotContain("long-password-value", output, StringComparison.Ordinal);
-        Assert.False(document.RootElement.GetProperty("observations")[0].TryGetProperty("evidence", out _));
+        Assert.Equal("2.0", document.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.Equal(
+            "long-password-value",
+            document.RootElement.GetProperty("observations")[0].GetProperty("value").GetString());
+        Assert.Contains("long-password-value", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OutputWriter_TextIncludesFullValueWhenContextIsTruncated()
+    {
+        using var directory = new TemporaryDirectory();
+        var secret = string.Concat("sk", "-proj-", new string('a', 80));
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, "long-line.txt"),
+            string.Concat(new string('x', 300), " ", secret));
+        var options = Options(directory.Path);
+        var result = await new ContentScanner().ScanAsync(options, CancellationToken.None);
+        using var writer = new StringWriter();
+
+        await OutputWriter.WriteAsync(result, options, writer, CancellationToken.None);
+
+        Assert.Contains($"Value: {secret}", writer.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -90,7 +106,6 @@ public sealed class ContentScannerTests
         Path: path,
         Format: OutputFormat.Text,
         OutputPath: null,
-        ShowSecrets: false,
         EnumerateOnly: false,
         IncludeBinary: false,
         Recurse: true,

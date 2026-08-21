@@ -42,7 +42,7 @@ internal static class OutputWriter
     private static string BuildJson(ScanRunResult result)
         => JsonSerializer.Serialize(
             new JsonOutputDocument(
-                SiftContractVersions.V1,
+                SiftContractVersions.V2,
                 "stratus-sift",
                 Version,
                 result.Target,
@@ -57,19 +57,19 @@ internal static class OutputWriter
         foreach (var observation in result.Observations)
         {
             builder.AppendLine(JsonSerializer.Serialize(
-                new NdjsonObservationDocument("observation", SiftContractVersions.V1, observation),
+                new NdjsonObservationDocument("observation", SiftContractVersions.V2, observation),
                 SiftNdjsonContext.Default.NdjsonObservationDocument));
         }
 
         foreach (var error in result.Errors)
         {
             builder.AppendLine(JsonSerializer.Serialize(
-                new NdjsonErrorDocument("error", SiftContractVersions.V1, error),
+                new NdjsonErrorDocument("error", SiftContractVersions.V2, error),
                 SiftNdjsonContext.Default.NdjsonErrorDocument));
         }
 
         builder.AppendLine(JsonSerializer.Serialize(
-            new NdjsonSummaryDocument("summary", SiftContractVersions.V1, result.ToSummary()),
+            new NdjsonSummaryDocument("summary", SiftContractVersions.V2, result.ToSummary()),
             SiftNdjsonContext.Default.NdjsonSummaryDocument));
         return builder.ToString();
     }
@@ -91,7 +91,8 @@ internal static class OutputWriter
             }
 
             builder.AppendLine();
-            builder.Append("  ").AppendLine(observation.Snippet);
+            builder.Append("  Value: ").AppendLine(observation.Value);
+            builder.Append("  Context: ").AppendLine(observation.Snippet);
         }
 
         if (result.Observations.Count == 0)
@@ -125,7 +126,7 @@ internal static class OutputWriter
                 builder.Append(':').Append(observation.LineNumber.Value);
             }
 
-            builder.Append(" | ").AppendLine(observation.RedactedValue);
+            builder.Append(" | ").AppendLine(observation.Value);
         }
 
         AppendErrors(builder, result.Errors);
