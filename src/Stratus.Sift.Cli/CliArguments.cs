@@ -46,7 +46,7 @@ internal static class CliArguments
         Stratus Sift - focused filesystem content discovery
 
         Usage:
-          stratus-sift scan <path> [options]
+          sift scan <path> [options]
 
         Options:
           --format <text|json|ndjson|snaffler>  Output format (default: text)

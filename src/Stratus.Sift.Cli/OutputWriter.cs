@@ -43,7 +43,7 @@ internal static class OutputWriter
         => JsonSerializer.Serialize(
             new JsonOutputDocument(
                 SiftContractVersions.V2,
-                "stratus-sift",
+                "sift",
                 Version,
                 result.Target,
                 result.ToSummary(),

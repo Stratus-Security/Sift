@@ -38,29 +38,31 @@ Download the binary for your system from the [latest release](https://github.com
 
 | System | x64 | Arm64 |
 | --- | --- | --- |
-| Windows | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-x64.exe) | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-win-arm64.exe) |
-| Linux | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-linux-arm64) |
-| macOS | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/stratus-sift-osx-arm64) |
+| Windows | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-win-x64.exe) | [EXE](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-win-arm64.exe) |
+| Linux | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-linux-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-linux-arm64) |
+| macOS | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-osx-x64) | [Binary](https://github.com/Stratus-Security/Sift/releases/latest/download/sift-osx-arm64) |
 
 Check downloaded files against [SHA256SUMS.txt](https://github.com/Stratus-Security/Sift/releases/latest/download/SHA256SUMS.txt). Release binaries are not code-signed yet.
 
 ## Quick start
 
-Windows:
+Windows x64:
 
 ```powershell
-.\stratus-sift-win-x64.exe scan C:\Shares
-.\stratus-sift-win-x64.exe scan \\server\share --format snaffler --output findings.log
+Invoke-WebRequest https://github.com/Stratus-Security/Sift/releases/latest/download/sift-win-x64.exe -OutFile sift.exe
+.\sift.exe scan C:\Shares
+.\sift.exe scan \\server\share --format snaffler --output findings.log
 ```
 
-Linux:
+Linux x64:
 
 ```bash
-chmod +x stratus-sift-linux-x64
-./stratus-sift-linux-x64 scan /srv/shared
+curl -L https://github.com/Stratus-Security/Sift/releases/latest/download/sift-linux-x64 -o sift
+chmod +x sift
+./sift scan /srv/shared
 ```
 
-macOS uses the same commands with the matching `stratus-sift-osx-*` binary.
+macOS uses the same commands with the matching `sift-osx-*` download. Save it as `sift` and make it executable.
 
 On Linux and macOS, mount network shares before scanning them. Windows can scan UNC paths directly.
 
@@ -74,7 +76,7 @@ Useful options:
 --exclude-dirs cache,temp
 ```
 
-Run `stratus-sift --help` to see every option.
+Run `sift --help` to see every option.
 
 ## Output and evidence
 

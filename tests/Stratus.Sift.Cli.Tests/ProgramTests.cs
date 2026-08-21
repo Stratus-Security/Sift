@@ -13,7 +13,7 @@ public sealed class ProgramTests
         var exitCode = await Program.RunAsync(["--help"], output, error, CancellationToken.None);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("stratus-sift scan", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("sift scan", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(string.Empty, error.ToString());
     }
 

@@ -85,7 +85,7 @@ try {
         -p:DebugSymbols=false `
         -p:StripSymbols=true
 
-    $publishedName = if ($IsWindows) { 'stratus-sift.exe' } else { 'stratus-sift' }
+    $publishedName = if ($IsWindows) { 'sift.exe' } else { 'sift' }
     $publishedExecutable = Join-Path $publishPath $publishedName
     if (-not (Test-Path -LiteralPath $publishedExecutable -PathType Leaf)) {
         throw "The $RuntimeIdentifier publish did not produce $publishedName."
@@ -96,7 +96,7 @@ try {
         throw "Unexpected files were produced beside the native executable: $($unexpectedFiles.Name -join ', ')"
     }
 
-    $releaseName = "stratus-sift-$RuntimeIdentifier"
+    $releaseName = "sift-$RuntimeIdentifier"
     if ($IsWindows) {
         $releaseName += '.exe'
     }

@@ -27,7 +27,7 @@ public static class Program
         if (parsed.Error is not null)
         {
             await standardError.WriteLineAsync(parsed.Error);
-            await standardError.WriteLineAsync("Run 'stratus-sift --help' for usage.");
+            await standardError.WriteLineAsync("Run 'sift --help' for usage.");
             return ExitCodes.InvalidArguments;
         }
 

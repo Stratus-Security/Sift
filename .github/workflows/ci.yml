@@ -64,22 +64,22 @@ jobs:
         include:
           - rid: win-x64
             runner: windows-latest
-            executable: stratus-sift-win-x64.exe
+            executable: sift-win-x64.exe
           - rid: win-arm64
             runner: windows-11-arm
-            executable: stratus-sift-win-arm64.exe
+            executable: sift-win-arm64.exe
           - rid: linux-x64
             runner: ubuntu-24.04
-            executable: stratus-sift-linux-x64
+            executable: sift-linux-x64
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
-            executable: stratus-sift-linux-arm64
+            executable: sift-linux-arm64
           - rid: osx-x64
             runner: macos-15-intel
-            executable: stratus-sift-osx-x64
+            executable: sift-osx-x64
           - rid: osx-arm64
             runner: macos-15
-            executable: stratus-sift-osx-arm64
+            executable: sift-osx-arm64
 
     steps:
       - name: Checkout

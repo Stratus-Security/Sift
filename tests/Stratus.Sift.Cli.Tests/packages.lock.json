@@ -99,7 +99,7 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
-      "stratus-sift": {
+      "sift": {
         "type": "Project",
         "dependencies": {
           "Stratus.Sift.Contracts": "[0.1.0, )"
