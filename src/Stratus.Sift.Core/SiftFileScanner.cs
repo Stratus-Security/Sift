@@ -1,23 +1,31 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using Stratus.Sift.Contracts;
 
-namespace Stratus.Sift.Cli;
+namespace Stratus.Sift.Core;
 
-internal sealed record ScanError(string Path, string Message);
+public sealed record SiftScanError(string Path, string Message);
 
-internal sealed record ScanRunResult(
+public sealed record SiftFileScanOptions(
+    bool EnumerateOnly,
+    bool IncludeBinary,
+    bool Recurse,
+    int Parallelism,
+    long MaximumFileSizeBytes,
+    IReadOnlySet<string> Extensions,
+    IReadOnlySet<string> ExcludedDirectoryNames);
+
+public sealed record SiftFileScanResult(
     string Target,
     DateTimeOffset StartedAtUtc,
     DateTimeOffset CompletedAtUtc,
     long ObjectsDiscovered,
     long ObjectsScanned,
     IReadOnlyList<ContentObservation> Observations,
-    IReadOnlyList<ScanError> Errors)
+    IReadOnlyList<SiftScanError> Errors)
 {
-    internal ContentScanSummary ToSummary() => new(
+    public ContentScanSummary ToSummary() => new(
         RequestId: "cli",
         StartedAtUtc,
         CompletedAtUtc,
@@ -28,7 +36,7 @@ internal sealed record ScanRunResult(
         Partial: Errors.Count > 0);
 }
 
-internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
+public sealed class SiftFileScanner(IReadOnlyList<SiftRule>? rules = null)
 {
     private static readonly string[] AlwaysScanNames =
     [
@@ -37,13 +45,16 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
 
     private readonly IReadOnlyList<SiftRule> _rules = rules ?? SiftRuleCatalog.Default;
 
-    internal async Task<ScanRunResult> ScanAsync(CliOptions options, CancellationToken cancellationToken)
+    public async Task<SiftFileScanResult> ScanAsync(
+        string target,
+        SiftFileScanOptions options,
+        CancellationToken cancellationToken = default)
     {
-        PlatformGuard.EnsureSupported(options.Path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
         var startedAtUtc = DateTimeOffset.UtcNow;
         var observations = new ConcurrentBag<ContentObservation>();
-        var errors = new ConcurrentBag<ScanError>();
-        var candidates = EnumerateCandidates(options, errors, cancellationToken);
+        var errors = new ConcurrentBag<SiftScanError>();
+        var candidates = EnumerateCandidates(target, options, errors, cancellationToken);
         long discovered = 0;
         long scanned = 0;
 
@@ -83,38 +94,35 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
                     }
                     catch (Exception exception) when (IsExpectedIoFailure(exception))
                     {
-                        errors.Add(new ScanError(path, SafeError(exception)));
+                        errors.Add(new SiftScanError(path, SafeError(exception)));
                     }
                 });
         }
 
-        var orderedObservations = observations
-            .OrderBy(observation => observation.ResourcePath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(observation => observation.LineNumber)
-            .ThenBy(observation => observation.RuleId, StringComparer.Ordinal)
-            .ToArray();
-
-        var orderedErrors = errors
-            .OrderBy(error => error.Path, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(error => error.Message, StringComparer.Ordinal)
-            .ToArray();
-
-        return new ScanRunResult(
-            options.Path,
+        return new SiftFileScanResult(
+            target,
             startedAtUtc,
             DateTimeOffset.UtcNow,
             discovered,
             scanned,
-            orderedObservations,
-            orderedErrors);
+            observations
+                .OrderBy(observation => observation.ResourcePath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(observation => observation.LineNumber)
+                .ThenBy(observation => observation.RuleId, StringComparer.Ordinal)
+                .ToArray(),
+            errors
+                .OrderBy(error => error.Path, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(error => error.Message, StringComparer.Ordinal)
+                .ToArray());
     }
 
-    private IEnumerable<string> EnumerateCandidates(
-        CliOptions options,
-        ConcurrentBag<ScanError> errors,
+    private static IEnumerable<string> EnumerateCandidates(
+        string target,
+        SiftFileScanOptions options,
+        ConcurrentBag<SiftScanError> errors,
         CancellationToken cancellationToken)
     {
-        var normalizedPath = Path.GetFullPath(options.Path);
+        var normalizedPath = Path.GetFullPath(target);
         if (File.Exists(normalizedPath))
         {
             if (ShouldScan(normalizedPath, options))
@@ -127,7 +135,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
 
         if (!Directory.Exists(normalizedPath))
         {
-            throw new DirectoryNotFoundException($"The target does not exist or is not accessible: {options.Path}");
+            throw new DirectoryNotFoundException($"The target does not exist or is not accessible: {target}");
         }
 
         var pending = new Stack<string>();
@@ -146,7 +154,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
                 }
                 catch (Exception exception) when (IsExpectedIoFailure(exception))
                 {
-                    errors.Add(new ScanError(entry, SafeError(exception)));
+                    errors.Add(new SiftScanError(entry, SafeError(exception)));
                     continue;
                 }
 
@@ -156,6 +164,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
                     {
                         yield return entry;
                     }
+
                     continue;
                 }
 
@@ -173,7 +182,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
 
     private static IEnumerable<string> EnumerateDirectoryEntries(
         string directory,
-        ConcurrentBag<ScanError> errors)
+        ConcurrentBag<SiftScanError> errors)
     {
         IEnumerator<string>? enumerator = null;
         try
@@ -188,11 +197,12 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
                     {
                         yield break;
                     }
+
                     current = enumerator.Current;
                 }
                 catch (Exception exception) when (IsExpectedIoFailure(exception))
                 {
-                    errors.Add(new ScanError(directory, SafeError(exception)));
+                    errors.Add(new SiftScanError(directory, SafeError(exception)));
                     yield break;
                 }
 
@@ -207,16 +217,16 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
 
     private async Task<IReadOnlyList<ContentObservation>> ScanFileAsync(
         string path,
-        CliOptions options,
+        SiftFileScanOptions options,
         CancellationToken cancellationToken)
     {
         var file = new FileInfo(path);
-        if (file.Length == 0 || file.Length > options.MaximumFileSizeBytes)
+        if (file.Length == 0 || file.Length > options.MaximumFileSizeBytes || file.Length > int.MaxValue)
         {
             return [];
         }
 
-        var bytes = new byte[file.Length];
+        var bytes = new byte[(int)file.Length];
         await using (var stream = new FileStream(
             path,
             FileMode.Open,
@@ -243,7 +253,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
             }
         }
 
-        if (!options.IncludeBinary && LooksBinary(bytes))
+        if (!options.IncludeBinary && SiftEvidence.LooksBinary(bytes))
         {
             return [];
         }
@@ -254,85 +264,42 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
         foreach (var rule in _rules)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            MatchCollection matches;
-            try
-            {
-                matches = rule.Pattern.Matches(content);
-            }
-            catch (RegexMatchTimeoutException)
-            {
-                continue;
-            }
+            var evaluation = SiftMatchEngine.FindMatches(
+                content,
+                rule.Pattern,
+                rule.SecretGroup,
+                minimumEntropy: rule.MinimumEntropy,
+                validator: rule.Validator is null
+                    ? null
+                    : candidate => rule.Validator(candidate.Value)
+                        ? SiftValidationResult.Valid()
+                        : SiftValidationResult.Invalid);
 
-            foreach (Match match in matches)
+            foreach (var match in evaluation.Matches)
             {
-                var secretMatch = ResolveSecretMatch(rule, match);
-                var value = secretMatch.Value.Trim();
-                if (value.Length == 0 || (rule.Validator is not null && !rule.Validator(value)))
-                {
-                    continue;
-                }
-
-                var lineNumber = FindLineNumber(newlineOffsets, secretMatch.Index);
-                var snippet = BuildSnippet(content, match.Index, match.Length);
-                var detectedAtUtc = DateTimeOffset.UtcNow;
+                var lineNumber = FindLineNumber(newlineOffsets, match.Index);
                 observations.Add(new ContentObservation(
-                    ObservationId: CreateObservationId(rule.Id, path, lineNumber, secretMatch.Index),
+                    ObservationId: CreateObservationId(rule.Id, path, lineNumber, match.Index),
                     RuleId: rule.Id,
                     RuleName: rule.Name,
                     ResourcePath: path,
                     LineNumber: lineNumber,
                     Severity: rule.Severity,
                     Confidence: rule.Confidence,
-                    Value: value,
-                    Snippet: snippet,
-                    DetectedAtUtc: detectedAtUtc));
+                    Value: match.Value,
+                    Snippet: SiftEvidence.BuildLineSnippet(content, match.Index, match.Length),
+                    DetectedAtUtc: DateTimeOffset.UtcNow));
             }
         }
 
         return observations;
     }
 
-    private static bool ShouldScan(string path, CliOptions options)
+    private static bool ShouldScan(string path, SiftFileScanOptions options)
     {
         var name = Path.GetFileName(path);
-        if (AlwaysScanNames.Contains(name, StringComparer.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return options.Extensions.Contains(Path.GetExtension(path));
-    }
-
-    private static Group ResolveSecretMatch(SiftRule rule, Match match)
-    {
-        if (rule.SecretGroup is null)
-        {
-            return match;
-        }
-
-        var group = match.Groups[rule.SecretGroup];
-        return group.Success ? group : match;
-    }
-
-    private static bool LooksBinary(ReadOnlySpan<byte> bytes)
-    {
-        var sample = bytes[..Math.Min(bytes.Length, 4096)];
-        var controlCharacters = 0;
-        foreach (var value in sample)
-        {
-            if (value == 0)
-            {
-                return true;
-            }
-
-            if (value < 8 || value is > 13 and < 32)
-            {
-                controlCharacters++;
-            }
-        }
-
-        return sample.Length > 0 && controlCharacters > sample.Length / 20;
+        return AlwaysScanNames.Contains(name, StringComparer.OrdinalIgnoreCase)
+            || options.Extensions.Contains(Path.GetExtension(path));
     }
 
     private static string Decode(byte[] bytes)
@@ -367,21 +334,7 @@ internal sealed class ContentScanner(IReadOnlyList<SiftRule>? rules = null)
     private static int FindLineNumber(int[] newlineOffsets, int index)
     {
         var result = Array.BinarySearch(newlineOffsets, index);
-        var newlinesBefore = result >= 0 ? result : ~result;
-        return newlinesBefore + 1;
-    }
-
-    private static string BuildSnippet(
-        string content,
-        int matchIndex,
-        int matchLength)
-    {
-        var lineStart = content.LastIndexOf('\n', Math.Max(0, matchIndex - 1));
-        lineStart = lineStart < 0 ? 0 : lineStart + 1;
-        var lineEnd = content.IndexOf('\n', matchIndex + matchLength);
-        lineEnd = lineEnd < 0 ? content.Length : lineEnd;
-        var line = content[lineStart..lineEnd].Replace("\r", string.Empty, StringComparison.Ordinal).Trim();
-        return line.Length <= 240 ? line : string.Concat(line.AsSpan(0, 237), "...");
+        return (result >= 0 ? result : ~result) + 1;
     }
 
     private static string CreateObservationId(string ruleId, string path, int lineNumber, int matchIndex)

@@ -10,12 +10,6 @@
       },
       "stratus.sift.contracts": {
         "type": "Project"
-      },
-      "stratus.sift.core": {
-        "type": "Project",
-        "dependencies": {
-          "Stratus.Sift.Contracts": "[0.1.0, )"
-        }
       }
     }
   }

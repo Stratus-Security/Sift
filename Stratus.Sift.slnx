@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Stratus.Sift.Contracts/Stratus.Sift.Contracts.csproj" />
+    <Project Path="src/Stratus.Sift.Core/Stratus.Sift.Core.csproj" />
     <Project Path="src/Stratus.Sift.Cli/Stratus.Sift.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">

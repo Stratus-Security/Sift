@@ -36,6 +36,7 @@ jobs:
           cache: true
           cache-dependency-path: |
             src/Stratus.Sift.Cli/packages.lock.json
+            src/Stratus.Sift.Core/packages.lock.json
             src/Stratus.Sift.Contracts/packages.lock.json
             tests/Stratus.Sift.Cli.Tests/packages.lock.json
 
@@ -95,6 +96,7 @@ jobs:
           cache: true
           cache-dependency-path: |
             eng/locks/packages.${{ matrix.rid }}.lock.json
+            src/Stratus.Sift.Core/packages.lock.json
             src/Stratus.Sift.Contracts/packages.lock.json
 
       - name: Set release version

@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Stratus.Sift.Contracts;
+using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Cli;
 
@@ -10,7 +11,7 @@ internal sealed record JsonOutputDocument(
     string Target,
     ContentScanSummary Summary,
     ContentObservation[] Observations,
-    ScanError[] Errors);
+    SiftScanError[] Errors);
 
 internal sealed record NdjsonObservationDocument(
     string Type,
@@ -20,7 +21,7 @@ internal sealed record NdjsonObservationDocument(
 internal sealed record NdjsonErrorDocument(
     string Type,
     string SchemaVersion,
-    ScanError Error);
+    SiftScanError Error);
 
 internal sealed record NdjsonSummaryDocument(
     string Type,

@@ -18,6 +18,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Stratus.Sift.Cli\Stratus.Sift.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Stratus.Sift.Core\Stratus.Sift.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />

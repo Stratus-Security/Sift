@@ -16,6 +16,7 @@
     <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Stratus.Sift.Core\Stratus.Sift.Core.csproj" />
     <ProjectReference Include="..\Stratus.Sift.Contracts\Stratus.Sift.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>

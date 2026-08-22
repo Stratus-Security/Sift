@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Stratus.Sift.Cli;
+using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Cli.Tests;
 
@@ -12,7 +13,7 @@ public sealed class ContentScannerTests
         var secret = string.Concat("sk", "-proj-", "abcdefghijklmnopqrstuvwx");
         await File.WriteAllTextAsync(Path.Combine(directory.Path, ".env"), $"OPENAI_API_KEY={secret}");
 
-        var result = await new ContentScanner().ScanAsync(Options(directory.Path), CancellationToken.None);
+        var result = await ScanAsync(directory.Path);
 
         var observation = Assert.Single(result.Observations, item => item.RuleId == "openai-key");
         Assert.Equal(secret, observation.Value);
@@ -27,7 +28,7 @@ public sealed class ContentScannerTests
         var secret = string.Concat("gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890");
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "settings.json"), secret);
 
-        var result = await new ContentScanner().ScanAsync(Options(directory.Path), CancellationToken.None);
+        var result = await ScanAsync(directory.Path);
 
         var observation = Assert.Single(result.Observations, item => item.RuleId == "github-token");
         Assert.Equal(secret, observation.Value);
@@ -42,7 +43,7 @@ public sealed class ContentScannerTests
         await File.WriteAllTextAsync(Path.Combine(directory.Path, ".git", "config"), "password=should-not-appear");
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "image.png"), "password=should-not-appear");
 
-        var result = await new ContentScanner().ScanAsync(Options(directory.Path), CancellationToken.None);
+        var result = await ScanAsync(directory.Path);
 
         Assert.Empty(result.Observations);
         Assert.Equal(0, result.ObjectsDiscovered);
@@ -56,7 +57,7 @@ public sealed class ContentScannerTests
             Path.Combine(directory.Path, "appsettings.json"),
             "password=long-password-value");
         var options = Options(directory.Path) with { Format = OutputFormat.Json };
-        var result = await new ContentScanner().ScanAsync(options, CancellationToken.None);
+        var result = await ScanAsync(directory.Path);
         using var writer = new StringWriter();
 
         await OutputWriter.WriteAsync(result, options, writer, CancellationToken.None);
@@ -79,7 +80,7 @@ public sealed class ContentScannerTests
             Path.Combine(directory.Path, "long-line.txt"),
             string.Concat(new string('x', 300), " ", secret));
         var options = Options(directory.Path);
-        var result = await new ContentScanner().ScanAsync(options, CancellationToken.None);
+        var result = await ScanAsync(directory.Path);
         using var writer = new StringWriter();
 
         await OutputWriter.WriteAsync(result, options, writer, CancellationToken.None);
@@ -93,9 +94,7 @@ public sealed class ContentScannerTests
         using var directory = new TemporaryDirectory();
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "secrets.txt"), "password=long-password-value");
 
-        var result = await new ContentScanner().ScanAsync(
-            Options(directory.Path) with { EnumerateOnly = true },
-            CancellationToken.None);
+        var result = await ScanAsync(directory.Path, enumerateOnly: true);
 
         Assert.Equal(1, result.ObjectsDiscovered);
         Assert.Equal(0, result.ObjectsScanned);
@@ -113,6 +112,19 @@ public sealed class ContentScannerTests
         MaximumFileSizeBytes: 10 * 1024 * 1024,
         Extensions: new HashSet<string>([".json", ".txt"], StringComparer.OrdinalIgnoreCase),
         ExcludedDirectoryNames: new HashSet<string>([".git"], StringComparer.OrdinalIgnoreCase));
+
+    private static Task<SiftFileScanResult> ScanAsync(string path, bool enumerateOnly = false)
+        => new SiftFileScanner().ScanAsync(
+            path,
+            new SiftFileScanOptions(
+                EnumerateOnly: enumerateOnly,
+                IncludeBinary: false,
+                Recurse: true,
+                Parallelism: 2,
+                MaximumFileSizeBytes: 10 * 1024 * 1024,
+                Extensions: new HashSet<string>([".json", ".txt"], StringComparer.OrdinalIgnoreCase),
+                ExcludedDirectoryNames: new HashSet<string>([".git"], StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
 
     private sealed class TemporaryDirectory : IDisposable
     {

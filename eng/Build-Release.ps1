@@ -54,6 +54,7 @@ if (Test-Path -LiteralPath $publishPath) {
 
 New-Item -ItemType Directory -Path $publishPath | Out-Null
 $projectPath = Join-Path $repositoryRoot 'src/Stratus.Sift.Cli/Stratus.Sift.Cli.csproj'
+$corePath = Join-Path $repositoryRoot 'src/Stratus.Sift.Core/Stratus.Sift.Core.csproj'
 $contractsPath = Join-Path $repositoryRoot 'src/Stratus.Sift.Contracts/Stratus.Sift.Contracts.csproj'
 $runtimeLockPath = Join-Path $repositoryRoot "eng/locks/packages.$RuntimeIdentifier.lock.json"
 if (-not (Test-Path -LiteralPath $runtimeLockPath -PathType Leaf)) {
@@ -62,6 +63,7 @@ if (-not (Test-Path -LiteralPath $runtimeLockPath -PathType Leaf)) {
 
 try {
     & dotnet restore $contractsPath --locked-mode
+    & dotnet restore $corePath --locked-mode
     & dotnet restore $projectPath `
         --locked-mode `
         --runtime $RuntimeIdentifier `

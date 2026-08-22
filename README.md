@@ -87,7 +87,8 @@ Sift records the matching rule, exact matched value and surrounding line, not a 
 ## Repository modules
 
 - `Stratus.Sift.Contracts` defines versioned scan requests, targets, progress, observations and summaries.
-- `Stratus.Sift.Cli` contains file discovery, content classification, output formatting and platform checks.
+- `Stratus.Sift.Core` is the canonical tenant-neutral matching and filesystem scanning engine. Other applications consume packages built from this source instead of keeping their own scanner copy.
+- `Stratus.Sift.Cli` contains argument handling, output formatting and platform checks.
 - `tests` covers argument handling, detection, evidence output, output contracts and supported platforms.
 - `eng` contains release and public-boundary verification scripts.
 

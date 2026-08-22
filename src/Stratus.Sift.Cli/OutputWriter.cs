@@ -2,13 +2,14 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Stratus.Sift.Contracts;
+using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Cli;
 
 internal static class OutputWriter
 {
     internal static async Task WriteAsync(
-        ScanRunResult result,
+        SiftFileScanResult result,
         CliOptions options,
         TextWriter console,
         CancellationToken cancellationToken)
@@ -39,7 +40,7 @@ internal static class OutputWriter
         await console.WriteLineAsync($"Wrote {result.Observations.Count} observations to {outputPath}");
     }
 
-    private static string BuildJson(ScanRunResult result)
+    private static string BuildJson(SiftFileScanResult result)
         => JsonSerializer.Serialize(
             new JsonOutputDocument(
                 SiftContractVersions.V2,
@@ -51,7 +52,7 @@ internal static class OutputWriter
                 [.. result.Errors]),
             SiftJsonContext.Default.JsonOutputDocument) + Environment.NewLine;
 
-    private static string BuildNdjson(ScanRunResult result)
+    private static string BuildNdjson(SiftFileScanResult result)
     {
         var builder = new StringBuilder();
         foreach (var observation in result.Observations)
@@ -74,7 +75,7 @@ internal static class OutputWriter
         return builder.ToString();
     }
 
-    private static string BuildText(ScanRunResult result)
+    private static string BuildText(SiftFileScanResult result)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"Stratus Sift {Version}");
@@ -105,7 +106,7 @@ internal static class OutputWriter
         return builder.ToString();
     }
 
-    private static string BuildSnaffler(ScanRunResult result)
+    private static string BuildSnaffler(SiftFileScanResult result)
     {
         var builder = new StringBuilder();
         foreach (var observation in result.Observations)
@@ -134,7 +135,7 @@ internal static class OutputWriter
         return builder.ToString();
     }
 
-    private static void AppendErrors(StringBuilder builder, IReadOnlyList<ScanError> errors)
+    private static void AppendErrors(StringBuilder builder, IReadOnlyList<SiftScanError> errors)
     {
         foreach (var error in errors)
         {
@@ -142,7 +143,7 @@ internal static class OutputWriter
         }
     }
 
-    private static void AppendSummary(StringBuilder builder, ScanRunResult result)
+    private static void AppendSummary(StringBuilder builder, SiftFileScanResult result)
     {
         builder.AppendLine();
         builder.Append("Discovered ").Append(result.ObjectsDiscovered)

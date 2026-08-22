@@ -1,4 +1,4 @@
-using Stratus.Sift.Cli;
+using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Cli.Tests;
 

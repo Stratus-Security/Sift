@@ -1,3 +1,5 @@
+using Stratus.Sift.Core;
+
 namespace Stratus.Sift.Cli;
 
 public static class Program
@@ -46,7 +48,18 @@ public static class Program
         try
         {
             var options = parsed.Options!;
-            var result = await new ContentScanner().ScanAsync(options, cancellationSource.Token);
+            PlatformGuard.EnsureSupported(options.Path);
+            var result = await new SiftFileScanner().ScanAsync(
+                options.Path,
+                new SiftFileScanOptions(
+                    options.EnumerateOnly,
+                    options.IncludeBinary,
+                    options.Recurse,
+                    options.Parallelism,
+                    options.MaximumFileSizeBytes,
+                    options.Extensions,
+                    options.ExcludedDirectoryNames),
+                cancellationSource.Token);
             await OutputWriter.WriteAsync(result, options, standardOutput, cancellationSource.Token);
             return result.Errors.Count == 0 ? ExitCodes.Success : ExitCodes.Partial;
         }
