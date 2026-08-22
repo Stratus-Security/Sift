@@ -1,0 +1,7 @@
+{
+    "Name": "Defender Configuration File",
+    "Description": "Default policy for Defender Configuration File",
+    "Severity": "Medium",
+    "StopOnMatch": false,
+    "Active": true
+}

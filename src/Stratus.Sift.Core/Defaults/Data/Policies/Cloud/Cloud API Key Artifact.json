@@ -1,0 +1,7 @@
+{
+    "Name": "Cloud API Key Artifact",
+    "Description": "Default policy for Cloud API Key Artifact",
+    "Severity": "Critical",
+    "StopOnMatch": false,
+    "Active": true
+}

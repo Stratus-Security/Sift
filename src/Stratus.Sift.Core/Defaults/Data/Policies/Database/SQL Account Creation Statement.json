@@ -1,0 +1,7 @@
+{
+    "Name": "SQL Account Creation Statement",
+    "Description": "Default policy for SQL Account Creation Statement",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

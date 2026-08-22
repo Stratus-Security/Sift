@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId Condition="'$(CommercialBuild)' != 'true'">Stratus.Sift.Connectors</PackageId>
+    <PackageId Condition="'$(CommercialBuild)' == 'true'">Stratus.Sift.Connectors.Commercial</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Stratus</Authors>
+    <Description>SharePoint, Slack and Atlassian content connectors for Stratus Sift.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression Condition="'$(CommercialBuild)' != 'true'">AGPL-3.0-only</PackageLicenseExpression>
+    <PackageLicenseFile Condition="'$(CommercialBuild)' == 'true'">LICENSE.txt</PackageLicenseFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Stratus.Sift.Core\Stratus.Sift.Core.csproj" />
+    <PackageReference Include="Azure.Identity" Version="1.19.0" />
+    <PackageReference Include="Microsoft.Graph" Version="5.105.0" />
+    <PackageReference Include="Microsoft.Kiota.Abstractions" Version="1.22.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Stratus.Sift.Cli" />
+    <InternalsVisibleTo Include="sift" />
+    <InternalsVisibleTo Include="Stratus.Sift.Cli.Tests" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CommercialBuild)' == 'true' and Exists('$(CommercialPackageLicenseFile)')">
+    <None Include="$(CommercialPackageLicenseFile)" Pack="true" PackagePath="LICENSE.txt" Visible="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
+  <Target Name="ValidateCommercialPack" BeforeTargets="Pack" Condition="'$(CommercialBuild)' == 'true' and '$(CommercialPackageLicenseFile)' == ''">
+    <Error Text="Commercial builds require an approved CommercialPackageLicenseFile supplied by private CI." />
+  </Target>
+</Project>

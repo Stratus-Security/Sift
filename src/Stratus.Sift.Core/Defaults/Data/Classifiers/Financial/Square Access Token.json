@@ -1,0 +1,18 @@
+{
+  "Name": "Square Access Token",
+  "Description": "Detects Square Access Tokens (Production sq0atp- and Sandbox sq0tsp-)",
+  "Label": "General",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "sq0atp-",
+        "sq0tsp-"
+      ],
+      "Patterns": [
+        "\\b(sq0atp|sq0tsp)-[0-9A-Za-z\\-_]{22}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

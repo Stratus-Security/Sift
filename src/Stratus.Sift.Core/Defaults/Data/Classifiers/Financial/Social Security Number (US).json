@@ -1,0 +1,24 @@
+{
+  "Name": "Social Security Number (US)",
+  "Description": "Detects US Social Security Numbers (excluding known invalid ranges)",
+  "Label": "General",
+  "AllowEvidenceCollection": true,
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "ssn",
+        "social security",
+        "social_security"
+      ],
+      "Patterns": [
+        "\\b(?!000|666|9\\d{2})\\d{3}-(?!00)\\d{2}-(?!0000)\\d{4}\\b"
+      ],
+      "IncludedExtensions": [
+        ".txt",
+        ".log",
+        ".csv"
+      ]
+    }
+  ]
+}

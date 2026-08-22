@@ -1,0 +1,7 @@
+{
+    "Name": "Windows Hash Store",
+    "Description": "Default policy for Windows Hash Store",
+    "Severity": "Critical",
+    "StopOnMatch": false,
+    "Active": true
+}

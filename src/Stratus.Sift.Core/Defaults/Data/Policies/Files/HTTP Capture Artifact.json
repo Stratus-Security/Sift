@@ -1,0 +1,7 @@
+{
+  "Name": "HTTP Capture Artifact",
+  "Description": "HTTP captures frequently contain reusable browser sessions, authorization headers, and sensitive response bodies.",
+  "Severity": "High",
+  "StopOnMatch": false,
+  "Active": true
+}

@@ -1,0 +1,7 @@
+{
+  "Name": "Australian Medicare Number",
+  "Description": "Opt-in handling for checksum-valid Australian Medicare numbers.",
+  "Severity": "Critical",
+  "StopOnMatch": false,
+  "Active": false
+}

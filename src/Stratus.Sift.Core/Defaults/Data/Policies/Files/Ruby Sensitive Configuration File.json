@@ -1,0 +1,7 @@
+{
+    "Name": "Ruby Sensitive Configuration File",
+    "Description": "Default policy for Ruby Sensitive Configuration File",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

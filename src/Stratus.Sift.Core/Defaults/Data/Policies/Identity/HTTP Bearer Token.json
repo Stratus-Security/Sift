@@ -1,0 +1,7 @@
+{
+  "Name": "HTTP Bearer Token",
+  "Description": "A hardcoded HTTP Bearer token may grant API or user-session access.",
+  "Severity": "High",
+  "StopOnMatch": false,
+  "Active": true
+}

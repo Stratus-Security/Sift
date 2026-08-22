@@ -1,0 +1,7 @@
+{
+    "Name":  "Google OAuth Access Token",
+    "Description":  "Default policy for Google OAuth Access Token",
+    "StopOnMatch":  false,
+    "Severity":  "High",
+    "Active":  true
+}

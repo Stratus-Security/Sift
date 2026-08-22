@@ -1,0 +1,36 @@
+{
+  "Name": "CyberArk Configuration File",
+  "Description": "Detects CyberArk and PAM configuration artifacts that commonly contain highly sensitive vault material.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "Psmapp.cred",
+        "psmgw.cred",
+        "backup.key",
+        "MasterReplicationUser.pass",
+        "RecPrv.key",
+        "ReplicationUser.pass",
+        "Server.key",
+        "VaultEmergency.pass",
+        "VaultUser.pass",
+        "Vault.ini",
+        "PADR.ini",
+        "PARAgent.ini",
+        "CACPMScanner.exe.config",
+        "PVConfiguration.xml"
+      ]
+    },
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".cred",
+        ".pass"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

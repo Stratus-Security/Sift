@@ -1,0 +1,22 @@
+{
+  "Name": "DB Management Client Configuration",
+  "Description": "Detects database management client configuration files and histories that commonly contain connection details or saved credentials.",
+  "Label": "Database",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "SqlStudio.bin",
+        ".mysql_history",
+        ".psql_history",
+        ".pgpass",
+        ".dbeaver-data-sources.xml",
+        "credentials-config.json",
+        "dbvis.xml",
+        "robomongo.json"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

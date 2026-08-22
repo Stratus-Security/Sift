@@ -1,0 +1,7 @@
+{
+  "Name": "MCP Configuration Artifact",
+  "Description": "MCP configuration can disclose credentials, internal endpoints, or commands available to an AI assistant.",
+  "Severity": "Medium",
+  "StopOnMatch": false,
+  "Active": true
+}

@@ -1,0 +1,37 @@
+{
+  "Name": "Unattend XML File",
+  "Description": "Looks inside unattended installation files for embedded administrator or autologon passwords.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "unattend.xml",
+        "autounattend.xml"
+      ]
+    }
+  ],
+  "SubClassifiers": [
+    {
+      "Name": "Unattend Password",
+      "Description": "Detects administrator or autologon passwords embedded in unattended installation files.",
+      "Label": "Files",
+      "Matches": [
+        {
+          "Target": "Content",
+          "Patterns": [
+            "(?s)<AdministratorPassword>.{0,30}<Value>.*?<\\/Value>",
+            "(?s)<AutoLogon>.{0,30}<Value>.*?<\\/Value>"
+          ],
+          "Keywords": [
+            "AdministratorPassword",
+            "AutoLogon"
+          ]
+        }
+      ],
+      "EnableLlmValidation": false
+    }
+  ],
+  "EnableLlmValidation": false
+}

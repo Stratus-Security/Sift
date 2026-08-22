@@ -1,0 +1,7 @@
+{
+    "Name":  "GitLab Personal Access Token",
+    "Description":  "Default policy for GitLab Personal Access Token",
+    "StopOnMatch":  false,
+    "Severity":  "Critical",
+    "Active":  true
+}

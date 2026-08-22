@@ -1,0 +1,7 @@
+{
+    "Name":  "MongoDB Connection URI",
+    "Description":  "Default policy for MongoDB Connection URI",
+    "StopOnMatch":  false,
+    "Severity":  "Critical",
+    "Active":  true
+}

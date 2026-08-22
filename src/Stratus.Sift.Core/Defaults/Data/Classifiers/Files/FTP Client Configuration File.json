@@ -1,0 +1,16 @@
+{
+  "Name": "FTP Client Configuration File",
+  "Description": "Detects FTP and SFTP client configuration files that often contain saved connection details or credentials.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "recentservers.xml",
+        "sftp-config.json"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

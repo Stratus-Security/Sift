@@ -1,96 +1,105 @@
-using Stratus.Sift.Core;
+using System.CommandLine;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Stratus.Sift.Connectors.Interfaces;
+using Stratus.Sift.Connectors.Services;
+using Stratus.Sift.FileSystem;
+using Stratus.Sift.Scanner.Interfaces;
+using Stratus.Sift.Scanner.Services;
 
 namespace Stratus.Sift.Cli;
 
-public static class Program
+public class Program
 {
     public static Task<int> Main(string[] args)
-        => RunAsync(args, Console.Out, Console.Error, CancellationToken.None);
-
-    internal static async Task<int> RunAsync(
-        IReadOnlyList<string> args,
-        TextWriter standardOutput,
-        TextWriter standardError,
-        CancellationToken cancellationToken)
     {
-        var parsed = CliArguments.Parse(args);
-        if (parsed.ShowHelp)
-        {
-            await standardOutput.WriteLineAsync(CliArguments.HelpText);
-            return ExitCodes.Success;
-        }
+        return RunAsync(args);
+    }
 
-        if (parsed.ShowVersion)
-        {
-            await standardOutput.WriteLineAsync(OutputWriter.Version);
-            return ExitCodes.Success;
-        }
-
-        if (parsed.Error is not null)
-        {
-            await standardError.WriteLineAsync(parsed.Error);
-            await standardError.WriteLineAsync("Run 'sift --help' for usage.");
-            return ExitCodes.InvalidArguments;
-        }
-
-        using var cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        ConsoleCancelEventHandler? cancelHandler = null;
-        if (!Console.IsInputRedirected)
-        {
-            cancelHandler = (_, eventArgs) =>
-            {
-                eventArgs.Cancel = true;
-                cancellationSource.Cancel();
-            };
-            Console.CancelKeyPress += cancelHandler;
-        }
-
+    public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken = default)
+    {
+        var rootCommand = BuildRootCommand();
+        var result = rootCommand.Parse(args);
         try
         {
-            var options = parsed.Options!;
-            PlatformGuard.EnsureSupported(options.Path);
-            var result = await new SiftFileScanner().ScanAsync(
-                options.Path,
-                new SiftFileScanOptions(
-                    options.EnumerateOnly,
-                    options.IncludeBinary,
-                    options.Recurse,
-                    options.Parallelism,
-                    options.MaximumFileSizeBytes,
-                    options.Extensions,
-                    options.ExcludedDirectoryNames),
-                cancellationSource.Token);
-            await OutputWriter.WriteAsync(result, options, standardOutput, cancellationSource.Token);
-            return result.Errors.Count == 0 ? ExitCodes.Success : ExitCodes.Partial;
+            return await result.InvokeAsync(new InvocationConfiguration(), cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationSource.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await standardError.WriteLineAsync("Scan cancelled.");
-            return ExitCodes.Cancelled;
+            return CliExitCodes.Cancelled;
         }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or ArgumentException
-            or NotSupportedException)
-        {
-            await standardError.WriteLineAsync(exception.Message);
-            return ExitCodes.Failed;
-        }
-        finally
-        {
-            if (cancelHandler is not null)
-            {
-                Console.CancelKeyPress -= cancelHandler;
-            }
-        }
+    }
+
+    internal static RootCommand BuildRootCommand()
+    {
+        return CliCommandFactory.BuildRootCommand();
+    }
+
+    internal static IHost CreateHost()
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+        builder.Services.AddSingleton<CliCheckpointStore>();
+        builder.Services.AddSingleton<StandardFileSystemEnumerator>();
+        builder.Services.AddSingleton<FileScanner>();
+        builder.Services.AddSingleton<IScanner>(sp => sp.GetRequiredService<FileScanner>());
+        builder.Services.AddTransient<ContentExtractor>();
+        builder.Services.AddSingleton<RemoteDriveScanner>();
+        builder.Services.AddSingleton<ThrottleNotificationHub>();
+        builder.Services.AddSingleton<SmbDiscoveryService>();
+        builder.Services.AddSingleton<SmbKerberosService>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.LuhnValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.HerokuValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.BasicAuthValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.JwtValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.SqlConnectionStringValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.MongoConnectionStringValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.PostgresConnectionStringValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.AzureSasValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.TwilioValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.SlackTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.StripeSecretKeyValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.OpenAiApiKeyValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.GitHubPatValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.GitLabPatValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.NpmAccessTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.SendGridApiKeyValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.TelegramBotTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.MailchimpApiKeyValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.AzureDevOpsPatValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.AwsSessionTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.GitLabOperationalTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.PyPiApiTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.DockerAccessTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.DockerConfigAuthValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.VaultTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.TerraformTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.CredentialedServiceUriValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.BearerTokenValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.IbanValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.AustralianTfnValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.AustralianMedicareValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.ContextualIdentifierValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.EnvironmentSecretAssignmentValidator>();
+        builder.Services.AddSingleton<ValidatorFactory>();
+
+        builder.Services.AddHttpClient();
+
+        builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.SharePoint.SharePointConnector>();
+        builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Slack.SlackConnector>();
+        builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Slack.SlackExportConnector>();
+        builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Jira.JiraConnector>();
+
+        return builder.Build();
     }
 }
 
-internal static class ExitCodes
+internal static class CliExitCodes
 {
     internal const int Success = 0;
-    internal const int InvalidArguments = 2;
-    internal const int Failed = 3;
-    internal const int Partial = 4;
+    internal const int Failed = 2;
+    internal const int Partial = 3;
     internal const int Cancelled = 130;
 }

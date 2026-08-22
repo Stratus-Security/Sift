@@ -1,0 +1,7 @@
+{
+  "Name": "AI Assistant State Artifact",
+  "Description": "AI state, conversation, trace, memory, and vector-store artifacts may retain sensitive prompts, outputs, and copied source data.",
+  "Severity": "Medium",
+  "StopOnMatch": false,
+  "Active": true
+}

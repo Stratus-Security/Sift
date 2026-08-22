@@ -1,0 +1,24 @@
+{
+  "Name": "Slack Token (Generic)",
+  "Description": "Detects Slack API Tokens (Bot, User, Workspace, Enterprise)",
+  "Label": "General",
+  "Validator": "SlackToken",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "xoxb-",
+        "xoxp-",
+        "xoxa-",
+        "xoxr-",
+        "xoxs-",
+        "xoxe-"
+      ],
+      "Patterns": [
+        "\\bxox[baprs]-[a-zA-Z0-9-]{20,}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

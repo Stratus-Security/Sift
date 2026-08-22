@@ -1,0 +1,7 @@
+{
+  "Name": "Australian Tax File Number",
+  "Description": "Opt-in handling for checksum-valid Australian Tax File Numbers.",
+  "Severity": "Critical",
+  "StopOnMatch": false,
+  "Active": false
+}

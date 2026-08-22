@@ -1,0 +1,6 @@
+[
+  { "Pattern": "C$", "MatchTarget": "ShareName", "Description": "Administrative Share (scanned by default)", "IsEnabled": false },
+  { "Pattern": "ADMIN$", "MatchTarget": "ShareName", "Description": "Administrative Share", "IsEnabled": true },
+  { "Pattern": "IPC$", "MatchTarget": "ShareName", "Description": "Administrative Share", "IsEnabled": true },
+  { "Pattern": "PRINT$", "MatchTarget": "ShareName", "Description": "Administrative Share", "IsEnabled": true }
+]

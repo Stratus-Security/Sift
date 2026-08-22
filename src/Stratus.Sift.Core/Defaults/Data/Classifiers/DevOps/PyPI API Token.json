@@ -1,0 +1,15 @@
+{
+  "Name": "PyPI API Token",
+  "Description": "Detects PyPI Macaroon API tokens using the officially documented pypi- format.",
+  "Label": "DevOps",
+  "Validator": "PyPiApiToken",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": ["pypi-"],
+      "Patterns": ["(?<![A-Za-z0-9_-])pypi-[A-Za-z0-9_-]{85,}(?![A-Za-z0-9_-])"],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

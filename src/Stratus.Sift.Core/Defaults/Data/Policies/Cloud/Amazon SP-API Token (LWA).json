@@ -1,0 +1,7 @@
+{
+    "Name":  "Amazon SP-API Token (LWA)",
+    "Description":  "Default policy for Amazon SP-API Token (LWA)",
+    "StopOnMatch":  false,
+    "Severity":  "Critical",
+    "Active":  true
+}

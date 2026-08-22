@@ -1,0 +1,7 @@
+{
+    "Name": "Databricks Personal Access Token",
+    "Description": "Default policy for Databricks Personal Access Token",
+    "Severity": "Critical",
+    "StopOnMatch": false,
+    "Active": true
+}

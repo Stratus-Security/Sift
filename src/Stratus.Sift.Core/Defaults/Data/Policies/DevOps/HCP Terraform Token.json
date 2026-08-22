@@ -1,0 +1,7 @@
+{
+  "Name": "HCP Terraform Token",
+  "Description": "Terraform API tokens may grant access to workspaces, state, runs, and private registries.",
+  "Severity": "Critical",
+  "StopOnMatch": false,
+  "Active": true
+}

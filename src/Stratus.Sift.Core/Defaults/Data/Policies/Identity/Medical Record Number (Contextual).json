@@ -1,0 +1,7 @@
+{
+  "Name": "Medical Record Number (Contextual)",
+  "Description": "Opt-in contextual handling for medical record and patient identifiers.",
+  "Severity": "Critical",
+  "StopOnMatch": false,
+  "Active": false
+}

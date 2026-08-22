@@ -1,0 +1,18 @@
+{
+  "Name": "DigitalOcean Token",
+  "Description": "Detects DigitalOcean Personal Access Tokens (dop_v1_ prefix)",
+  "Label": "General",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "dop_v1_"
+      ],
+      "Patterns": [
+        "\\bdop_v1_[a-f0-9]{64}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

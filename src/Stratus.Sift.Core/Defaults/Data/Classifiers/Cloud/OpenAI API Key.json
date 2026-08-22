@@ -1,0 +1,19 @@
+{
+  "Name": "OpenAI API Key",
+  "Description": "Detects OpenAI API Keys (Legacy sk-, Project sk-proj-, Service sk-svc-)",
+  "Label": "General",
+  "Validator": "OpenAiApiKey",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "sk-"
+      ],
+      "Patterns": [
+        "\\bsk-(proj-|svc-)?[a-zA-Z0-9-]{32,}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

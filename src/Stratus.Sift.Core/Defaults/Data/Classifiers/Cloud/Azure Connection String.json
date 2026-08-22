@@ -1,0 +1,18 @@
+{
+  "Name": "Azure Connection String",
+  "Description": "Detects Azure Storage Account Connection Strings",
+  "Label": "General",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "AccountKey=",
+        "DefaultEndpointsProtocol"
+      ],
+      "Patterns": [
+        "(?<=AccountKey=)[a-zA-Z0-9+/=]{86,88}"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

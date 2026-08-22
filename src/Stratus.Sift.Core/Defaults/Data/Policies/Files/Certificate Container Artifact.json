@@ -1,0 +1,7 @@
+{
+    "Name": "Certificate Container Artifact",
+    "Description": "Default policy for Certificate Container Artifact",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

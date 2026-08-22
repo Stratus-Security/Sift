@@ -1,0 +1,7 @@
+{
+    "Name": "Network Configuration",
+    "Description": "Default policy for Network Configuration",
+    "Severity": "Low",
+    "StopOnMatch": false,
+    "Active": true
+}

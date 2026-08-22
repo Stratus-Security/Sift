@@ -1,0 +1,14 @@
+{
+  "Name": "MDT Domain Join Configuration Path",
+  "Description": "Detects MDT control paths where CustomSettings.ini usually contains deployment credentials.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "DirectoryPath",
+      "Patterns": [
+        "[\\\\/]control[\\\\/]customsettings\\.ini$"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

@@ -1,0 +1,16 @@
+{
+  "Name": "Git Repository Directory",
+  "Description": "Detects Git repository metadata directories (.git), which commonly contain remotes, refs, hooks, and local repository configuration.",
+  "Label": "DevOps",
+  "Matches": [
+    {
+      "Target": "DirectoryName",
+      "IsLiteral": true,
+      "CaseSensitive": true,
+      "Patterns": [
+        ".git"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

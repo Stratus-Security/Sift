@@ -13,12 +13,17 @@ $deniedIdentifierHashes = [System.Collections.Generic.HashSet[string]]::new(
     '89497d797bf96c6bbb8e3af01cd0ca0310b1623fff9f6d5c51997d3701864381',
     '1b74cc1fdcbe91d53627f2e0f305d242edee0affc3bf652cf5a05bc2cdc26fb4',
     'b12b9dcefa38633710308d2ac2ff0641d366e15a4937d83bc48689ae407e7b32',
-    'fcdf691fe60921b6c216760de0f31c97c104a15eec29c918734132be1803bde8',
     '6c55c1b146951ae5ea1b842483893237ed40a7d74921a2f713f1e533b44ab36a',
     '3c99c62343e3789bb0d43a95086f894ba0612044ae14c95b1664f8319f5e3c9f',
     '607c5f4b19efcf9def2240899864dc900b6132cf9396e289f39432f9b441d0e0',
     '0d23a5780bb98cddc07dba83c4e1a6607fa712acadcb92b836ca29bc5af7f111'
 ) | ForEach-Object { [void] $deniedIdentifierHashes.Add($_) }
+$artifactAllowedIdentifierHashes = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::Ordinal)
+@(
+    # Framework configuration metadata name; this does not contain a secrets identifier or value.
+    '0d23a5780bb98cddc07dba83c4e1a6607fa712acadcb92b836ca29bc5af7f111'
+) | ForEach-Object { [void] $artifactAllowedIdentifierHashes.Add($_) }
 $publicNamespace = 'Stratus.Sift'
 $namespacePattern = [regex]::new(
     '(?m)^\s*(?:global\s+)?(?:namespace|using)\s+(?<name>Stratus\.[A-Za-z0-9_.]+)',
@@ -26,6 +31,57 @@ $namespacePattern = [regex]::new(
 $identifierPattern = [regex]::new(
     '\b[A-Za-z_][A-Za-z0-9_]*\b',
     [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+$identifierScannerSource = @'
+using System;
+using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
+
+public static class PublicBoundaryIdentifierScanner
+{
+    public static string FindDeniedIdentifierHash(string content, IEnumerable<string> deniedHashes)
+    {
+        var denied = new HashSet<string>(deniedHashes, StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < content.Length; index++)
+        {
+            var current = content[index];
+            if (!IsIdentifierStart(current)
+                || (index > 0 && IsIdentifierPart(content[index - 1])))
+            {
+                continue;
+            }
+
+            var end = index + 1;
+            while (end < content.Length && IsIdentifierPart(content[end]))
+            {
+                end++;
+            }
+
+            var identifier = content.Substring(index, end - index);
+            if (seen.Add(identifier))
+            {
+                var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identifier.ToLowerInvariant()))).ToLowerInvariant();
+                if (denied.Contains(hash))
+                {
+                    return hash;
+                }
+            }
+
+            index = end - 1;
+        }
+
+        return string.Empty;
+    }
+
+    private static bool IsIdentifierStart(char value)
+        => value == '_' || (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+
+    private static bool IsIdentifierPart(char value)
+        => IsIdentifierStart(value) || (value >= '0' && value <= '9');
+}
+'@
+Add-Type -TypeDefinition $identifierScannerSource -Language CSharp
 $personalPathPattern = [regex]::new(
     '(?i)(?:[A-Z]:\\Users\\[^\\/\s]+|/(?:Users|home)/[^/\s]+)',
     [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
@@ -55,10 +111,9 @@ function Test-PublicContent(
         }
     }
 
-    foreach ($match in $identifierPattern.Matches($Content)) {
-        if ($deniedIdentifierHashes.Contains((Get-IdentifierHash $match.Value))) {
-            $violations.Add("$Location contains a restricted identifier.")
-        }
+    $deniedHash = [PublicBoundaryIdentifierScanner]::FindDeniedIdentifierHash($Content, $deniedIdentifierHashes)
+    if (-not [string]::IsNullOrEmpty($deniedHash)) {
+        $violations.Add("$Location contains a restricted identifier ($deniedHash).")
     }
 
     if ($personalPathPattern.IsMatch($Content)) {
@@ -127,6 +182,11 @@ if (-not [string]::IsNullOrWhiteSpace($ArtifactPath)) {
     $bytes = [System.IO.File]::ReadAllBytes($resolvedArtifact)
     $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
     $unicode = [System.Text.Encoding]::Unicode.GetString($bytes)
+    $artifactDeniedIdentifierHashes = [System.Collections.Generic.HashSet[string]]::new(
+        $deniedIdentifierHashes,
+        [System.StringComparer]::Ordinal)
+    $artifactDeniedIdentifierHashes.ExceptWith($artifactAllowedIdentifierHashes)
+    $deniedIdentifierHashes = $artifactDeniedIdentifierHashes
     Test-PublicContent 'Release executable' $ascii $false
     Test-PublicContent 'Release executable' $unicode $false
 }

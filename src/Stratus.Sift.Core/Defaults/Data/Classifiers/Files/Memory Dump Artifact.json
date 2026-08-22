@@ -1,0 +1,25 @@
+{
+  "Name": "Memory Dump Artifact",
+  "Description": "Detects process and system memory dump artifacts that can contain credentials, tokens, and other live secrets.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "MEMORY.DMP",
+        "hiberfil.sys",
+        "lsass.dmp",
+        "lsass.exe.dmp"
+      ]
+    },
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".dmp"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

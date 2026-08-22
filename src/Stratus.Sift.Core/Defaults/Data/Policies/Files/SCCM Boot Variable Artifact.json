@@ -1,0 +1,7 @@
+{
+    "Name": "SCCM Boot Variable Artifact",
+    "Description": "Default policy for SCCM Boot Variable Artifact",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

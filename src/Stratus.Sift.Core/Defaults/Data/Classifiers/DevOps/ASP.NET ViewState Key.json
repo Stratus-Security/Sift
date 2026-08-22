@@ -1,0 +1,31 @@
+{
+  "Name": "ASP.NET ViewState Key",
+  "Description": "Detects ASP.NET validation and decryption keys in application configuration or source files.",
+  "Label": "DevOps",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Patterns": [
+        "validationkey\\s*=\\s*['\\\"][^'\\\"]{4,}['\\\"]",
+        "decryptionkey\\s*=\\s*['\\\"][^'\\\"]{4,}['\\\"]"
+      ],
+      "Keywords": [
+        "validationkey",
+        "decryptionkey"
+      ],
+      "IncludedExtensions": [
+        ".ashx",
+        ".asmx",
+        ".asp",
+        ".ascx",
+        ".aspx",
+        ".config",
+        ".cs",
+        ".cshtml",
+        ".master",
+        ".vb",
+        ".xml"
+      ]
+    }
+  ]
+}

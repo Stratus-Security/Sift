@@ -1,0 +1,35 @@
+{
+  "Name": "AI Instruction Artifact",
+  "Description": "Detects AI coding-agent rules, project instructions, prompts, and memory files that may contain internal context or sensitive operational guidance.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        ".cursorrules",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "copilot-instructions.md",
+        "GEMINI.md"
+      ]
+    },
+    {
+      "Target": "FileName",
+      "Patterns": [
+        ".*\\.instructions\\.md$",
+        ".*\\.prompt\\.md$"
+      ]
+    },
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".mdc",
+        ".prompt",
+        ".prompty"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

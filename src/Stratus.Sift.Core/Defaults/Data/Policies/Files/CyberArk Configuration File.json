@@ -1,0 +1,7 @@
+{
+    "Name": "CyberArk Configuration File",
+    "Description": "Default policy for CyberArk Configuration File",
+    "Severity": "Critical",
+    "StopOnMatch": false,
+    "Active": true
+}

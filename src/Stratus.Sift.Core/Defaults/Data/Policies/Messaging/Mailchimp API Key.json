@@ -1,0 +1,7 @@
+{
+    "Name":  "Mailchimp API Key",
+    "Description":  "Default policy for Mailchimp API Key",
+    "StopOnMatch":  false,
+    "Severity":  "Medium",
+    "Active":  true
+}

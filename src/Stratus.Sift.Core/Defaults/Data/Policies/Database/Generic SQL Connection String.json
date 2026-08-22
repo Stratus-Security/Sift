@@ -1,0 +1,7 @@
+{
+    "Name":  "Generic SQL Connection String",
+    "Description":  "Default policy for Generic SQL Connection String",
+    "StopOnMatch":  false,
+    "Severity":  "High",
+    "Active":  true
+}

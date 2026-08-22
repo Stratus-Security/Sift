@@ -1,0 +1,7 @@
+{
+    "Name": "Infrastructure as Code Variable File",
+    "Description": "Default policy for Infrastructure as Code Variable File",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

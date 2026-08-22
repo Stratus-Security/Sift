@@ -1,0 +1,20 @@
+{
+  "Name": "Certificate Container Artifact",
+  "Description": "Detects certificate and keystore container files that may include exportable private key material.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".pem",
+        ".der",
+        ".pfx",
+        ".pk12",
+        ".p12",
+        ".pkcs12"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

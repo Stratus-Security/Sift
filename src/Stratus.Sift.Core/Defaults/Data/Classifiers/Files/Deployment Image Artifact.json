@@ -1,0 +1,17 @@
+{
+  "Name": "Deployment Image Artifact",
+  "Description": "Detects deployment images and appliance exports that often embed operating system, application, or credential material.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".wim",
+        ".ova",
+        ".ovf"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

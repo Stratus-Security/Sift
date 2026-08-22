@@ -1,0 +1,7 @@
+{
+    "Name": "FTP Client Configuration File",
+    "Description": "Default policy for FTP Client Configuration File",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

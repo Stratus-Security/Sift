@@ -1,0 +1,7 @@
+{
+    "Name":  "Azure Connection String",
+    "Description":  "Default policy for Azure Connection String",
+    "StopOnMatch":  false,
+    "Severity":  "Critical",
+    "Active":  true
+}

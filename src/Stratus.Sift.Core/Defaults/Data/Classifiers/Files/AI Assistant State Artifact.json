@@ -1,0 +1,36 @@
+{
+  "Name": "AI Assistant State Artifact",
+  "Description": "Detects AI assistant conversations, local memory, traces, evaluations, vector stores, and IDE state databases that may retain sensitive prompts or source content.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        ".aider.chat.history.md",
+        ".aider.input.history",
+        "chroma.sqlite3",
+        "state.vscdb",
+        "state.vscdb.backup",
+        "webui.db"
+      ]
+    },
+    {
+      "Target": "FileName",
+      "Patterns": [
+        "^(?:langchain|langsmith)[-_.](?:eval|evals|run|runs|trace|traces).*\\.(?:json|jsonl|ndjson)$"
+      ]
+    },
+    {
+      "Target": "DirectoryPath",
+      "Patterns": [
+        "[\\\\/]\\.claude[\\\\/]projects[\\\\/].*\\.jsonl$",
+        "[\\\\/]\\.codex[\\\\/]sessions[\\\\/].*\\.jsonl$",
+        "[\\\\/]\\.gemini[\\\\/](?:chats|history|tmp)[\\\\/].*\\.json$",
+        "[\\\\/]\\.(?:continue|aider)[\\\\/].*\\.(?:db|jsonl|ndjson|sqlite|sqlite3)$",
+        "[\\\\/](?:chroma|langchain|langsmith|open-webui)[\\\\/].*\\.(?:db|jsonl|ndjson|sqlite|sqlite3)$"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

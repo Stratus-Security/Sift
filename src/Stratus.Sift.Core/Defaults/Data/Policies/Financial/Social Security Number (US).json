@@ -1,0 +1,7 @@
+{
+    "Name":  "Social Security Number (US)",
+    "Description":  "Default policy for Social Security Number (US)",
+    "StopOnMatch":  false,
+    "Severity":  "Critical",
+    "Active":  true
+}

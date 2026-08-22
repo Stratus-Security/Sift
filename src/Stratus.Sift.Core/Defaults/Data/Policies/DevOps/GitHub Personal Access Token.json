@@ -1,0 +1,7 @@
+{
+    "Name":  "GitHub Personal Access Token",
+    "Description":  "Default policy for GitHub Personal Access Token",
+    "StopOnMatch":  false,
+    "Severity":  "Critical",
+    "Active":  true
+}

@@ -1,0 +1,16 @@
+{
+  "Name": "Match Administrative Shares",
+  "Description": "Match default administrative.",
+  "Label": "General",
+  "Matches": [
+    {
+      "Target": "ShareName",
+      "IsLiteral": true,
+      "Patterns": [
+        "C$",
+        "ADMIN$"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

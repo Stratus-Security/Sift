@@ -1,0 +1,7 @@
+{
+  "Name": "Azure DevOps Personal Access Token",
+  "Description": "Azure DevOps PATs grant scoped access to source, pipelines, artifacts, and organization APIs.",
+  "Severity": "Critical",
+  "StopOnMatch": false,
+  "Active": true
+}

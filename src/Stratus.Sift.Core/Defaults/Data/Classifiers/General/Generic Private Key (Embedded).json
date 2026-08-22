@@ -1,0 +1,24 @@
+{
+  "Name": "Generic Private Key (Embedded)",
+  "Description": "Detects PEM encoded private keys embedded in code or configuration files",
+  "Label": "General",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "-----BEGIN DSA PRIVATE KEY-----",
+        "-----BEGIN EC PRIVATE KEY-----",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "-----BEGIN PRIVATE KEY-----"
+      ],
+      "Patterns": [
+        "-----BEGIN [A-Z\\s]+PRIVATE KEY-----",
+        "-----BEGIN( RSA| OPENSSH| DSA| EC| PGP)? PRIVATE KEY( BLOCK)?-----"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "EnableLlmValidation": false
+}

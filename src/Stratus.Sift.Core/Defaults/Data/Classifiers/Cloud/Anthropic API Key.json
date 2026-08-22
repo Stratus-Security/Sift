@@ -1,0 +1,18 @@
+{
+  "Name": "Anthropic API Key",
+  "Description": "Detects Anthropic API keys with the sk-ant prefix.",
+  "Label": "General",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "sk-ant-"
+      ],
+      "Patterns": [
+        "\\bsk-ant-(?:api\\d{2}-)?[A-Za-z0-9_-]{24,}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

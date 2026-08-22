@@ -1,0 +1,16 @@
+{
+  "Name": "Defender Configuration File",
+  "Description": "Detects Microsoft Defender configuration artifacts that may expose enrollment or management settings.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "SensorConfiguration.json",
+        "mdatp_managed.json"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

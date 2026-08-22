@@ -1,0 +1,34 @@
+{
+  "Name": "Firefox Login Store",
+  "Description": "Looks inside Firefox and Thunderbird login stores for encrypted credential blobs.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "logins.json"
+      ]
+    }
+  ],
+  "SubClassifiers": [
+    {
+      "Name": "Firefox Encrypted Credential",
+      "Description": "Detects Firefox login entries that contain encrypted password blobs.",
+      "Label": "Files",
+      "Matches": [
+        {
+          "Target": "Content",
+          "Patterns": [
+            "\"encryptedPassword\":\"[A-Za-z0-9+/=]+\""
+          ],
+          "Keywords": [
+            "encryptedPassword"
+          ]
+        }
+      ],
+      "EnableLlmValidation": false
+    }
+  ],
+  "EnableLlmValidation": false
+}

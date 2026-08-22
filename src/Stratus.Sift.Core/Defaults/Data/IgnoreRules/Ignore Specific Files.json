@@ -1,0 +1,9 @@
+[
+  { "Pattern": "jmxremote.password.template", "MatchTarget": "FileName", "Description": "Template file", "IsEnabled": true },
+  { "Pattern": "sceregvl.inf", "MatchTarget": "FileName", "Description": "Windows system file", "IsEnabled": true },
+  { "Pattern": "credentialprovider.idl", "MatchTarget": "FileName", "Description": "IDL file", "IsEnabled": true },
+  { "Pattern": "pspasswd64.exe", "MatchTarget": "FileName", "Description": "Sysinternals tool", "IsEnabled": true },
+  { "Pattern": "pspasswd.exe", "MatchTarget": "FileName", "Description": "Sysinternals tool", "IsEnabled": true },
+  { "Pattern": "psexec.exe", "MatchTarget": "FileName", "Description": "Sysinternals tool", "IsEnabled": true },
+  { "Pattern": "psexec64.exe", "MatchTarget": "FileName", "Description": "Sysinternals tool", "IsEnabled": true }
+]

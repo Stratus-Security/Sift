@@ -1,0 +1,19 @@
+{
+  "Name": "Windows Hash Store",
+  "Description": "Detects Windows hash store and registry hive files by filename.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "CaseSensitive": true,
+      "Patterns": [
+        "NTDS.DIT",
+        "SYSTEM",
+        "SAM",
+        "SECURITY"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

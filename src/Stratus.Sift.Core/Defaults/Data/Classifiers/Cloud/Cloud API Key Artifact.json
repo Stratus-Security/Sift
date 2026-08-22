@@ -1,0 +1,15 @@
+{
+  "Name": "Cloud API Key Artifact",
+  "Description": "Detects files whose names strongly suggest a local cloud credential artifact.",
+  "Label": "Cloud",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        ".tugboat"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

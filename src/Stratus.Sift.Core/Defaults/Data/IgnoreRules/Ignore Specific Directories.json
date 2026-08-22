@@ -1,0 +1,4 @@
+[
+  { "Pattern": "node_modules", "MatchTarget": "DirectoryName", "Description": "Node dependencies", "IsEnabled": true },
+  { "Pattern": "pkg", "MatchTarget": "DirectoryName", "Description": "Go build cache", "IsEnabled": true }
+]

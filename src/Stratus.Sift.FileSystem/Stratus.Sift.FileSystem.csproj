@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId Condition="'$(CommercialBuild)' != 'true'">Stratus.Sift.FileSystem</PackageId>
+    <PackageId Condition="'$(CommercialBuild)' == 'true'">Stratus.Sift.FileSystem.Commercial</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Stratus</Authors>
+    <Description>Local and remote filesystem inventory support for Stratus Sift.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression Condition="'$(CommercialBuild)' != 'true'">AGPL-3.0-only</PackageLicenseExpression>
+    <PackageLicenseFile Condition="'$(CommercialBuild)' == 'true'">LICENSE.txt</PackageLicenseFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Stratus.Sift.Core\Stratus.Sift.Core.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CommercialBuild)' == 'true' and Exists('$(CommercialPackageLicenseFile)')">
+    <None Include="$(CommercialPackageLicenseFile)" Pack="true" PackagePath="LICENSE.txt" Visible="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
+  <Target Name="ValidateCommercialPack" BeforeTargets="Pack" Condition="'$(CommercialBuild)' == 'true' and '$(CommercialPackageLicenseFile)' == ''">
+    <Error Text="Commercial builds require an approved CommercialPackageLicenseFile supplied by private CI." />
+  </Target>
+</Project>

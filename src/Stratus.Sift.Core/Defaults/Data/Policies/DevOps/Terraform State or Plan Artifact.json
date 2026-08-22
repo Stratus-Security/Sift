@@ -1,0 +1,7 @@
+{
+  "Name": "Terraform State or Plan Artifact",
+  "Description": "Terraform state and plan artifacts can contain secrets even when the source variables are marked sensitive.",
+  "Severity": "High",
+  "StopOnMatch": false,
+  "Active": true
+}

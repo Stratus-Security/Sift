@@ -1,0 +1,19 @@
+{
+  "Name": "MongoDB Connection URI",
+  "Description": "Detects MongoDB connection strings containing credentials",
+  "Label": "General",
+  "Validator": "MongoConnectionString",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "mongodb://",
+        "mongodb+srv://"
+      ],
+      "Patterns": [
+        "mongodb(?:\\+srv)?://[^:\\s]+:[^@\\s]+@"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

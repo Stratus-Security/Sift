@@ -1,0 +1,7 @@
+{
+    "Name": "Sensitive Configuration Filename",
+    "Description": "Default policy for Sensitive Configuration Filename",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

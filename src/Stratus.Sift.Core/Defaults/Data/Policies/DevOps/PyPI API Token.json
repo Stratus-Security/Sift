@@ -1,0 +1,7 @@
+{
+  "Name": "PyPI API Token",
+  "Description": "PyPI API tokens may permit publishing or replacing software packages.",
+  "Severity": "Critical",
+  "StopOnMatch": false,
+  "Active": true
+}

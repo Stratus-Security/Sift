@@ -1,0 +1,7 @@
+{
+    "Name": "ASP.NET ViewState Key",
+    "Description": "Default policy for ASP.NET ViewState Key",
+    "Severity": "High",
+    "StopOnMatch": false,
+    "Active": true
+}

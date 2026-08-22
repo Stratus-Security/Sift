@@ -1,0 +1,7 @@
+{
+    "Name":  "Facebook Access Token",
+    "Description":  "Default policy for Facebook Access Token",
+    "StopOnMatch":  false,
+    "Severity":  "High",
+    "Active":  true
+}

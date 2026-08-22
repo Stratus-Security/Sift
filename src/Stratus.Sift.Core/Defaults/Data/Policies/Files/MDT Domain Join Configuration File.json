@@ -1,0 +1,7 @@
+{
+    "Name": "MDT Domain Join Configuration File",
+    "Description": "Default policy for MDT Domain Join Configuration File",
+    "Severity": "Medium",
+    "StopOnMatch": false,
+    "Active": true
+}

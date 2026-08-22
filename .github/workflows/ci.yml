@@ -38,6 +38,8 @@ jobs:
             src/Stratus.Sift.Cli/packages.lock.json
             src/Stratus.Sift.Core/packages.lock.json
             src/Stratus.Sift.Contracts/packages.lock.json
+            src/Stratus.Sift.FileSystem/packages.lock.json
+            src/Stratus.Sift.Connectors/packages.lock.json
             tests/Stratus.Sift.Cli.Tests/packages.lock.json
 
       - name: Restore locked dependencies
@@ -98,6 +100,8 @@ jobs:
             eng/locks/packages.${{ matrix.rid }}.lock.json
             src/Stratus.Sift.Core/packages.lock.json
             src/Stratus.Sift.Contracts/packages.lock.json
+            src/Stratus.Sift.FileSystem/packages.lock.json
+            src/Stratus.Sift.Connectors/packages.lock.json
 
       - name: Set release version
         id: version
@@ -116,11 +120,13 @@ jobs:
             chmod 755 $executable
           }
           $version = (& $executable --version).Trim()
-          if ($LASTEXITCODE -ne 0 -or $version -ne '${{ steps.version.outputs.version }}') {
+          if ($LASTEXITCODE -ne 0 -or -not $version.StartsWith('${{ steps.version.outputs.version }}')) {
             throw "Unexpected version: $version"
           }
-          $json = (& $executable scan README.md --format json | Out-String) | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $json.summary.objectsScanned -ne 1) {
+          $smokeOutput = Join-Path $env:RUNNER_TEMP 'sift-smoke.json'
+          & $executable local --path . --enum-only --output $smokeOutput --output-format json
+          $json = Get-Content -LiteralPath $smokeOutput -Raw | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $json.SchemaVersion -ne '1.0' -or $json.Errors -ne 0) {
             throw 'The native scan smoke test failed.'
           }
 

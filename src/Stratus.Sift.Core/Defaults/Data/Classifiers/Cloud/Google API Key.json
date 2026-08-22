@@ -1,0 +1,18 @@
+{
+  "Name": "Google API Key",
+  "Description": "Detects Google Cloud API Keys (AIza prefix)",
+  "Label": "General",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "AIza"
+      ],
+      "Patterns": [
+        "\\bAIza[0-9A-Za-z\\-_]{35}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

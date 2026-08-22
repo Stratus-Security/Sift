@@ -1,0 +1,19 @@
+{
+  "Name": "PostgreSQL Connection URI",
+  "Description": "Detects PostgreSQL connection strings containing credentials",
+  "Label": "General",
+  "Validator": "PostgresConnectionString",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "postgres://",
+        "postgresql://"
+      ],
+      "Patterns": [
+        "postgres(?:ql)?://[^:\\s]+:[^@\\s]+@[a-zA-Z0-9._-]+"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}
