@@ -96,7 +96,7 @@ public class FileScannerTests : IDisposable
         bool isLiteral = false,
         bool caseSensitive = false)
     {
-        var c = new Classifier 
+        var c = new Classifier
         {
             Id = Guid.NewGuid(),
             Name = name,
@@ -113,7 +113,7 @@ public class FileScannerTests : IDisposable
                 }
             }
         };
-        
+
         if (subClassifier != null)
         {
             c.SubClassifiers.Add(subClassifier);
@@ -125,7 +125,7 @@ public class FileScannerTests : IDisposable
             Name = name,
             Severity = severity
         };
-        
+
         var pc = new PolicyClassifier { Policy = p, Classifier = c, PolicyId = p.Id, ClassifierId = c.Id };
         p.PolicyClassifiers.Add(pc);
         c.PolicyClassifiers.Add(pc);
@@ -149,10 +149,10 @@ public class FileScannerTests : IDisposable
         File.WriteAllText(filePath, content);
 
         var (classifiers, policies) = CreateConfig(
-            "AWS Access Key", 
-            new List<string> { "(AWS|AKIA)[0-9A-Z]{16}" }, 
-            Severity.Critical, 
-            keywords: new List<string> { "aws_access_key" }, 
+            "AWS Access Key",
+            new List<string> { "(AWS|AKIA)[0-9A-Z]{16}" },
+            Severity.Critical,
+            keywords: new List<string> { "aws_access_key" },
             extensions: new List<string> { ".json" }
         );
 
@@ -167,7 +167,7 @@ public class FileScannerTests : IDisposable
         Assert.Equal(Severity.Critical, finding.Severity);
         Assert.Equal(secret, finding.RedactedValue);
         Assert.Contains("aws_access_key", finding.Snippet);
-        Assert.Contains(secret, finding.Snippet); 
+        Assert.Contains(secret, finding.Snippet);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class FileScannerTests : IDisposable
         // Arrange
         var fileName = "binary.dat";
         var filePath = Path.Combine(_tempDirectory, fileName);
-        
+
         using (var fs = new FileStream(filePath, FileMode.Create))
         {
             fs.WriteByte(0x41); // 'A'
@@ -185,10 +185,10 @@ public class FileScannerTests : IDisposable
         }
 
         var (classifiers, policies) = CreateConfig(
-            "Any Text", 
-            new List<string> { ".*" }, 
-            Severity.Low, 
-            keywords: new List<string> { "A" }, 
+            "Any Text",
+            new List<string> { ".*" },
+            Severity.Low,
+            keywords: new List<string> { "A" },
             extensions: new List<string> { ".dat" }
         );
 
@@ -207,13 +207,13 @@ public class FileScannerTests : IDisposable
         // Arrange
         var fileName = "notes.txt";
         var filePath = Path.Combine(_tempDirectory, fileName);
-        var content = "Here is a key: AKIA1234567890ABCDEF"; 
+        var content = "Here is a key: AKIA1234567890ABCDEF";
         File.WriteAllText(filePath, content);
 
         var (classifiers, policies) = CreateConfig(
-            "AWS Access Key", 
-            new List<string> { "AKIA[0-9A-Z]{16}" }, 
-            Severity.Critical, 
+            "AWS Access Key",
+            new List<string> { "AKIA[0-9A-Z]{16}" },
+            Severity.Critical,
             keywords: new List<string> { "AWS" }, // REQUIRED keyword missing in content
             extensions: new List<string> { ".txt" }
         );
@@ -386,9 +386,9 @@ public class FileScannerTests : IDisposable
         }
 
         var (classifiers, policies) = CreateConfig(
-            "AWS Access Key", 
-            new List<string> { "(AWS|AKIA)[0-9A-Z]{16}" }, 
-            Severity.Critical, 
+            "AWS Access Key",
+            new List<string> { "(AWS|AKIA)[0-9A-Z]{16}" },
+            Severity.Critical,
             keywords: new List<string> { "AWS" },
             extensions: new List<string> { ".docx" }
         );
@@ -436,7 +436,7 @@ public class FileScannerTests : IDisposable
         // Note: For SubClassifiers to trigger Policies, the Policy must target the SubClassifier OR the parent Policy handles it?
         // In the new model, ClassifierOptimizer handles sub-classifiers.
         // We need a Policy for the SubClassifier to report an issue.
-        
+
         var subPolicy = new Policy
         {
             Id = Guid.NewGuid(),
@@ -448,13 +448,13 @@ public class FileScannerTests : IDisposable
         subClassifier.PolicyClassifiers.Add(pcSub);
 
         var (classifiers, policies) = CreateConfig(
-            "Unattended Install File", 
-            new List<string> { "unattend.xml" }, 
-            Severity.Low, 
+            "Unattended Install File",
+            new List<string> { "unattend.xml" },
+            Severity.Low,
             target: RuleTarget.FileName,
             subClassifier: subClassifier
         );
-        
+
         // Add subPolicy to policies list
         policies.Add(subPolicy);
 
@@ -480,10 +480,10 @@ public class FileScannerTests : IDisposable
         File.WriteAllText(filePath, content);
 
         var (classifiers, policies) = CreateConfig(
-            "AWS Access Key", 
-            new List<string> { "(AWS|AKIA)[0-9A-Z]{16}" }, 
-            Severity.Critical, 
-            keywords: new List<string> { "AKIA" }, 
+            "AWS Access Key",
+            new List<string> { "(AWS|AKIA)[0-9A-Z]{16}" },
+            Severity.Critical,
+            keywords: new List<string> { "AKIA" },
             extensions: new List<string> { ".txt" }
         );
 
