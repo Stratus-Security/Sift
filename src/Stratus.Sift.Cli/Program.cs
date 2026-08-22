@@ -90,7 +90,7 @@ public class Program
         builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.SharePoint.SharePointConnector>();
         builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Slack.SlackConnector>();
         builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Slack.SlackExportConnector>();
-        builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Jira.JiraConnector>();
+        builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Atlassian.AtlassianConnector>();
 
         return builder.Build();
     }

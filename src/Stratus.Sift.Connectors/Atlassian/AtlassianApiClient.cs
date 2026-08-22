@@ -3,15 +3,15 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
-namespace Stratus.Sift.Connectors.Jira;
+namespace Stratus.Sift.Connectors.Atlassian;
 
-internal sealed class JiraApiClient
+internal sealed class AtlassianApiClient
 {
     internal const int MaximumJsonDepth = 256;
 
     private readonly ILogger? _logger;
 
-    internal JiraApiClient(HttpClient httpClient, Uri baseUri, ILogger? logger = null)
+    internal AtlassianApiClient(HttpClient httpClient, Uri baseUri, ILogger? logger = null)
     {
         HttpClient = httpClient;
         BaseUri = baseUri;

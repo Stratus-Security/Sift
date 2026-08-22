@@ -5,21 +5,26 @@ using Microsoft.Extensions.Logging;
 using Stratus.Sift.Connectors.Interfaces;
 using Stratus.Sift.Core;
 
-namespace Stratus.Sift.Connectors.Jira;
+namespace Stratus.Sift.Connectors.Atlassian;
 
-public sealed class JiraConnector : IConnector
+public sealed class AtlassianConnector : IConnector
 {
     private readonly HttpClient _httpClient;
-    private readonly ILogger<JiraConnector>? _logger;
-    private JiraApiClient? _jiraApi;
-    private JiraApiClient? _confluenceApi;
+    private readonly ILogger? _logger;
+    private AtlassianApiClient? _jiraApi;
+    private AtlassianApiClient? _confluenceApi;
     private Uri? _siteUri;
     private HashSet<string>? _projectFilter;
     private HashSet<string>? _spaceFilter;
     private string? _additionalJql;
     private IReadOnlyDictionary<string, string> _customFields = new Dictionary<string, string>();
 
-    public JiraConnector(HttpClient httpClient, ILogger<JiraConnector>? logger = null)
+    public AtlassianConnector(HttpClient httpClient, ILogger<AtlassianConnector>? logger = null)
+        : this(httpClient, (ILogger?)logger)
+    {
+    }
+
+    internal AtlassianConnector(HttpClient httpClient, ILogger? logger)
     {
         _httpClient = httpClient;
         _logger = logger;
@@ -78,8 +83,8 @@ public sealed class JiraConnector : IConnector
             confluenceApiBaseUri = new Uri($"https://api.atlassian.com/ex/confluence/{Uri.EscapeDataString(cloudId)}/");
         }
 
-        _jiraApi = new JiraApiClient(_httpClient, jiraApiBaseUri, _logger);
-        _confluenceApi = new JiraApiClient(_httpClient, confluenceApiBaseUri, _logger);
+        _jiraApi = new AtlassianApiClient(_httpClient, jiraApiBaseUri, _logger);
+        _confluenceApi = new AtlassianApiClient(_httpClient, confluenceApiBaseUri, _logger);
         try
         {
             using var _ = await _jiraApi.GetJsonAsync("rest/api/3/myself", cancellationToken);
@@ -202,7 +207,7 @@ public sealed class JiraConnector : IConnector
 
     private async Task<string> DiscoverCloudIdAsync(Uri siteUri, CancellationToken cancellationToken)
     {
-        var discoveryApi = new JiraApiClient(_httpClient, new Uri("https://api.atlassian.com/"), _logger);
+        var discoveryApi = new AtlassianApiClient(_httpClient, new Uri("https://api.atlassian.com/"), _logger);
         using var document = await discoveryApi.GetJsonAsync("oauth/token/accessible-resources", cancellationToken);
         foreach (var resource in document.RootElement.EnumerateArray())
         {

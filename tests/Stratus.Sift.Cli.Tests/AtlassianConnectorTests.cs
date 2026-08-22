@@ -3,18 +3,52 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Stratus.Sift.Connectors.Interfaces;
-using Stratus.Sift.Connectors.Jira;
+using Stratus.Sift.Connectors.Atlassian;
 
 namespace Stratus.Sift.Connectors.Tests;
 
-public class JiraConnectorTests
+public class AtlassianConnectorTests
 {
     [Fact]
     public void ProviderName_IsAtlassian()
     {
-        var connector = new JiraConnector(new HttpClient(new DelegateHandler(_ => Task.FromResult(Json("{}")))));
+        var connector = new AtlassianConnector(new HttpClient(new DelegateHandler(_ => Task.FromResult(Json("{}")))));
 
         Assert.Equal("Atlassian", connector.ProviderName);
+    }
+
+    [Fact]
+    public void LegacyJiraConnector_ForwardsToAtlassianConnector()
+    {
+#pragma warning disable CS0618
+        var connector = new Stratus.Sift.Connectors.Jira.JiraConnector(
+            new HttpClient(new DelegateHandler(_ => Task.FromResult(Json("{}")))));
+#pragma warning restore CS0618
+
+        Assert.Equal("Atlassian", connector.ProviderName);
+    }
+
+    [Fact]
+    public async Task ConfluenceDiscovery_ContinuesWhenJiraIsUnavailable()
+    {
+        var handler = new DelegateHandler(request => Task.FromResult(request.RequestUri!.AbsolutePath switch
+        {
+            "/rest/api/3/myself" => new HttpResponseMessage(HttpStatusCode.Forbidden),
+            "/wiki/api/v2/spaces" => Json("""{"results":[{"id":"200","key":"ENG","name":"Engineering"}],"_links":{}}"""),
+            _ => throw new InvalidOperationException(request.RequestUri.AbsolutePath)
+        }));
+        var connector = new AtlassianConnector(new HttpClient(handler));
+
+        await connector.InitializeAsync(new Dictionary<string, string>
+        {
+            ["Url"] = "https://example.atlassian.net",
+            ["Email"] = "user@stratus.security",
+            ["Token"] = "api-token"
+        });
+
+        var drive = Assert.Single(await connector.GetDrivesAsync());
+        Assert.Equal(Stratus.Sift.Core.Enums.DatastoreType.Confluence, drive.DriveType);
+        Assert.Equal("Confluence: ENG - Engineering", drive.Name);
     }
 
     [Fact]
@@ -27,7 +61,7 @@ public class JiraConnectorTests
         }
 
         var handler = new DelegateHandler(_ => Task.FromResult(Json($"{{\"value\":{nestedValue}}}")));
-        var api = new JiraApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
+        var api = new AtlassianApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
 
         using var document = await api.GetJsonAsync("rest/api/3/search/jql", CancellationToken.None);
         var extracted = JiraDrive.GetFlexibleValueText(document.RootElement.GetProperty("value"));
@@ -50,7 +84,7 @@ public class JiraConnectorTests
                 _ => throw new InvalidOperationException(request.RequestUri.AbsolutePath)
             });
         });
-        var connector = new JiraConnector(new HttpClient(handler));
+        var connector = new AtlassianConnector(new HttpClient(handler));
 
         await connector.InitializeAsync(new Dictionary<string, string>
         {
@@ -88,7 +122,7 @@ public class JiraConnectorTests
                 _ => throw new InvalidOperationException(request.RequestUri.AbsolutePath)
             });
         });
-        var connector = new JiraConnector(new HttpClient(handler));
+        var connector = new AtlassianConnector(new HttpClient(handler));
         await connector.InitializeAsync(new Dictionary<string, string>
         {
             ["Url"] = "https://example.atlassian.net",
@@ -96,6 +130,7 @@ public class JiraConnectorTests
             ["Token"] = "api-token"
         });
         var drive = Assert.Single(await connector.GetDrivesAsync());
+        Assert.Equal(Stratus.Sift.Core.Enums.DatastoreType.Jira, drive.DriveType);
 
         var (changes, _) = await drive.GetChangesAsync(null);
         var files = changes.ToList();
@@ -124,7 +159,7 @@ public class JiraConnectorTests
 
             return Json("""{"isLast":true,"issues":[]}""");
         });
-        var api = new JiraApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
+        var api = new AtlassianApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
         var firstDrive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", "status = Open", new Dictionary<string, string>());
         var secondDrive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", "status = Closed", new Dictionary<string, string>());
 
@@ -149,7 +184,7 @@ public class JiraConnectorTests
 
             return Json("""{"isLast":true,"issues":[]}""");
         });
-        var api = new JiraApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
+        var api = new AtlassianApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
         var drive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", null, new Dictionary<string, string>());
 
         var token = await drive.ProcessChangesAsync(null, _ => Task.CompletedTask);
@@ -190,7 +225,7 @@ public class JiraConnectorTests
             _ => throw new InvalidOperationException(request.RequestUri.AbsolutePath)
             }));
         });
-        var connector = new JiraConnector(new HttpClient(handler));
+        var connector = new AtlassianConnector(new HttpClient(handler));
         await connector.InitializeAsync(new Dictionary<string, string>
         {
             ["Url"] = "https://example.atlassian.net",

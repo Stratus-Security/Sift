@@ -92,7 +92,7 @@ Sift records the matching rule, exact matched value and surrounding line, not a 
 - `Stratus.Sift.Contracts` defines versioned scan requests, targets, progress, observations and summaries.
 - `Stratus.Sift.Core` contains the scanner domain, validators, content extraction, matching engine, and bundled rule catalogue.
 - `Stratus.Sift.FileSystem` enumerates files, folders, access controls, and exposure.
-- `Stratus.Sift.Connectors` contains the Microsoft 365, Slack, Slack export, Jira, and Confluence source modules.
+- `Stratus.Sift.Connectors` contains the Microsoft 365, Slack, Slack export, and Atlassian Cloud source modules. The Atlassian module scans both Jira and Confluence.
 - `Stratus.Sift.Cli` provides local, domain, network, Microsoft 365, Slack, Slack export, Atlassian, and saved-result analysis commands.
 - `tests` covers command parsing, SMB discovery, connectors, rule matching, evidence output, and resumable output.
 - `eng` contains release and public-boundary verification scripts.

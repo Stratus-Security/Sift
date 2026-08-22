@@ -4,7 +4,7 @@ using Stratus.Sift.FileSystem;
 using Stratus.Sift.Core.Enums;
 using Stratus.Sift.Core.Models;
 using Stratus.Sift.Connectors.Interfaces;
-using Stratus.Sift.Connectors.Jira;
+using Stratus.Sift.Connectors.Atlassian;
 using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.Connectors.Slack;
 using SMBLibrary;

@@ -5,7 +5,7 @@ using Stratus.Sift.Connectors.Interfaces;
 using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.Core.Enums;
 
-namespace Stratus.Sift.Connectors.Jira;
+namespace Stratus.Sift.Connectors.Atlassian;
 
 internal sealed class JiraDrive : IRemoteDrive
 {
@@ -19,7 +19,7 @@ internal sealed class JiraDrive : IRemoteDrive
         "self", "id", "key", "accountId", "iconUrl", "avatarUrls", "type"
     };
 
-    private readonly JiraApiClient _api;
+    private readonly AtlassianApiClient _api;
     private readonly Uri _siteUri;
     private readonly string _projectKey;
     private readonly string? _additionalJql;
@@ -28,7 +28,7 @@ internal sealed class JiraDrive : IRemoteDrive
     private readonly string[] _searchFields;
 
     internal JiraDrive(
-        JiraApiClient api,
+        AtlassianApiClient api,
         Uri siteUri,
         string projectId,
         string projectKey,
@@ -116,8 +116,8 @@ internal sealed class JiraDrive : IRemoteDrive
         Func<IRemoteFile, Task> onChange,
         CancellationToken cancellationToken)
     {
-        var issueId = JiraConnector.GetScalarString(issue, "id") ?? Guid.NewGuid().ToString("N");
-        var key = JiraConnector.GetScalarString(issue, "key") ?? issueId;
+        var issueId = AtlassianConnector.GetScalarString(issue, "id") ?? Guid.NewGuid().ToString("N");
+        var key = AtlassianConnector.GetScalarString(issue, "key") ?? issueId;
         var fields = issue.GetProperty("fields");
         var issueUrl = new Uri(_siteUri, $"browse/{Uri.EscapeDataString(key)}").AbsoluteUri;
         var builder = new StringBuilder();
@@ -156,13 +156,13 @@ internal sealed class JiraDrive : IRemoteDrive
 
         foreach (var attachment in attachments.EnumerateArray())
         {
-            var id = JiraConnector.GetScalarString(attachment, "id");
+            var id = AtlassianConnector.GetScalarString(attachment, "id");
             if (string.IsNullOrWhiteSpace(id))
             {
                 continue;
             }
 
-            var name = JiraConnector.GetScalarString(attachment, "filename") ?? id;
+            var name = AtlassianConnector.GetScalarString(attachment, "filename") ?? id;
             var downloadUri = new Uri(_api.BaseUri, $"rest/api/3/attachment/content/{Uri.EscapeDataString(id)}");
             var size = attachment.TryGetProperty("size", out var sizeElement) && sizeElement.TryGetInt64(out var parsedSize)
                 ? (long?)parsedSize
@@ -173,7 +173,7 @@ internal sealed class JiraDrive : IRemoteDrive
                 $"atlassian://{_siteUri.Host}/jira/{_projectKey}/{key}/attachments/{name}",
                 issueUrl,
                 size,
-                JiraConnector.GetScalarString(attachment, "mimeType"),
+                AtlassianConnector.GetScalarString(attachment, "mimeType"),
                 _api.HttpClient,
                 downloadUri));
         }
@@ -240,8 +240,8 @@ internal sealed class JiraDrive : IRemoteDrive
         {
             using var document = JsonDocument.Parse(deltaToken);
             var root = document.RootElement;
-            var filter = JiraConnector.GetScalarString(root, "filter");
-            var updated = JiraConnector.GetScalarString(root, "updated");
+            var filter = AtlassianConnector.GetScalarString(root, "filter");
+            var updated = AtlassianConnector.GetScalarString(root, "updated");
             return string.Equals(filter, _filterHash, StringComparison.Ordinal) && DateTimeOffset.TryParse(updated, out _)
                 ? updated
                 : null;

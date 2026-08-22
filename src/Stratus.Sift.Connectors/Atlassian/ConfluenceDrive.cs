@@ -4,17 +4,17 @@ using Stratus.Sift.Connectors.Interfaces;
 using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.Core.Enums;
 
-namespace Stratus.Sift.Connectors.Jira;
+namespace Stratus.Sift.Connectors.Atlassian;
 
 internal sealed class ConfluenceDrive : IRemoteDrive
 {
     private const string NewestFirstSort = "-modified-date";
 
-    private readonly JiraApiClient _api;
+    private readonly AtlassianApiClient _api;
     private readonly Uri _siteUri;
     private readonly string _spaceKey;
 
-    internal ConfluenceDrive(JiraApiClient api, Uri siteUri, string spaceId, string spaceKey, string spaceName)
+    internal ConfluenceDrive(AtlassianApiClient api, Uri siteUri, string spaceId, string spaceKey, string spaceName)
     {
         _api = api;
         _siteUri = siteUri;
@@ -69,7 +69,7 @@ internal sealed class ConfluenceDrive : IRemoteDrive
             using var document = await _api.GetJsonAsync(path, cancellationToken);
             foreach (var content in document.RootElement.GetProperty("results").EnumerateArray())
             {
-                var contentId = JiraConnector.GetScalarString(content, "id") ?? string.Empty;
+                var contentId = AtlassianConnector.GetScalarString(content, "id") ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(contentId)) continue;
                 var updated = GetNestedString(content, "version", "createdAt");
                 newest = MaxTimestamp(newest, updated);
@@ -96,15 +96,15 @@ internal sealed class ConfluenceDrive : IRemoteDrive
         string contentType,
         Func<IRemoteFile, Task> onChange)
     {
-        var id = JiraConnector.GetScalarString(content, "id")!;
-        var title = JiraConnector.GetScalarString(content, "title") ?? id;
+        var id = AtlassianConnector.GetScalarString(content, "id")!;
+        var title = AtlassianConnector.GetScalarString(content, "title") ?? id;
         var builder = new StringBuilder();
         Append(builder, "Space", _spaceKey);
         Append(builder, "Content type", contentType);
         Append(builder, "Title", title);
         Append(builder, "Content ID", id);
-        Append(builder, "Author", JiraConnector.GetScalarString(content, "authorId"));
-        Append(builder, "Created", JiraConnector.GetScalarString(content, "createdAt"));
+        Append(builder, "Author", AtlassianConnector.GetScalarString(content, "authorId"));
+        Append(builder, "Created", AtlassianConnector.GetScalarString(content, "createdAt"));
         Append(builder, "Updated", GetNestedString(content, "version", "createdAt"));
         var body = GetBodyText(content);
         if (!string.IsNullOrWhiteSpace(body)) builder.AppendLine().AppendLine(body);
@@ -152,7 +152,7 @@ internal sealed class ConfluenceDrive : IRemoteDrive
             using var document = await _api.GetJsonAsync(path, cancellationToken);
             foreach (var comment in document.RootElement.GetProperty("results").EnumerateArray())
             {
-                var id = JiraConnector.GetScalarString(comment, "id") ?? string.Empty;
+                var id = AtlassianConnector.GetScalarString(comment, "id") ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(id) || !visited.Add(id)) continue;
                 var updated = GetNestedString(comment, "version", "createdAt");
                 newest = MaxTimestamp(newest, updated);
@@ -201,12 +201,12 @@ internal sealed class ConfluenceDrive : IRemoteDrive
             using var document = await _api.GetJsonAsync(path, cancellationToken);
             foreach (var attachment in document.RootElement.GetProperty("results").EnumerateArray())
             {
-                var id = JiraConnector.GetScalarString(attachment, "id") ?? string.Empty;
+                var id = AtlassianConnector.GetScalarString(attachment, "id") ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(id)) continue;
                 var updated = GetNestedString(attachment, "version", "createdAt")
-                    ?? JiraConnector.GetScalarString(attachment, "createdAt");
+                    ?? AtlassianConnector.GetScalarString(attachment, "createdAt");
                 newest = MaxTimestamp(newest, updated);
-                var name = JiraConnector.GetScalarString(attachment, "title") ?? id;
+                var name = AtlassianConnector.GetScalarString(attachment, "title") ?? id;
                 if (string.IsNullOrWhiteSpace(boundary) || IsAfter(updated, boundary))
                 {
                     var size = attachment.TryGetProperty("fileSize", out var sizeElement) && sizeElement.TryGetInt64(out var parsedSize)
@@ -221,7 +221,7 @@ internal sealed class ConfluenceDrive : IRemoteDrive
                         $"atlassian://{_siteUri.Host}/confluence/{_spaceKey}/{collection}/{contentId}/attachments/{name}",
                         GetWebUrl(attachment, $"wiki/spaces/{Uri.EscapeDataString(_spaceKey)}"),
                         size,
-                        JiraConnector.GetScalarString(attachment, "mediaType"),
+                        AtlassianConnector.GetScalarString(attachment, "mediaType"),
                         _api.HttpClient,
                         downloadUri));
                 }
@@ -282,7 +282,7 @@ internal sealed class ConfluenceDrive : IRemoteDrive
             {
                 using var document = JsonDocument.Parse(
                     raw,
-                    new JsonDocumentOptions { MaxDepth = JiraApiClient.MaximumJsonDepth });
+                    new JsonDocumentOptions { MaxDepth = AtlassianApiClient.MaximumJsonDepth });
                 return JiraDrive.GetFlexibleValueText(document.RootElement);
             }
             catch (JsonException)
@@ -297,7 +297,7 @@ internal sealed class ConfluenceDrive : IRemoteDrive
     private string GetWebUrl(JsonElement element, string fallback)
     {
         var link = element.TryGetProperty("_links", out var links)
-            ? JiraConnector.GetScalarString(links, "webui")
+            ? AtlassianConnector.GetScalarString(links, "webui")
             : null;
         if (Uri.TryCreate(link, UriKind.Absolute, out var absolute)) return absolute.AbsoluteUri;
         var path = string.IsNullOrWhiteSpace(link) ? fallback : link.TrimStart('/');
@@ -307,7 +307,7 @@ internal sealed class ConfluenceDrive : IRemoteDrive
 
     private static string? GetNestedString(JsonElement element, string property, string nestedProperty)
         => element.TryGetProperty(property, out var nested) && nested.ValueKind == JsonValueKind.Object
-            ? JiraConnector.GetScalarString(nested, nestedProperty)
+            ? AtlassianConnector.GetScalarString(nested, nestedProperty)
             : null;
 
     private static string? ParseDelta(string? token)
