@@ -308,7 +308,7 @@ public class FileScanner : IScanner
                         foreach (var c in bufferIssues.EnumerateMatchedClassifiers()) result.AddMatchedClassifier(c);
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _logger.LogWarning(ex, "Failed to extract content from file: {Path}", filePath);
                 }
@@ -406,6 +406,10 @@ public class FileScanner : IScanner
         catch (IOException ex)
         {
             _logger.LogDebug("IO error scanning file: {Path}. Error: {Message}", filePath, ex.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

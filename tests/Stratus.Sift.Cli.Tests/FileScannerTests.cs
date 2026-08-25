@@ -10,11 +10,32 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using System.Text;
 using Stratus.Sift.Scanner.Models;
+using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 
 namespace Stratus.Sift.Cli.Tests;
 
 public class FileScannerTests : IDisposable
 {
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        private readonly ConcurrentQueue<(LogLevel Level, string Message)> _entries = new();
+
+        public IReadOnlyCollection<(LogLevel Level, string Message)> Entries => _entries.ToArray();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => _entries.Enqueue((logLevel, formatter(state, exception)));
+    }
+
     private sealed class NonSeekableStream : Stream
     {
         private readonly Stream _inner;
@@ -132,6 +153,39 @@ public class FileScannerTests : IDisposable
         c.PolicyClassifiers.Add(pc);
 
         return (new List<Classifier>{c}, new List<Policy>{p});
+    }
+
+    [Fact]
+    public async Task ScanFileWithResultAsync_PropagatesCancellationWithoutLoggingAFileFailure()
+    {
+        var filePath = Path.Combine(_tempDirectory, "cancelled.txt");
+        await File.WriteAllTextAsync(filePath, new string('a', 128 * 1024));
+        var (classifiers, policies) = CreateConfig(
+            "Cancellation test",
+            ["secret"],
+            Severity.High,
+            extensions: [".txt"]);
+        var optimizer = new ClassifierOptimizer();
+        optimizer.LoadClassifiers(classifiers);
+        var policyMap = policies
+            .SelectMany(policy => policy.PolicyClassifiers.Select(link => (link.ClassifierId, policy)))
+            .GroupBy(item => item.ClassifierId)
+            .ToDictionary(group => group.Key, group => group.Select(item => item.policy).ToList());
+        var logger = new RecordingLogger<FileScanner>();
+        var scanner = new FileScanner(
+            logger,
+            new ContentExtractor(),
+            new ValidatorFactory(Enumerable.Empty<IValidator>()));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => scanner.ScanFileWithResultAsync(
+            filePath,
+            optimizer,
+            policyMap,
+            cancellationToken: cancellation.Token));
+
+        Assert.DoesNotContain(logger.Entries, entry => entry.Level == LogLevel.Error);
     }
 
     [Fact]
