@@ -9,8 +9,10 @@ using Stratus.Sift.Scanner.Interfaces;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.IO.Enumeration;
 using System.Diagnostics;
+using System.IO.Compression;
 using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Scanner.Services;
@@ -192,6 +194,7 @@ public class FileScanner : IScanner
         aclEntries ??= _emptyAclEntries;
 
         var policyNameLookup = plan.PolicyNameLookup;
+        var shouldInspectZip = options.EnableZipArchives && IsZipArchive(ext);
 
         // Pre-filter Policies based on Path Scope
         // We only want to evaluate policies that apply to this file path.
@@ -214,7 +217,7 @@ public class FileScanner : IScanner
 
         // If no policies apply to this path, we can skip content scanning entirely 
         // UNLESS we are in discovery mode (not implemented yet, assumed false for optimization).
-        if (scopedPolicyMap.Count == 0)
+        if (scopedPolicyMap.Count == 0 && !shouldInspectZip)
         {
             options.Diagnostics?.RecordFileSkipped();
             return new ScanResult { Issues = Enumerable.Empty<ScanFinding>() };
@@ -272,6 +275,22 @@ public class FileScanner : IScanner
                     subOptimizers ??= new List<ClassifierOptimizer>();
                     subOptimizers.Add(subOpt);
                 }
+            }
+
+            if (shouldInspectZip)
+            {
+                var archiveResult = await ScanZipFileAsync(
+                    filePath,
+                    plan,
+                    options,
+                    exposure,
+                    owner,
+                    aclEntries,
+                    ruleStats,
+                    cancellationToken);
+                AddScanResult(result, ref issues, archiveResult);
+                result.Issues = AggregateIssues(issues, policyNameLookup);
+                return result;
             }
 
             // 3. Rule-Based Extension Allowlist
@@ -418,6 +437,587 @@ public class FileScanner : IScanner
 
         result.Issues = AggregateIssues(issues, policyNameLookup);
         return result;
+    }
+
+    private async Task<ScanResult> ScanZipFileAsync(
+        string filePath,
+        ScannerExecutionPlan plan,
+        ScanOptions options,
+        string exposure,
+        string owner,
+        List<AclEntry> aclEntries,
+        System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats,
+        CancellationToken cancellationToken)
+    {
+        Stream? streamObject = null;
+        try
+        {
+            streamObject = OpenStream(filePath);
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+
+        if (streamObject == null)
+        {
+            options.Diagnostics?.RecordFileSkipped();
+            return new ScanResult();
+        }
+
+        options.Diagnostics?.RecordFileOpened();
+        using var stream = new RateLimitedReadStream(
+            streamObject,
+            _readRateLimiter,
+            options.MaxDiskReadBytesPerSecond,
+            options.Diagnostics);
+
+        return await ScanZipArchiveAsync(
+            stream,
+            filePath,
+            plan,
+            options,
+            exposure,
+            owner,
+            aclEntries,
+            ruleStats,
+            cancellationToken);
+    }
+
+    private async Task<ScanResult> ScanZipArchiveAsync(
+        Stream stream,
+        string archivePath,
+        ScannerExecutionPlan plan,
+        ScanOptions options,
+        string exposure,
+        string owner,
+        List<AclEntry> aclEntries,
+        System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats,
+        CancellationToken cancellationToken)
+    {
+        var result = new ScanResult();
+        List<ScanFinding>? issues = null;
+
+        if (!stream.CanSeek)
+        {
+            await using var bufferedStream = await BufferZipContainerAsync(
+                stream,
+                archivePath,
+                options,
+                cancellationToken);
+            if (bufferedStream == null)
+            {
+                return result;
+            }
+
+            return await ScanZipArchiveAsync(
+                bufferedStream,
+                archivePath,
+                plan,
+                options,
+                exposure,
+                owner,
+                aclEntries,
+                ruleStats,
+                cancellationToken);
+        }
+
+        var maximumEntries = Math.Max(0, options.MaxZipEntries);
+        var maximumCentralDirectoryBytes = Math.Max(0, options.MaxZipCentralDirectoryBytes);
+        var maximumEntryBytes = Math.Max(0, options.MaxZipEntryBytes);
+        var maximumExpandedBytes = Math.Max(0, options.MaxZipExpandedBytes);
+        var maximumCompressionRatio = Math.Max(1, options.MaxZipCompressionRatio);
+        var entriesSeen = 0;
+        var unsafeEntries = 0;
+        var unreadableEntries = 0;
+        long expandedBytes = 0;
+        var entryNames = new HashSet<string>(StringComparer.Ordinal);
+
+        if (!TryReadZipDirectoryInfo(stream, out var declaredEntries, out var centralDirectoryBytes)
+            || declaredEntries > (ulong)maximumEntries
+            || centralDirectoryBytes > (ulong)maximumCentralDirectoryBytes)
+        {
+            _logger.LogWarning(
+                "ZIP archive {ArchivePath} has an invalid or oversized central directory and was not inspected.",
+                archivePath);
+            options.Diagnostics?.RecordFileSkipped();
+            return result;
+        }
+
+        try
+        {
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+            foreach (var entry in archive.Entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (string.IsNullOrEmpty(entry.Name))
+                {
+                    continue;
+                }
+
+                entriesSeen++;
+                if (entriesSeen > maximumEntries)
+                {
+                    _logger.LogWarning(
+                        "Stopped inspecting ZIP archive {ArchivePath} after its {MaximumEntries:N0}-entry safety limit.",
+                        archivePath,
+                        maximumEntries);
+                    break;
+                }
+
+                if (!TryNormalizeZipEntryName(entry.FullName, out var entryName)
+                    || !entryNames.Add(entryName))
+                {
+                    unsafeEntries++;
+                    options.Diagnostics?.RecordFileSkipped();
+                    continue;
+                }
+
+                var virtualPath = $"{archivePath}!/{entryName}";
+                var extension = Path.GetExtension(entryName);
+                if (!plan.Optimizer.HasRulesForExtension(extension)
+                    && !HasDirectMetadataMatch(virtualPath, plan.Optimizer))
+                {
+                    options.Diagnostics?.RecordFileSkipped();
+                    continue;
+                }
+
+                long entryLength;
+                long compressedLength;
+                try
+                {
+                    entryLength = entry.Length;
+                    compressedLength = entry.CompressedLength;
+                }
+                catch (InvalidDataException)
+                {
+                    unreadableEntries++;
+                    options.Diagnostics?.RecordFileSkipped();
+                    continue;
+                }
+
+                var exceedsEntryLimit = entryLength < 0 || entryLength > maximumEntryBytes;
+                var exceedsArchiveLimit = entryLength > maximumExpandedBytes - expandedBytes;
+                var compressionRatio = entryLength == 0
+                    ? 0
+                    : compressedLength <= 0
+                        ? double.PositiveInfinity
+                        : (double)entryLength / compressedLength;
+                if (exceedsEntryLimit
+                    || exceedsArchiveLimit
+                    || compressionRatio > maximumCompressionRatio)
+                {
+                    unsafeEntries++;
+                    options.Diagnostics?.RecordFileSkipped();
+                    continue;
+                }
+
+                expandedBytes += entryLength;
+                if (entryLength == 0)
+                {
+                    options.Diagnostics?.RecordFileSkipped();
+                    continue;
+                }
+
+                try
+                {
+                    options.Diagnostics?.RecordFileOpened();
+                    using var entryStream = entry.Open();
+                    var entryResult = await ScanZipEntryAsync(
+                        entryStream,
+                        virtualPath,
+                        entryLength,
+                        plan,
+                        options,
+                        exposure,
+                        owner,
+                        aclEntries,
+                        ruleStats,
+                        cancellationToken);
+                    AddScanResult(result, ref issues, entryResult);
+                }
+                catch (Exception exception) when (
+                    exception is InvalidDataException or IOException or NotSupportedException)
+                {
+                    unreadableEntries++;
+                    options.Diagnostics?.RecordFileSkipped();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (InvalidDataException)
+        {
+            _logger.LogWarning("ZIP archive {ArchivePath} is invalid, encrypted, or unsupported.", archivePath);
+            options.Diagnostics?.RecordFileSkipped();
+        }
+        catch (IOException exception)
+        {
+            _logger.LogDebug(
+                exception,
+                "I/O error while inspecting ZIP archive {ArchivePath}.",
+                archivePath);
+            options.Diagnostics?.RecordFileSkipped();
+        }
+
+        if (unsafeEntries > 0 || unreadableEntries > 0)
+        {
+            _logger.LogWarning(
+                "Skipped {UnsafeEntries:N0} unsafe and {UnreadableEntries:N0} unreadable entries in ZIP archive {ArchivePath}.",
+                unsafeEntries,
+                unreadableEntries,
+                archivePath);
+        }
+
+        result.Issues = AggregateIssues(issues, plan.PolicyNameLookup);
+        return result;
+    }
+
+    private async Task<FileStream?> BufferZipContainerAsync(
+        Stream source,
+        string archivePath,
+        ScanOptions options,
+        CancellationToken cancellationToken)
+    {
+        var maximumBytes = Math.Max(0, options.MaxZipBufferedContainerBytes);
+        var temporaryPath = Path.Combine(
+            Path.GetTempPath(),
+            $"sift-zip-{Guid.NewGuid():N}.tmp");
+        FileStream destination;
+        try
+        {
+            destination = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                System.IO.FileShare.None,
+                BufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.DeleteOnClose);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                exception,
+                "ZIP archive {ArchivePath} could not be buffered safely and was not inspected.",
+                archivePath);
+            options.Diagnostics?.RecordFileSkipped();
+            return null;
+        }
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        long totalBytes = 0;
+        try
+        {
+            while (true)
+            {
+                var bytesRead = await source.ReadAsync(buffer, cancellationToken);
+                if (bytesRead <= 0)
+                {
+                    destination.Position = 0;
+                    return destination;
+                }
+
+                if (bytesRead > maximumBytes - totalBytes)
+                {
+                    _logger.LogWarning(
+                        "ZIP archive {ArchivePath} exceeded the {MaximumBytes:N0}-byte buffering limit and was not inspected.",
+                        archivePath,
+                        maximumBytes);
+                    options.Diagnostics?.RecordFileSkipped();
+                    await destination.DisposeAsync();
+                    return null;
+                }
+
+                await destination.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
+                totalBytes += bytesRead;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            await destination.DisposeAsync();
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await destination.DisposeAsync();
+            _logger.LogWarning(
+                exception,
+                "ZIP archive {ArchivePath} could not be buffered safely and was not inspected.",
+                archivePath);
+            options.Diagnostics?.RecordFileSkipped();
+            return null;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private async Task<ScanResult> ScanZipEntryAsync(
+        Stream stream,
+        string virtualPath,
+        long entryLength,
+        ScannerExecutionPlan plan,
+        ScanOptions options,
+        string exposure,
+        string owner,
+        List<AclEntry> aclEntries,
+        System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats,
+        CancellationToken cancellationToken)
+    {
+        var scopedPolicyMap = ScopePolicyMap(virtualPath, plan);
+        if (scopedPolicyMap.Count == 0)
+        {
+            options.Diagnostics?.RecordFileSkipped();
+            return new ScanResult();
+        }
+
+        var extension = Path.GetExtension(virtualPath);
+        var name = Path.GetFileName(virtualPath);
+        if (options.EnableBinaryDocuments && _contentExtractor.Supports(extension))
+        {
+            var result = await ScanStreamInternalAsync(
+                Stream.Null,
+                plan.Optimizer,
+                scopedPolicyMap,
+                virtualPath,
+                extension,
+                name,
+                exposure,
+                owner,
+                aclEntries,
+                cancellationToken,
+                ruleStats,
+                limitBytes: 0,
+                plan.IgnoreRules,
+                plan.PolicyNameLookup,
+                diagnostics: options.Diagnostics);
+            var issues = result.Issues as List<ScanFinding> ?? result.Issues.ToList();
+
+            var extractedText = _contentExtractor.Extract(stream, extension);
+            if (!string.IsNullOrWhiteSpace(extractedText))
+            {
+                var extractedResult = ScanBuffer(
+                    extractedText.AsSpan(),
+                    plan.Optimizer,
+                    scopedPolicyMap,
+                    virtualPath,
+                    extension,
+                    name,
+                    exposure,
+                    owner,
+                    aclEntries,
+                    ruleStats: ruleStats,
+                    policyLookup: plan.PolicyNameLookup);
+                AddScanResult(result, ref issues, extractedResult);
+            }
+
+            result.Issues = AggregateIssues(issues, plan.PolicyNameLookup);
+            return result;
+        }
+
+        long? forwardScanLimit = entryLength <= options.MaxFileSize
+            ? null
+            : options.HeadSize;
+        return await ScanStreamInternalAsync(
+            stream,
+            plan.Optimizer,
+            scopedPolicyMap,
+            virtualPath,
+            extension,
+            name,
+            exposure,
+            owner,
+            aclEntries,
+            cancellationToken,
+            ruleStats,
+            forwardScanLimit,
+            plan.IgnoreRules,
+            plan.PolicyNameLookup,
+            rejectBinary: !options.EnableBinaryDocuments,
+            diagnostics: options.Diagnostics);
+    }
+
+    private static bool IsZipArchive(string? extension)
+        => string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasDirectMetadataMatch(string path, ClassifierOptimizer optimizer)
+    {
+        foreach (var metadataMatch in optimizer.GetMetadataMatches(path))
+        {
+            if (PathsReferToSameScope(metadataMatch.ResourcePath, path))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryNormalizeZipEntryName(string fullName, out string normalizedName)
+    {
+        normalizedName = string.Empty;
+        if (string.IsNullOrWhiteSpace(fullName) || fullName.IndexOf('\0') >= 0)
+        {
+            return false;
+        }
+
+        var candidate = fullName.Replace('\\', '/');
+        if (candidate.StartsWith("/", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var segments = candidate.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var segment in segments)
+        {
+            if (segment is "." or ".." || segment.Contains(':', StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        normalizedName = string.Join('/', segments);
+        return true;
+    }
+
+    private static bool TryReadZipDirectoryInfo(
+        Stream stream,
+        out ulong totalEntries,
+        out ulong centralDirectoryBytes)
+    {
+        const uint endOfCentralDirectorySignature = 0x06054b50;
+        const uint zip64EndOfCentralDirectorySignature = 0x06064b50;
+        const uint zip64LocatorSignature = 0x07064b50;
+        const int endOfCentralDirectorySize = 22;
+        const int maximumCommentBytes = ushort.MaxValue;
+
+        totalEntries = 0;
+        centralDirectoryBytes = 0;
+        if (!stream.CanSeek || stream.Length < endOfCentralDirectorySize)
+        {
+            return false;
+        }
+
+        var originalPosition = stream.Position;
+        var tailLength = (int)Math.Min(
+            stream.Length,
+            endOfCentralDirectorySize + maximumCommentBytes);
+        var buffer = ArrayPool<byte>.Shared.Rent(tailLength);
+        try
+        {
+            stream.Seek(-tailLength, SeekOrigin.End);
+            stream.ReadExactly(buffer.AsSpan(0, tailLength));
+            var tail = buffer.AsSpan(0, tailLength);
+            var endOffset = -1;
+            for (var index = tailLength - endOfCentralDirectorySize; index >= 0; index--)
+            {
+                if (BinaryPrimitives.ReadUInt32LittleEndian(tail[index..]) != endOfCentralDirectorySignature)
+                {
+                    continue;
+                }
+
+                var commentLength = BinaryPrimitives.ReadUInt16LittleEndian(tail[(index + 20)..]);
+                if (index + endOfCentralDirectorySize + commentLength == tailLength)
+                {
+                    endOffset = index;
+                    break;
+                }
+            }
+
+            if (endOffset < 0)
+            {
+                return false;
+            }
+
+            var diskNumber = BinaryPrimitives.ReadUInt16LittleEndian(tail[(endOffset + 4)..]);
+            var centralDirectoryDisk = BinaryPrimitives.ReadUInt16LittleEndian(tail[(endOffset + 6)..]);
+            var entriesOnDisk = BinaryPrimitives.ReadUInt16LittleEndian(tail[(endOffset + 8)..]);
+            var entries = BinaryPrimitives.ReadUInt16LittleEndian(tail[(endOffset + 10)..]);
+            var directorySize = BinaryPrimitives.ReadUInt32LittleEndian(tail[(endOffset + 12)..]);
+            if (diskNumber != 0 || centralDirectoryDisk != 0 || entriesOnDisk != entries)
+            {
+                return false;
+            }
+
+            if (entries != ushort.MaxValue && directorySize != uint.MaxValue)
+            {
+                totalEntries = entries;
+                centralDirectoryBytes = directorySize;
+                return true;
+            }
+
+            var locatorOffset = endOffset - 20;
+            if (locatorOffset < 0
+                || BinaryPrimitives.ReadUInt32LittleEndian(tail[locatorOffset..]) != zip64LocatorSignature)
+            {
+                return false;
+            }
+
+            var zip64Disk = BinaryPrimitives.ReadUInt32LittleEndian(tail[(locatorOffset + 4)..]);
+            var zip64EndOffset = BinaryPrimitives.ReadUInt64LittleEndian(tail[(locatorOffset + 8)..]);
+            var diskCount = BinaryPrimitives.ReadUInt32LittleEndian(tail[(locatorOffset + 16)..]);
+            if (zip64Disk != 0 || diskCount != 1 || zip64EndOffset > long.MaxValue)
+            {
+                return false;
+            }
+
+            Span<byte> zip64End = stackalloc byte[56];
+            stream.Seek((long)zip64EndOffset, SeekOrigin.Begin);
+            stream.ReadExactly(zip64End);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(zip64End) != zip64EndOfCentralDirectorySignature
+                || BinaryPrimitives.ReadUInt32LittleEndian(zip64End[16..]) != 0
+                || BinaryPrimitives.ReadUInt32LittleEndian(zip64End[20..]) != 0)
+            {
+                return false;
+            }
+
+            var zip64EntriesOnDisk = BinaryPrimitives.ReadUInt64LittleEndian(zip64End[24..]);
+            var zip64Entries = BinaryPrimitives.ReadUInt64LittleEndian(zip64End[32..]);
+            if (zip64EntriesOnDisk != zip64Entries)
+            {
+                return false;
+            }
+
+            totalEntries = zip64Entries;
+            centralDirectoryBytes = BinaryPrimitives.ReadUInt64LittleEndian(zip64End[40..]);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is EndOfStreamException or IOException or NotSupportedException)
+        {
+            return false;
+        }
+        finally
+        {
+            stream.Seek(originalPosition, SeekOrigin.Begin);
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static void AddScanResult(
+        ScanResult target,
+        ref List<ScanFinding>? issues,
+        ScanResult source)
+    {
+        foreach (var issue in source.Issues)
+        {
+            (issues ??= []).Add(issue);
+        }
+
+        foreach (var classifier in source.EnumerateMatchedClassifiers())
+        {
+            target.AddMatchedClassifier(classifier);
+        }
     }
 
     private sealed class RateLimitedReadStream : Stream
@@ -587,9 +1187,10 @@ public class FileScanner : IScanner
         options ??= new ScanOptions();
         var ext = Path.GetExtension(fileName);
         var name = Path.GetFileName(fileName);
+        var shouldInspectZip = options.EnableZipArchives && IsZipArchive(ext);
         aclEntries ??= new List<AclEntry>();
         var scopedPolicyMap = ScopePolicyMap(fileName, plan);
-        if (scopedPolicyMap.Count == 0)
+        if (scopedPolicyMap.Count == 0 && !shouldInspectZip)
         {
             options.Diagnostics?.RecordFileSkipped();
             return new ScanResult { Issues = Enumerable.Empty<ScanFinding>() };
@@ -601,6 +1202,40 @@ public class FileScanner : IScanner
             _readRateLimiter,
             options.MaxDiskReadBytesPerSecond,
             options.Diagnostics);
+
+        if (shouldInspectZip)
+        {
+            var result = await ScanStreamInternalAsync(
+                Stream.Null,
+                plan.Optimizer,
+                scopedPolicyMap,
+                fileName,
+                ext,
+                name,
+                exposure,
+                owner,
+                aclEntries,
+                cancellationToken,
+                ruleStats,
+                limitBytes: 0,
+                plan.IgnoreRules,
+                plan.PolicyNameLookup,
+                diagnostics: options.Diagnostics);
+            var issues = result.Issues as List<ScanFinding> ?? result.Issues.ToList();
+            var archiveResult = await ScanZipArchiveAsync(
+                measuredStream,
+                fileName,
+                plan,
+                options,
+                exposure,
+                owner,
+                aclEntries,
+                ruleStats,
+                cancellationToken);
+            AddScanResult(result, ref issues, archiveResult);
+            result.Issues = AggregateIssues(issues, plan.PolicyNameLookup);
+            return result;
+        }
 
         return await ScanStreamInternalAsync(
             measuredStream,
@@ -1143,5 +1778,3 @@ public class FileScanner : IScanner
         return rawIssues;
     }
 }
-
-

@@ -990,6 +990,7 @@ internal static class CliScanRunner
         return new Stratus.Sift.Scanner.Models.ScanOptions
         {
             EnableBinaryDocuments = includeBinary,
+            EnableZipArchives = true,
             EnableLlmValidation = llmOptions?.Enabled == true,
             OllamaUrl = llmOptions?.OllamaUrl ?? "http://localhost:11434",
             OllamaModel = llmOptions?.OllamaModel ?? string.Empty,

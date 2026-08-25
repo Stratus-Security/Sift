@@ -29,6 +29,8 @@ Sift was made with performance and extensibility in mind, to name a few great im
 - Throttling: The pentesting CLI uses the available machine by default. Use `--threads` and `--max-read-mib-per-second` when scanning a sensitive production target.
 - Fingerprints: Full coverage validated against the Snaffler rules library with much more and some refined. Code-defined validators are also supported to do more advanced checks and reduce false positives 📔
 - DNS: Custom DNS servers for those times when you want to use computer names from a non-corp, wowee!
+- Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
+- ZIP archives: Entries are streamed directly from the archive and reported as `archive.zip!/path/file`. Non-seekable downloads use a bounded delete-on-close buffer. Expansion, entry-count, and compression-ratio limits protect the scanner from archive bombs. Nested ZIP files are not expanded.
 
 ## This is confusing, how do I just find the features I want?
 The good ol' help flag will show the available commands:
@@ -202,7 +204,6 @@ Create `acme-token.json`:
 {
   "Name": "Acme API Token",
   "Description": "Finds Acme API tokens in source and configuration files.",
-  "Label": "Custom",
   "Severity": "High",
   "Matches": [
     {
@@ -221,38 +222,39 @@ Create `acme-token.json`:
 }
 ```
 
-A sifting rule contains one or more match blocks. Every enabled rule reports its matches. Patterns within a rule are alternatives, so any matching pattern can produce a match.
+A sifting rule requires only `Name` and `Matches`. Every other top-level field is optional. Every enabled rule reports its matches. Patterns within a rule are alternatives, so any matching pattern can produce a match.
 
-| Field | Purpose |
-| --- | --- |
-| `Name` | Required stable rule and finding name. |
-| `FindingName` | Optional different name for the reported finding. |
-| `Description` | Short explanation of what the rule detects. |
-| `Label` | Category shown with the match. The default is `Custom`. |
-| `Severity` | `Info`, `Informational`, `Low`, `Medium`, `High`, or `Critical`. The default is `Medium`. |
-| `Enabled` | Enables the rule. The default is `true`. |
-| `Matches` | One or more metadata or content match blocks. |
-| `Validator` | Optional built-in validation step used after a pattern matches. |
-| `EntropyThreshold` | Optional minimum Shannon entropy for the matched value. `0` disables this check. |
-| `EnableLlmValidation` | Allows the match to be checked when the scan uses `--llm-validate`. No LLM is called unless that command option is supplied. |
-| `MinMatchCount` | Number of matches required on one item before a finding is kept. The default is `1`. |
-| `IncludePaths` | Optional allowlist of full-path wildcard expressions. |
-| `ExcludePaths` | Optional blocklist of full-path wildcard expressions. |
-| `StopOnMatch` | Stops the current matching pass after this rule reports a match. |
-| `ReportFinding` | Set to `false` for a parent rule that only gates its `SubRules`. |
-| `SubRules` | Optional second-stage rules evaluated after their parent matches. |
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `Name` | Yes | Stable rule and finding name. |
+| `Matches` | Yes | One or more metadata or content match blocks. |
+| `FindingName` | No | Different name for the reported finding. The default is `Name`. |
+| `Description` | No | Short explanation of what the rule detects. |
+| `Severity` | No | `Info`, `Informational`, `Low`, `Medium`, `High`, or `Critical`. The default is `Medium`. |
+| `Enabled` | No | Enables the rule. The default is `true`. |
+| `Validator` | No | Built-in validation step used after a pattern matches. |
+| `EntropyThreshold` | No | Minimum Shannon entropy for the matched value. `0`, the default, disables this check. |
+| `EnableLlmValidation` | No | Allows the match to be checked when the scan uses `--llm-validate`. The default is `true`, but no LLM is called unless that command option is supplied. |
+| `MinMatchCount` | No | Number of matches required on one item before a finding is kept. The default is `1`. |
+| `IncludePaths` | No | Allowlist of full-path wildcard expressions. |
+| `ExcludePaths` | No | Blocklist of full-path wildcard expressions. |
+| `StopOnMatch` | No | Stops the current matching pass after this rule reports a match. The default is `false`. |
+| `ReportFinding` | No | Set to `false` for a parent rule that only gates its `SubRules`. The default is `true`. |
+| `SubRules` | No | Second-stage rules evaluated after their parent matches. |
 
 Each item in `Matches` supports:
 
-| Field | Purpose |
-| --- | --- |
-| `Target` | The part of the item to inspect. See the table below. |
-| `Patterns` | Required list of literal values or .NET regular expressions. |
-| `IsLiteral` | Treats patterns as plain text. Use this when regex behaviour is not wanted. |
-| `CaseSensitive` | Makes patterns and keywords case-sensitive. The default is `false`. |
-| `Keywords` | Optional fast prefilter for content rules. At least one keyword must be present before the regex runs. The regex must still match. |
-| `ExtensionProfile` | Named extension allowlist. `SourceAndConfig` is currently provided. |
-| `IncludedExtensions` | Additional extensions such as `.txt`, `.config`, or `.ps1`. |
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `Patterns` | Yes | One or more literal values or .NET regular expressions. |
+| `Target` | No | The part of the item to inspect. The default is `Content`. See the table below. |
+| `IsLiteral` | No | Treats patterns as plain text. The default is `false`, which uses regex for content patterns. |
+| `CaseSensitive` | No | Makes patterns and keywords case-sensitive. The default is `false`. |
+| `Keywords` | No | Fast prefilter for content rules. At least one keyword must be present before the regex runs. The regex must still match. |
+| `ExtensionProfile` | For content¹ | Named extension allowlist. `SourceAndConfig` is currently provided. |
+| `IncludedExtensions` | For content¹ | Additional extensions such as `.txt`, `.config`, or `.ps1`. |
+
+¹ A top-level content match must declare `ExtensionProfile`, `IncludedExtensions`, or both. A content `SubRule` inherits the scope established by its parent.
 
 The available targets are:
 
@@ -331,6 +333,13 @@ Ignore rules remove known noise early. They use simple filesystem wildcards rath
 
 `MatchTarget` accepts the same target names as sifting rules. `Content` on an ignore rule is treated as a path match because ignore rules run before content is read. Directory, path, and share ignores can prune an entire branch, so test broad patterns carefully.
 
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `Pattern` | Yes | Filesystem wildcard to ignore. |
+| `MatchTarget` | No | Part of the path to check. The default is `FileName`. |
+| `Description` | No | Reason for the ignore rule. |
+| `IsEnabled` | No | Enables the ignore rule. The default is `true`. |
+
 ### Older rule directories
 
 The earlier split classifier and policy format is still accepted so existing rule directories continue to work. Sift prints a deprecation warning when it loads legacy policy files. A legacy classifier with no policy now reports at `Medium` severity. New rules should use the unified format.
@@ -348,9 +357,5 @@ Make a small fixture directory containing:
 Run only that fixture while developing:
 
 ```powershell
-.\sift.exe local --path .\rule-fixtures --rules .\my-rules --output .\rule-test.json --output-format json
+.\sift.exe local --path .\rule-fixtures --rules .\my-rules --output .\rule-test.log
 ```
-
-Review the rule name, severity, exact matched value and surrounding snippet in the output. Rule-loading and regex errors are written to the console. `--enum-only` does not test content rules.
-
-Changing the contents of a custom rule directory changes its checkpoint fingerprint. A later `--resume` run will not reuse a checkpoint created with a different version of the rules.
