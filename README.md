@@ -346,10 +346,6 @@ Ignore rules remove known noise early. They use simple filesystem wildcards rath
 | `Description` | No | Reason for the ignore rule. |
 | `IsEnabled` | No | Enables the ignore rule. The default is `true`. |
 
-### Older rule directories
-
-The earlier split classifier and policy format is still accepted so existing rule directories continue to work. Sift prints a deprecation warning when it loads legacy policy files. A legacy classifier with no policy now reports at `Medium` severity. New rules should use the unified format.
-
 ### Testing a rule
 
 Make a small fixture directory containing:
