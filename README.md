@@ -30,7 +30,7 @@ Sift was made with performance and extensibility in mind, to name a few great im
 - Fingerprints: Full coverage validated against the Snaffler rules library with much more and some refined. Code-defined validators are also supported to do more advanced checks and reduce false positives 📔
 - DNS: Custom DNS servers for those times when you want to use computer names from a non-corp, wowee!
 - Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
-- ZIP archives: Entries are streamed directly from the archive and reported as `archive.zip!/path/file`. Non-seekable downloads use a bounded delete-on-close buffer. Expansion, entry-count, and compression-ratio limits protect the scanner from archive bombs. Nested ZIP files are not expanded.
+- ZIP archives: Entries are streamed directly from the archive and reported as `archive.zip!/path/file`. One nested ZIP layer is inspected by default. Library callers can allow up to three levels. Shared expansion, entry-count, central-directory, temporary-storage and compression-ratio limits protect the whole archive tree.
 
 ## This is confusing, how do I just find the features I want?
 The good ol' help flag will show the available commands:

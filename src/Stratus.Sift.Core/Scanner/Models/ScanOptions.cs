@@ -46,18 +46,24 @@ public class ScanOptions
     public bool EnableZipArchives { get; set; }
 
     /// <summary>
-    /// Maximum number of file entries inspected in one ZIP archive.
+    /// Maximum ZIP depth, including the root archive. The scanner clamps this value to 1-3.
+    /// A value of 2 inspects one nested archive layer.
+    /// </summary>
+    public int MaxZipDepth { get; set; } = 2;
+
+    /// <summary>
+    /// Maximum number of file entries inspected across one ZIP archive tree.
     /// </summary>
     public int MaxZipEntries { get; set; } = 10_000;
 
     /// <summary>
-    /// Maximum central-directory size loaded into memory for one ZIP archive.
+    /// Maximum cumulative central-directory size loaded across one ZIP archive tree.
     /// </summary>
     public long MaxZipCentralDirectoryBytes { get; set; } = 32 * MiB;
 
     /// <summary>
-    /// Maximum compressed archive size buffered to a delete-on-close temporary file when a
-    /// connector supplies a non-seekable stream.
+    /// Maximum cumulative archive data buffered to delete-on-close temporary files across one
+    /// ZIP archive tree when a connector or nested entry supplies a non-seekable stream.
     /// </summary>
     public long MaxZipBufferedContainerBytes { get; set; } = 512 * MiB;
 
@@ -67,7 +73,7 @@ public class ScanOptions
     public long MaxZipEntryBytes { get; set; } = 256 * MiB;
 
     /// <summary>
-    /// Maximum cumulative declared uncompressed size inspected in one ZIP archive.
+    /// Maximum cumulative declared uncompressed size inspected across one ZIP archive tree.
     /// </summary>
     public long MaxZipExpandedBytes { get; set; } = 512 * MiB;
 

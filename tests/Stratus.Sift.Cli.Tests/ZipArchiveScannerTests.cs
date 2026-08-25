@@ -266,16 +266,10 @@ public sealed class ZipArchiveScannerTests : IDisposable
     }
 
     [Fact]
-    public async Task ScanFile_DoesNotExpandNestedZipArchives()
+    public async Task ScanFile_ExpandsOneNestedZipLayerByDefault()
     {
         await using var innerZip = CreateZipStream(("secret.txt", "token=SIFT-ZIP-SECRET"));
-        var outerPath = Path.Combine(_temporaryDirectory, $"{Guid.NewGuid():N}.zip");
-        await using (var outerFile = File.Create(outerPath))
-        using (var outerZip = new ZipArchive(outerFile, ZipArchiveMode.Create, leaveOpen: false))
-        await using (var entry = outerZip.CreateEntry("inner.zip").Open())
-        {
-            await innerZip.CopyToAsync(entry);
-        }
+        var outerPath = await CreateZipWithBinaryEntryAsync("inner.zip", innerZip);
 
         var (plan, scanner, _) = CreateScanner();
         var result = await scanner.ScanFileWithResultAsync(
@@ -283,7 +277,158 @@ public sealed class ZipArchiveScannerTests : IDisposable
             plan,
             new ScanOptions { EnableZipArchives = true });
 
+        var finding = Assert.Single(result.Issues);
+        Assert.Equal($"{outerPath}!/inner.zip!/secret.txt", finding.ResourcePath);
+    }
+
+    [Fact]
+    public async Task ScanFile_DoesNotExpandPastTheDefaultNestedZipDepth()
+    {
+        await using var deepestZip = CreateZipStream(("secret.txt", "token=SIFT-ZIP-SECRET"));
+        await using var innerZip = await CreateZipWithBinaryEntryStreamAsync("deepest.zip", deepestZip);
+        var outerPath = await CreateZipWithBinaryEntryAsync("inner.zip", innerZip);
+        var (plan, scanner, _) = CreateScanner();
+
+        var result = await scanner.ScanFileWithResultAsync(
+            outerPath,
+            plan,
+            new ScanOptions { EnableZipArchives = true });
+
         Assert.Empty(result.Issues);
+    }
+
+    [Fact]
+    public async Task ScanFile_CanExpandThreeZipLayersWhenConfigured()
+    {
+        await using var deepestZip = CreateZipStream(("secret.txt", "token=SIFT-ZIP-SECRET"));
+        await using var innerZip = await CreateZipWithBinaryEntryStreamAsync("deepest.zip", deepestZip);
+        var outerPath = await CreateZipWithBinaryEntryAsync("inner.zip", innerZip);
+        var (plan, scanner, _) = CreateScanner();
+
+        var result = await scanner.ScanFileWithResultAsync(
+            outerPath,
+            plan,
+            new ScanOptions { EnableZipArchives = true, MaxZipDepth = 3 });
+
+        var finding = Assert.Single(result.Issues);
+        Assert.Equal(
+            $"{outerPath}!/inner.zip!/deepest.zip!/secret.txt",
+            finding.ResourcePath);
+    }
+
+    [Fact]
+    public async Task ScanFile_AppliesTheEntryLimitAcrossTheArchiveTree()
+    {
+        await using var innerZip = CreateZipStream(
+            ("decoy.txt", "nothing to report"),
+            ("secret.txt", "token=SIFT-ZIP-SECRET"));
+        var outerPath = await CreateZipWithBinaryEntryAsync("inner.zip", innerZip);
+        var (plan, scanner, logger) = CreateScanner();
+
+        var result = await scanner.ScanFileWithResultAsync(
+            outerPath,
+            plan,
+            new ScanOptions { EnableZipArchives = true, MaxZipEntries = 2 });
+
+        Assert.Empty(result.Issues);
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Warning
+                && entry.Message.Contains("shared archive-tree safety limits", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScanFile_AppliesTheExpandedByteLimitAcrossTheArchiveTree()
+    {
+        await using var innerZip = CreateZipStream(("secret.txt", "token=SIFT-ZIP-SECRET"));
+        var innerLength = innerZip.Length;
+        var outerPath = await CreateZipWithBinaryEntryAsync("inner.zip", innerZip);
+        var (plan, scanner, logger) = CreateScanner();
+
+        var result = await scanner.ScanFileWithResultAsync(
+            outerPath,
+            plan,
+            new ScanOptions
+            {
+                EnableZipArchives = true,
+                MaxZipExpandedBytes = innerLength
+            });
+
+        Assert.Empty(result.Issues);
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Warning
+                && entry.Message.Contains("Skipped 1 unsafe", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScanFile_AppliesTheCentralDirectoryLimitAcrossTheArchiveTree()
+    {
+        await using var innerZip = CreateZipStream(("secret.txt", "token=SIFT-ZIP-SECRET"));
+        var outerPath = await CreateZipWithBinaryEntryAsync("inner.zip", innerZip);
+        var (plan, scanner, logger) = CreateScanner();
+
+        var result = await scanner.ScanFileWithResultAsync(
+            outerPath,
+            plan,
+            new ScanOptions
+            {
+                EnableZipArchives = true,
+                MaxZipCentralDirectoryBytes = 80
+            });
+
+        Assert.Empty(result.Issues);
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Warning
+                && entry.Message.Contains("shared archive-tree safety limits", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScanFile_AppliesTheTemporaryStorageLimitAcrossSiblingArchives()
+    {
+        await using var firstZip = CreateZipStream(("decoy.txt", "nothing to report"));
+        await using var secondZip = CreateZipStream(("secret.txt", "token=SIFT-ZIP-SECRET"));
+        var bufferLimit = firstZip.Length + secondZip.Length - 1;
+        var outerPath = await CreateZipWithBinaryEntriesAsync(
+            ("first.zip", firstZip),
+            ("second.zip", secondZip));
+        var (plan, scanner, logger) = CreateScanner();
+
+        var result = await scanner.ScanFileWithResultAsync(
+            outerPath,
+            plan,
+            new ScanOptions
+            {
+                EnableZipArchives = true,
+                MaxZipBufferedContainerBytes = bufferLimit
+            });
+
+        Assert.Empty(result.Issues);
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Level == LogLevel.Warning
+                && entry.Message.Contains("buffering limit", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScanFile_ContinuesAfterAnInvalidNestedArchive()
+    {
+        await using var invalidZip = new MemoryStream("not a zip"u8.ToArray());
+        await using var validZip = CreateZipStream(("secret.txt", "token=SIFT-ZIP-SECRET"));
+        var outerPath = await CreateZipWithBinaryEntriesAsync(
+            ("invalid.zip", invalidZip),
+            ("valid.zip", validZip));
+        var (plan, scanner, logger) = CreateScanner();
+
+        var result = await scanner.ScanFileWithResultAsync(
+            outerPath,
+            plan,
+            new ScanOptions { EnableZipArchives = true });
+
+        var finding = Assert.Single(result.Issues);
+        Assert.Equal($"{outerPath}!/valid.zip!/secret.txt", finding.ResourcePath);
+        Assert.DoesNotContain(logger.Entries, entry => entry.Level == LogLevel.Error);
     }
 
     [Fact]
@@ -358,6 +503,49 @@ public sealed class ZipArchiveScannerTests : IDisposable
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
             WriteEntries(archive, entries);
+        }
+
+        stream.Position = 0;
+        return stream;
+    }
+
+    private async Task<string> CreateZipWithBinaryEntryAsync(string entryName, Stream content)
+    {
+        var path = Path.Combine(_temporaryDirectory, $"{Guid.NewGuid():N}.zip");
+        await using var file = File.Create(path);
+        using var archive = new ZipArchive(file, ZipArchiveMode.Create, leaveOpen: false);
+        await using var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal).Open();
+        content.Position = 0;
+        await content.CopyToAsync(entry);
+        return path;
+    }
+
+    private async Task<string> CreateZipWithBinaryEntriesAsync(
+        params (string Name, Stream Content)[] entries)
+    {
+        var path = Path.Combine(_temporaryDirectory, $"{Guid.NewGuid():N}.zip");
+        await using var file = File.Create(path);
+        using var archive = new ZipArchive(file, ZipArchiveMode.Create, leaveOpen: false);
+        foreach (var (name, content) in entries)
+        {
+            await using var entry = archive.CreateEntry(name, CompressionLevel.Optimal).Open();
+            content.Position = 0;
+            await content.CopyToAsync(entry);
+        }
+
+        return path;
+    }
+
+    private static async Task<MemoryStream> CreateZipWithBinaryEntryStreamAsync(
+        string entryName,
+        Stream content)
+    {
+        var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        await using (var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal).Open())
+        {
+            content.Position = 0;
+            await content.CopyToAsync(entry);
         }
 
         stream.Position = 0;

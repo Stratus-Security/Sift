@@ -483,6 +483,8 @@ public class FileScanner : IScanner
             owner,
             aclEntries,
             ruleStats,
+            new ZipTraversalBudget(options),
+            depth: 1,
             cancellationToken);
     }
 
@@ -495,6 +497,8 @@ public class FileScanner : IScanner
         string owner,
         List<AclEntry> aclEntries,
         System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats,
+        ZipTraversalBudget budget,
+        int depth,
         CancellationToken cancellationToken)
     {
         var result = new ScanResult();
@@ -506,6 +510,7 @@ public class FileScanner : IScanner
                 stream,
                 archivePath,
                 options,
+                budget,
                 cancellationToken);
             if (bufferedStream == null)
             {
@@ -521,26 +526,24 @@ public class FileScanner : IScanner
                 owner,
                 aclEntries,
                 ruleStats,
+                budget,
+                depth,
                 cancellationToken);
         }
 
-        var maximumEntries = Math.Max(0, options.MaxZipEntries);
-        var maximumCentralDirectoryBytes = Math.Max(0, options.MaxZipCentralDirectoryBytes);
         var maximumEntryBytes = Math.Max(0, options.MaxZipEntryBytes);
-        var maximumExpandedBytes = Math.Max(0, options.MaxZipExpandedBytes);
         var maximumCompressionRatio = Math.Max(1, options.MaxZipCompressionRatio);
+        var maximumDepth = Math.Clamp(options.MaxZipDepth, 1, 3);
         var entriesSeen = 0;
         var unsafeEntries = 0;
         var unreadableEntries = 0;
-        long expandedBytes = 0;
         var entryNames = new HashSet<string>(StringComparer.Ordinal);
 
         if (!TryReadZipDirectoryInfo(stream, out var declaredEntries, out var centralDirectoryBytes)
-            || declaredEntries > (ulong)maximumEntries
-            || centralDirectoryBytes > (ulong)maximumCentralDirectoryBytes)
+            || !budget.TryReserveArchive(declaredEntries, centralDirectoryBytes))
         {
             _logger.LogWarning(
-                "ZIP archive {ArchivePath} has an invalid or oversized central directory and was not inspected.",
+                "ZIP archive {ArchivePath} has an invalid central directory or exceeded the shared archive-tree safety limits and was not inspected.",
                 archivePath);
             options.Diagnostics?.RecordFileSkipped();
             return result;
@@ -559,12 +562,11 @@ public class FileScanner : IScanner
                 }
 
                 entriesSeen++;
-                if (entriesSeen > maximumEntries)
+                if ((ulong)entriesSeen > declaredEntries)
                 {
                     _logger.LogWarning(
-                        "Stopped inspecting ZIP archive {ArchivePath} after its {MaximumEntries:N0}-entry safety limit.",
-                        archivePath,
-                        maximumEntries);
+                        "Stopped inspecting ZIP archive {ArchivePath} because it contained more entries than its central directory declared.",
+                        archivePath);
                     break;
                 }
 
@@ -578,7 +580,10 @@ public class FileScanner : IScanner
 
                 var virtualPath = $"{archivePath}!/{entryName}";
                 var extension = Path.GetExtension(entryName);
-                if (!plan.Optimizer.HasRulesForExtension(extension)
+                var isNestedArchive = IsZipArchive(extension);
+                var canExpandNestedArchive = isNestedArchive && depth < maximumDepth;
+                if (!canExpandNestedArchive
+                    && !plan.Optimizer.HasRulesForExtension(extension)
                     && !HasDirectMetadataMatch(virtualPath, plan.Optimizer))
                 {
                     options.Diagnostics?.RecordFileSkipped();
@@ -600,22 +605,20 @@ public class FileScanner : IScanner
                 }
 
                 var exceedsEntryLimit = entryLength < 0 || entryLength > maximumEntryBytes;
-                var exceedsArchiveLimit = entryLength > maximumExpandedBytes - expandedBytes;
                 var compressionRatio = entryLength == 0
                     ? 0
                     : compressedLength <= 0
                         ? double.PositiveInfinity
                         : (double)entryLength / compressedLength;
                 if (exceedsEntryLimit
-                    || exceedsArchiveLimit
-                    || compressionRatio > maximumCompressionRatio)
+                    || compressionRatio > maximumCompressionRatio
+                    || !budget.TryReserveExpanded(entryLength))
                 {
                     unsafeEntries++;
                     options.Diagnostics?.RecordFileSkipped();
                     continue;
                 }
 
-                expandedBytes += entryLength;
                 if (entryLength == 0)
                 {
                     options.Diagnostics?.RecordFileSkipped();
@@ -626,17 +629,51 @@ public class FileScanner : IScanner
                 {
                     options.Diagnostics?.RecordFileOpened();
                     using var entryStream = entry.Open();
-                    var entryResult = await ScanZipEntryAsync(
-                        entryStream,
-                        virtualPath,
-                        entryLength,
-                        plan,
-                        options,
-                        exposure,
-                        owner,
-                        aclEntries,
-                        ruleStats,
-                        cancellationToken);
+                    ScanResult entryResult;
+                    if (canExpandNestedArchive)
+                    {
+                        entryResult = await ScanZipEntryAsync(
+                            Stream.Null,
+                            virtualPath,
+                            entryLength: 0,
+                            plan,
+                            options,
+                            exposure,
+                            owner,
+                            aclEntries,
+                            ruleStats,
+                            cancellationToken);
+                        var entryIssues = entryResult.Issues as List<ScanFinding>
+                            ?? entryResult.Issues.ToList();
+                        var nestedResult = await ScanZipArchiveAsync(
+                            entryStream,
+                            virtualPath,
+                            plan,
+                            options,
+                            exposure,
+                            owner,
+                            aclEntries,
+                            ruleStats,
+                            budget,
+                            depth + 1,
+                            cancellationToken);
+                        AddScanResult(entryResult, ref entryIssues, nestedResult);
+                        entryResult.Issues = AggregateIssues(entryIssues, plan.PolicyNameLookup);
+                    }
+                    else
+                    {
+                        entryResult = await ScanZipEntryAsync(
+                            entryStream,
+                            virtualPath,
+                            entryLength,
+                            plan,
+                            options,
+                            exposure,
+                            owner,
+                            aclEntries,
+                            ruleStats,
+                            cancellationToken);
+                    }
                     AddScanResult(result, ref issues, entryResult);
                 }
                 catch (Exception exception) when (
@@ -682,6 +719,7 @@ public class FileScanner : IScanner
         Stream source,
         string archivePath,
         ScanOptions options,
+        ZipTraversalBudget budget,
         CancellationToken cancellationToken)
     {
         var maximumBytes = Math.Max(0, options.MaxZipBufferedContainerBytes);
@@ -721,7 +759,8 @@ public class FileScanner : IScanner
                     return destination;
                 }
 
-                if (bytesRead > maximumBytes - totalBytes)
+                if (bytesRead > maximumBytes - totalBytes
+                    || !budget.TryReserveBuffered(bytesRead))
                 {
                     _logger.LogWarning(
                         "ZIP archive {ArchivePath} exceeded the {MaximumBytes:N0}-byte buffering limit and was not inspected.",
@@ -754,6 +793,62 @@ public class FileScanner : IScanner
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private sealed class ZipTraversalBudget
+    {
+        private readonly ulong _maximumEntries;
+        private readonly ulong _maximumCentralDirectoryBytes;
+        private readonly long _maximumExpandedBytes;
+        private readonly long _maximumBufferedBytes;
+        private ulong _entries;
+        private ulong _centralDirectoryBytes;
+        private long _expandedBytes;
+        private long _bufferedBytes;
+
+        public ZipTraversalBudget(ScanOptions options)
+        {
+            _maximumEntries = (ulong)Math.Max(0, options.MaxZipEntries);
+            _maximumCentralDirectoryBytes = (ulong)Math.Max(0, options.MaxZipCentralDirectoryBytes);
+            _maximumExpandedBytes = Math.Max(0, options.MaxZipExpandedBytes);
+            _maximumBufferedBytes = Math.Max(0, options.MaxZipBufferedContainerBytes);
+        }
+
+        public bool TryReserveArchive(ulong entries, ulong centralDirectoryBytes)
+        {
+            if (entries > _maximumEntries - Math.Min(_entries, _maximumEntries)
+                || centralDirectoryBytes > _maximumCentralDirectoryBytes
+                    - Math.Min(_centralDirectoryBytes, _maximumCentralDirectoryBytes))
+            {
+                return false;
+            }
+
+            _entries += entries;
+            _centralDirectoryBytes += centralDirectoryBytes;
+            return true;
+        }
+
+        public bool TryReserveExpanded(long bytes)
+        {
+            if (bytes < 0 || bytes > _maximumExpandedBytes - _expandedBytes)
+            {
+                return false;
+            }
+
+            _expandedBytes += bytes;
+            return true;
+        }
+
+        public bool TryReserveBuffered(int bytes)
+        {
+            if (bytes < 0 || bytes > _maximumBufferedBytes - _bufferedBytes)
+            {
+                return false;
+            }
+
+            _bufferedBytes += bytes;
+            return true;
         }
     }
 
@@ -1231,6 +1326,8 @@ public class FileScanner : IScanner
                 owner,
                 aclEntries,
                 ruleStats,
+                new ZipTraversalBudget(options),
+                depth: 1,
                 cancellationToken);
             AddScanResult(result, ref issues, archiveResult);
             result.Issues = AggregateIssues(issues, plan.PolicyNameLookup);
