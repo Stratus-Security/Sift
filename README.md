@@ -4,30 +4,30 @@
 Sift is a tool developed by Stratus Security to improve our penetration testing, open-sourced to help improve data security for pentesters and security teams.
 It searches data you can access for secrets and sensitive information across a number of platforms and it's *very* effective.
 
-## TL;DR; How do i run this?
-The quickest way if you're familiar with snaffler:
+## TL;DR: How do I run this?
+The quickest way, if you're familiar with Snaffler, is:
 ```
 .\sift.exe local --path C:\
 ```
 
-For more advanced commands, check out the [how to](#how-do) section below. Very recommended.
+For more advanced commands, check out the [how to](#how-do) section below. It's worth a look.
 
 ## Why make this? Is this Snaffler?
 Like most things we make, Sift is a tool developed out of frustration. For a while we used a custom fork of Snaffler like many in the industry, but ultimately it became harder to continue maintaining the fork than it was to just make it from scratch.
 
 Sift was made with performance and extensibility in mind, to name a few great improvements over existing solutions:
-- No framework dependancies + compiled executables (thanks NativeAoT!)
-- Connector flexibility: It's modular to allow scanning anything with a small adapter (Currently supports local drives, local network/subetnets, AD, SharePoint, Slack and Atlassian (Jira+Confluence)). Suggestions for more are welcome!
+- Self-contained Native AOT executables with no separate .NET runtime installation.
+- Connector flexibility: It's modular to allow scanning anything with a small adapter (currently supports local drives, local networks and subnets, AD, SharePoint, Slack and Atlassian (Jira and Confluence)). Suggestions for more are welcome!
 - Resumability: Every scan command can continue from durable checkpoints, so an interrupted scan only repeats a small amount of work.
 - Performance: Local and SMB scans use a bounded high-throughput pipeline with compiled rules and reusable scan state. See [Benchmarks](#benchmarks) for the test method and measured results.
-- Explicit authentication: No more runas! Kerberos! Pass the hash! ???! Profit!
-- Safety features: e.g. Dodges unsynced OneDrive files instead of filling up a servers drives by accessing it all... hypothetically.
-    - If you're worried about coverage, OneDrive backs onto SharePoint so it will be better if you scan SharePoint than local drives :D
-- File support: You can (optionally) include binary files like word docs, etc. Support isn't perfect yet but you can't have everything!
-- AI: We love some AI, but we also love privacy. and cake. The data gathered by Sift is extremely sensitive, so we support AI filtering to remove false positives but only using local LLMs.
-- Cross-Platform: The tool works on Macs, Windows and Linux (with varying feature support, of course!)
+- Explicit authentication: Use the current identity or supply credentials directly. Kerberos is preferred for domain accounts, with controlled NTLM fallback and a strict Kerberos mode.
+- Safety features: Dodges unsynced OneDrive files instead of filling up a server's drives by accessing them all... hypothetically.
+    - If you're worried about coverage, OneDrive is backed by SharePoint, so scanning SharePoint is better than scanning local drives :D
+- File support: You can optionally include binary files such as Word documents. Support isn't perfect yet, but you can't have everything!
+- AI: We love some AI, but we also love privacy. And cake. The data gathered by Sift is extremely sensitive, so AI filtering uses only local LLMs to remove false positives.
+- Cross-platform: The tool works on macOS, Windows and Linux (with varying feature support, of course!).
 - Throttling: The pentesting CLI uses the available machine by default. Use `--threads` and `--max-read-mib-per-second` when scanning a sensitive production target.
-- Fingerprints: Full coverage validated against the Snaffler rules library with much more and some refined. Code-defined validators are also supported to do more advanced checks and reduce false positives 📔
+- Detection quality: The bundled catalogue covers the Snaffler rules library, adds more detections, and refines noisy patterns. Code-defined validators support advanced checks and reduce false positives 📔
 - DNS: Custom DNS servers for those times when you want to use computer names from a non-corp, wowee!
 - Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
 - ZIPin': Archives are enumerated and reported as `archive.zip!/path/file`. Terms and conditions may apply* (so we don't trigger a zip bomb)
@@ -83,16 +83,18 @@ Options:
 
 ## Benchmarks
 
-To quantify the speed, we ran benchmarks with synthetic repos of files to compare performance. Note that a small patch was made to snaffler to allow it to finish without waiting for it's minutely check-in to keep results fair.
+To quantify performance, we ran comparable scans against synthetic file repositories. Snaffler was patched to report completion immediately instead of waiting for its once-per-minute check-in, keeping the comparison fair.
 
-Here is the 3 benchmarks done with the current Sift and Snaffler builds (24th August 2026).
+These three benchmark scenarios used the current Sift and Snaffler builds on 24 August 2026.
+
 | Scenario | Sift | Snaffler |
 | --- | ---: | ---: |
 | 250,000 small files | 10.61 s | 25.48 s |
 | 5.5 GiB content throughput | 0.69 s | 6.32 s |
 | Deep and wide tree | 1.12 s | 2.37 s |
 
-All tests were run 3 times and the average results are aggregated in the table below:
+Each test was run three times. The aggregate averages are shown below:
+
 | Metric | Snaffler 1.0.244 | Sift | Improvement |
 | --- | ---: | ---: | ---: |
 | Duration | 34.18 s | 12.42 s | 2.75x faster |
@@ -102,14 +104,14 @@ All tests were run 3 times and the average results are aggregated in the table b
 | Memory-time | 11.24 GiB·s | 1.11 GiB·s | 10.1x less RAM-time |
 | Peak memory | 429.5 MiB | 102.2 MiB | 4.20x lower peak |
 
-Note that default is unlimited (as used above) but resource limits can be set explicitly when you need to reduce impact:
+Throughput is unlimited by default, as used above. Resource limits can be set explicitly when you need to reduce impact:
 
 ```powershell
 .\sift.exe local --path C:\Shares --threads 8 --max-read-mib-per-second 32
 ```
 
 ## How Do?
-In case you're wondering how to do the things, here are a few examples to get your started.
+In case you're wondering how to do the things, here are a few examples to get you started.
 
 Scan a specific computer:
 ```powershell
@@ -175,11 +177,11 @@ Check downloaded files against [SHA256SUMS.txt](https://github.com/Stratus-Secur
 
 Sift is licensed under [AGPL-3.0-only](LICENSE). Report security problems through [SECURITY.md](SECURITY.md) and read [CONTRIBUTING.md](CONTRIBUTING.md) before sending a change.
 
-🪲 If there's any problems, please feel free to open an issue (or PR!) 🪲
+🪲 If there are any problems, please feel free to open an issue (or PR!) 🪲
 
 ## Sifting rules
 
-Sift uses two kinds of JSON rule:
+Sift uses two kinds of JSON rules:
 
 - A **sifting rule** describes what to find and how to report it.
 - An **ignore rule** skips known noise before Sift opens or scans it.
