@@ -1,7 +1,6 @@
 {
   "Name": "Hugging Face Access Token",
   "Description": "Detects Hugging Face access tokens with the hf_ prefix.",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

@@ -176,13 +176,12 @@ internal static class CliRuleCatalogLoader
 
     private static bool IsUnifiedRule(JsonElement element)
     {
-        var hasDetectionDefinition = HasProperty(element, "matches")
-            || HasProperty(element, "patterns")
-            || HasProperty(element, "label")
-            || HasProperty(element, "subRules");
+        if (!HasProperty(element, "matches") && !HasProperty(element, "subRules"))
+        {
+            return false;
+        }
 
-        return hasDetectionDefinition
-            && (HasProperty(element, "enabled")
+        var hasUnifiedSetting = HasProperty(element, "enabled")
             || HasProperty(element, "reportFinding")
             || HasProperty(element, "findingName")
             || HasProperty(element, "severity")
@@ -190,7 +189,16 @@ internal static class CliRuleCatalogLoader
             || HasProperty(element, "minMatchCount")
             || HasProperty(element, "includePaths")
             || HasProperty(element, "excludePaths")
-            || HasProperty(element, "stopOnMatch"));
+            || HasProperty(element, "stopOnMatch");
+
+        if (hasUnifiedSetting)
+        {
+            return true;
+        }
+
+        // The current standalone format needs only Name and Matches. Label and
+        // IsEnabled belong to the deprecated split classifier format.
+        return !HasProperty(element, "label") && !HasProperty(element, "isEnabled");
     }
 
     private static bool HasProperty(JsonElement element, string name)
@@ -220,7 +228,6 @@ internal static class CliRuleCatalogLoader
                 Enabled = classifier.IsEnabled,
                 Name = classifier.Name,
                 Description = classifier.Description,
-                Label = classifier.Label,
                 Severity = Severity.Medium
             }).Policies.Single();
 

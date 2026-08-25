@@ -1,7 +1,6 @@
 {
   "Name": "Docker Access Token",
   "Description": "Detects Docker Hub personal and organization access tokens.",
-  "Label": "DevOps",
   "Severity": "Critical",
   "Matches": [
     {

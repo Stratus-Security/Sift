@@ -1,7 +1,6 @@
 {
   "Name": "Generic SQL Connection String",
   "Description": "Detects SQL connection strings containing a server and password in any field order.",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

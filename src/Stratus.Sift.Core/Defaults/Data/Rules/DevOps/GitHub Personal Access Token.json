@@ -1,7 +1,6 @@
 {
   "Name": "GitHub Personal Access Token",
   "Description": "Detects GitHub Personal Access Tokens (Classic ghp_ and Fine-Grained github_pat_)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

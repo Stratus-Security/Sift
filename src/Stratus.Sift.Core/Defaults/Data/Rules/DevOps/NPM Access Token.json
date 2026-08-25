@@ -1,7 +1,6 @@
 {
   "Name": "NPM Access Token",
   "Description": "Detects NPM Access Tokens (npm_ prefix)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

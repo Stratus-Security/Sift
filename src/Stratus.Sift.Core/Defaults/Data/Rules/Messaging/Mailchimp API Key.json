@@ -1,7 +1,6 @@
 {
   "Name": "Mailchimp API Key",
   "Description": "Detects Mailchimp API Keys (Hex MD5 + Data Center suffix)",
-  "Label": "General",
   "Severity": "Medium",
   "Matches": [
     {

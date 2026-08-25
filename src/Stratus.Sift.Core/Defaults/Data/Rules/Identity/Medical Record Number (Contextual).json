@@ -2,7 +2,6 @@
   "Enabled": false,
   "Name": "Medical Record Number (Contextual)",
   "Description": "Opt-in contextual detection of medical record and patient identifiers.",
-  "Label": "Identity",
   "Severity": "Critical",
   "Matches": [
     {

@@ -1,7 +1,6 @@
 {
   "Name": "OpenVPN Configuration",
   "Description": "Detects OpenVPN config files containing embedded private keys",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

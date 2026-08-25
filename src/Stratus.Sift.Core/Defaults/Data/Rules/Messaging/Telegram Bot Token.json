@@ -1,7 +1,6 @@
 {
   "Name": "Telegram Bot Token",
   "Description": "Detects Telegram Bot API Tokens (BotId:Secret)",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

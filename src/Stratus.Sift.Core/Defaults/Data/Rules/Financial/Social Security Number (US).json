@@ -1,7 +1,6 @@
 {
   "Name": "Social Security Number (US)",
   "Description": "Detects US Social Security Numbers (excluding known invalid ranges)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

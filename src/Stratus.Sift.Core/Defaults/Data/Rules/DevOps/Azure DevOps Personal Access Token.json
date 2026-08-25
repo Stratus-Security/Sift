@@ -1,7 +1,6 @@
 {
   "Name": "Azure DevOps Personal Access Token",
   "Description": "Detects current Azure DevOps PATs with the AZDO signature and legacy PATs when Azure DevOps context is present.",
-  "Label": "DevOps",
   "Severity": "Critical",
   "Matches": [
     {

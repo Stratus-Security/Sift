@@ -1,7 +1,6 @@
 {
   "Name": "Slack Webhook",
   "Description": "Detects Slack Incoming Webhook URLs (hooks.slack.com)",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

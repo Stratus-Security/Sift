@@ -1,7 +1,6 @@
 {
   "Name": "ASP.NET ViewState Key",
   "Description": "Detects ASP.NET validation and decryption keys in application configuration or source files.",
-  "Label": "DevOps",
   "Severity": "High",
   "Matches": [
     {

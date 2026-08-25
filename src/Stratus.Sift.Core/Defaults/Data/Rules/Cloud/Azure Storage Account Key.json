@@ -1,7 +1,6 @@
 {
   "Name": "Azure Storage Account Key",
   "Description": "Detects standalone Azure Storage account keys assigned directly in configuration or environment files.",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

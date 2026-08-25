@@ -1,7 +1,6 @@
 {
   "Name": "SSH Keys",
   "Description": "Detects SSH Private Keys, configuration files, and related artifacts.",
-  "Label": "Security",
   "Severity": "Critical",
   "Matches": [
     {
@@ -10,7 +9,8 @@
       "Patterns": [
         "-----BEGIN( RSA| OPENSSH| DSA| EC| PGP)? PRIVATE KEY( BLOCK)?-----",
         "-----BEGIN OPENSSH PRIVATE KEY-----"
-      ]
+      ],
+      "ExtensionProfile": "SourceAndConfig"
     },
     {
       "Target": "FileName",

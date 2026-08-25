@@ -2,7 +2,6 @@
   "Enabled": false,
   "Name": "Australian Tax File Number",
   "Description": "Opt-in detection of checksum-valid Australian Tax File Numbers when TFN context is present.",
-  "Label": "Identity",
   "Severity": "Critical",
   "Matches": [
     {

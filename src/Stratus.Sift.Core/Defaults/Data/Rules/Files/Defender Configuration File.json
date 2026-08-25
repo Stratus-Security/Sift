@@ -1,7 +1,6 @@
 {
   "Name": "Defender Configuration File",
   "Description": "Detects Microsoft Defender configuration artifacts that may expose enrollment or management settings.",
-  "Label": "Files",
   "Severity": "Medium",
   "Matches": [
     {

@@ -1,7 +1,6 @@
 {
   "Name": "HCP Terraform Token",
   "Description": "Detects current tftk and legacy atlasv1 HCP Terraform or Terraform Enterprise API tokens.",
-  "Label": "DevOps",
   "Severity": "Critical",
   "Matches": [
     {

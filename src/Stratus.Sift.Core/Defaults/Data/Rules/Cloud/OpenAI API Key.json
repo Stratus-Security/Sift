@@ -1,7 +1,6 @@
 {
   "Name": "OpenAI API Key",
   "Description": "Detects OpenAI API Keys (Legacy sk-, Project sk-proj-, Service sk-svc-)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

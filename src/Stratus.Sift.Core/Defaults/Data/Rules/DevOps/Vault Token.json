@@ -1,7 +1,6 @@
 {
   "Name": "Vault Token",
   "Description": "Detects current and context-qualified legacy HashiCorp Vault service, batch, and recovery tokens.",
-  "Label": "DevOps",
   "Severity": "Critical",
   "Matches": [
     {

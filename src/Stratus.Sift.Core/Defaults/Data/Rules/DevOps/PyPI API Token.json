@@ -1,7 +1,6 @@
 {
   "Name": "PyPI API Token",
   "Description": "Detects PyPI Macaroon API tokens using the officially documented pypi- format.",
-  "Label": "DevOps",
   "Severity": "Critical",
   "Matches": [
     {

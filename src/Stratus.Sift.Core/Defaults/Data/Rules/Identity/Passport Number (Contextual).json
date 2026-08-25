@@ -2,7 +2,6 @@
   "Enabled": false,
   "Name": "Passport Number (Contextual)",
   "Description": "Opt-in contextual detection of passport identifiers without assuming a single country's format.",
-  "Label": "Identity",
   "Severity": "Critical",
   "Matches": [
     {

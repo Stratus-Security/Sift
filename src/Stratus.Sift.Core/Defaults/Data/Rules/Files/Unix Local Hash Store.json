@@ -1,7 +1,6 @@
 {
   "Name": "Unix Local Hash Store",
   "Description": "Detects local Unix password and hash store files by filename.",
-  "Label": "Files",
   "Severity": "Critical",
   "Matches": [
     {

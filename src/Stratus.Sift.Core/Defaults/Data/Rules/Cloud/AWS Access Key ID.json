@@ -1,7 +1,6 @@
 {
   "Name": "AWS Access Key ID",
   "Description": "Detects AWS Access Key IDs (AKIA, ASIA, AGPA, AROA, etc.)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

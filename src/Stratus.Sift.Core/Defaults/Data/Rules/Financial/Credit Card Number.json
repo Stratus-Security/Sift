@@ -1,7 +1,6 @@
 {
   "Name": "Credit Card Number",
   "Description": "Detects valid Credit Card numbers (Visa, MC, Amex, Discover) with Luhn validation",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

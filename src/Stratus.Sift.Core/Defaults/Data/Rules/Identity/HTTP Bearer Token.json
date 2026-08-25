@@ -1,7 +1,6 @@
 {
   "Name": "HTTP Bearer Token",
   "Description": "Detects hardcoded non-placeholder HTTP Bearer authorization tokens not covered by a more specific detector.",
-  "Label": "Identity",
   "Severity": "High",
   "Matches": [
     {

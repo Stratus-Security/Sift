@@ -2,7 +2,6 @@
   "ReportFinding": false,
   "Name": "Network Device Configuration File",
   "Description": "Looks inside common network device configuration files for embedded credentials or shared secrets.",
-  "Label": "Files",
   "Matches": [
     {
       "Target": "FileName",
@@ -20,7 +19,6 @@
     {
       "Name": "Network Device Credential",
       "Description": "Detects network device credentials and shared secrets in configuration files.",
-      "Label": "Files",
       "Severity": "High",
       "Matches": [
         {

@@ -2,7 +2,6 @@
   "ReportFinding": false,
   "Name": "Unattend XML File",
   "Description": "Looks inside unattended installation files for embedded administrator or autologon passwords.",
-  "Label": "Files",
   "Matches": [
     {
       "Target": "FileName",
@@ -18,7 +17,6 @@
     {
       "Name": "Unattend Password",
       "Description": "Detects administrator or autologon passwords embedded in unattended installation files.",
-      "Label": "Files",
       "Severity": "High",
       "Matches": [
         {

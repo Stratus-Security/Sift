@@ -1,7 +1,6 @@
 {
   "Name": "Remote Access Configuration File",
   "Description": "Detects remote access client configuration files that often contain saved connections or credentials.",
-  "Label": "Files",
   "Severity": "Critical",
   "Matches": [
     {

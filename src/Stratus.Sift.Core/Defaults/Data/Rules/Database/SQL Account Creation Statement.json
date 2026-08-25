@@ -1,7 +1,6 @@
 {
   "Name": "SQL Account Creation Statement",
   "Description": "Detects SQL account creation statements that embed or accompany credential material.",
-  "Label": "Database",
   "Severity": "High",
   "Matches": [
     {

@@ -1,7 +1,6 @@
 {
   "Name": "AWS Session Token",
   "Description": "Detects temporary AWS session tokens assigned through SDK, CLI, and environment-variable conventions.",
-  "Label": "Cloud",
   "Severity": "Critical",
   "Matches": [
     {

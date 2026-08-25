@@ -2,7 +2,6 @@
   "Enabled": false,
   "Name": "Australian Medicare Number",
   "Description": "Opt-in detection of checksum-valid Australian Medicare card numbers when Medicare context is present.",
-  "Label": "Identity",
   "Severity": "Critical",
   "Matches": [
     {

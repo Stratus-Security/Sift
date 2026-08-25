@@ -1,7 +1,6 @@
 {
   "Name": "GitLab Personal Access Token",
   "Description": "Detects GitLab Personal Access Tokens (glpat- prefix)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

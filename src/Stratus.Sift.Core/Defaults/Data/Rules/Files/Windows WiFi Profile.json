@@ -1,7 +1,6 @@
 {
   "Name": "Windows WiFi Profile",
   "Description": "Detects exported Windows WiFi profiles containing key material (potentially cleartext)",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

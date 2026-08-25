@@ -1,7 +1,6 @@
 {
   "Name": "AI Assistant State Artifact",
   "Description": "Detects AI assistant conversations, local memory, traces, evaluations, vector stores, and IDE state databases that may retain sensitive prompts or source content.",
-  "Label": "Files",
   "Severity": "Medium",
   "Matches": [
     {

@@ -1,7 +1,6 @@
 {
   "Name": "SendGrid API Key",
   "Description": "Detects SendGrid API Keys (SG. prefix)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

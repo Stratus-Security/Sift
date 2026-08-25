@@ -1,7 +1,6 @@
 {
   "Name": "Memory Dump Artifact",
   "Description": "Detects process and system memory dump artifacts that can contain credentials, tokens, and other live secrets.",
-  "Label": "Files",
   "Severity": "Critical",
   "Matches": [
     {

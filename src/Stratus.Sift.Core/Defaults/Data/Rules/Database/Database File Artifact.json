@@ -1,7 +1,6 @@
 {
   "Name": "Database File Artifact",
   "Description": "Detects database files and backups that often contain sensitive application data and credentials.",
-  "Label": "Database",
   "Severity": "Medium",
   "Matches": [
     {

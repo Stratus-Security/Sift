@@ -1,7 +1,6 @@
 {
   "Name": "Windows Hash Store",
   "Description": "Detects Windows hash store and registry hive files by filename.",
-  "Label": "Files",
   "Severity": "Critical",
   "Matches": [
     {

@@ -1,7 +1,6 @@
 {
   "Name": "Network Configuration",
   "Description": "Detects packet capture artifacts commonly collected during network and incident-response investigations.",
-  "Label": "General",
   "Severity": "Low",
   "Matches": [
     {

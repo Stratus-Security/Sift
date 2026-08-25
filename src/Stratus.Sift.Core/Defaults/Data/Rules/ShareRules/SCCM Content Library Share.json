@@ -1,7 +1,6 @@
 {
   "Name": "SCCM Content Library Share",
   "Description": "Detects readable SCCM content library shares.",
-  "Label": "General",
   "Severity": "Medium",
   "Matches": [
     {

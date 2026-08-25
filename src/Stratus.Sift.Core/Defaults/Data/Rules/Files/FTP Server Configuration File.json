@@ -1,7 +1,6 @@
 {
   "Name": "FTP Server Configuration File",
   "Description": "Detects FTP server configuration files that may expose service accounts or credential material.",
-  "Label": "Files",
   "Severity": "High",
   "Matches": [
     {

@@ -2,7 +2,6 @@
   "Enabled": false,
   "Name": "International Bank Account Number",
   "Description": "Opt-in detection of checksum-valid International Bank Account Numbers (IBANs).",
-  "Label": "Financial",
   "Severity": "High",
   "Matches": [
     {

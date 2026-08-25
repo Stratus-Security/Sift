@@ -1,7 +1,6 @@
 {
   "Name": "JSON Web Token (JWT)",
   "Description": "Detects signed and unsecured compact JSON Web Tokens.",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

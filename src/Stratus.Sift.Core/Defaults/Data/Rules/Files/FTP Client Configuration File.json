@@ -1,7 +1,6 @@
 {
   "Name": "FTP Client Configuration File",
   "Description": "Detects FTP and SFTP client configuration files that often contain saved connection details or credentials.",
-  "Label": "Files",
   "Severity": "High",
   "Matches": [
     {

@@ -10,7 +10,6 @@ public sealed class SiftingRule
     public string Name { get; set; } = string.Empty;
     public string? FindingName { get; set; }
     public string? Description { get; set; }
-    public string Label { get; set; } = "Custom";
     public Severity? Severity { get; set; }
     public List<ClassifierMatch> Matches { get; set; } = [];
     public string? Validator { get; set; }

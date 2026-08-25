@@ -1,7 +1,6 @@
 {
   "Name": "Square Access Token",
   "Description": "Detects Square Access Tokens (Production sq0atp- and Sandbox sq0tsp-)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

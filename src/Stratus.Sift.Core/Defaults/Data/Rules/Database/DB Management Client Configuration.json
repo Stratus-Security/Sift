@@ -1,7 +1,6 @@
 {
   "Name": "DB Management Client Configuration",
   "Description": "Detects database management client configuration files and histories that commonly contain connection details or saved credentials.",
-  "Label": "Database",
   "Severity": "High",
   "Matches": [
     {

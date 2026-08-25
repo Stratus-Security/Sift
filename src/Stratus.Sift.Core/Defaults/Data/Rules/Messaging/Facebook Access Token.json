@@ -1,7 +1,6 @@
 {
   "Name": "Facebook Access Token",
   "Description": "Detects Facebook Graph API Access Tokens (EAA... prefix)",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

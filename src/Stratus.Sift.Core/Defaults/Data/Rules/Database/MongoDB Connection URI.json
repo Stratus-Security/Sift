@@ -1,7 +1,6 @@
 {
   "Name": "MongoDB Connection URI",
   "Description": "Detects MongoDB connection strings containing credentials",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

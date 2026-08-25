@@ -1,7 +1,6 @@
 {
   "Name": "Ruby Sensitive Configuration File",
   "Description": "Detects Ruby and Rails configuration files that frequently contain secrets or service credentials.",
-  "Label": "Files",
   "Severity": "High",
   "Matches": [
     {

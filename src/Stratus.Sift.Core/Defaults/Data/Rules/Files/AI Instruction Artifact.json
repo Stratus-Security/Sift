@@ -1,7 +1,6 @@
 {
   "Name": "AI Instruction Artifact",
   "Description": "Detects AI coding-agent rules, project instructions, prompts, and memory files that may contain internal context or sensitive operational guidance.",
-  "Label": "Files",
   "Severity": "Low",
   "Matches": [
     {

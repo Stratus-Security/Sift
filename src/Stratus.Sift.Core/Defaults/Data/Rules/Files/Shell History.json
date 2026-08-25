@@ -1,7 +1,6 @@
 {
   "Name": "Shell History",
   "Description": "Detects shell history files which may contain executed commands with secrets",
-  "Label": "General",
   "Severity": "Medium",
   "Matches": [
     {

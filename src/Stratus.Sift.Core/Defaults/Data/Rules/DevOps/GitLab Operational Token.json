@@ -1,7 +1,6 @@
 {
   "Name": "GitLab Operational Token",
   "Description": "Detects GitLab OAuth, deploy, runner, job, trigger, feed, mail, agent, workspace, SCIM, and feature-flag tokens.",
-  "Label": "DevOps",
   "Severity": "Critical",
   "Matches": [
     {

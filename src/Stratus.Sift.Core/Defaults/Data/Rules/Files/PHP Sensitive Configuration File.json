@@ -1,7 +1,6 @@
 {
   "Name": "PHP Sensitive Configuration File",
   "Description": "Detects PHP application configuration files that often contain database or service credentials.",
-  "Label": "Files",
   "Severity": "High",
   "Matches": [
     {

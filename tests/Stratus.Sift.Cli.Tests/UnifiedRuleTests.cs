@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Stratus.Sift.Cli;
 using Stratus.Sift.Core.Defaults;
 using Stratus.Sift.Core.Enums;
+using Stratus.Sift.Core.Models;
 using Stratus.Sift.Core.Validation;
 using Stratus.Sift.Scanner.Interfaces;
 using Stratus.Sift.Scanner.Services;
@@ -27,7 +28,6 @@ public sealed class UnifiedRuleTests : IDisposable
             {
               "Name": "Example token",
               "Description": "Finds an example token.",
-              "Label": "Secrets",
               "Severity": "High",
               "MinMatchCount": 2,
               "ExcludePaths": [ "**/fixtures/**" ],
@@ -46,10 +46,59 @@ public sealed class UnifiedRuleTests : IDisposable
         var classifier = Assert.Single(catalog.Classifiers);
         var policy = Assert.Single(catalog.Policies);
         Assert.Equal("Example token", classifier.Name);
+        Assert.Empty(classifier.Label);
         Assert.Equal(Severity.High, policy.Severity);
         Assert.Equal(2, policy.Configuration.MinMatchCount);
         Assert.Equal(["**/fixtures/**"], policy.Configuration.ExcludePaths);
         Assert.Same(classifier, Assert.Single(policy.PolicyClassifiers).Classifier);
+    }
+
+    [Fact]
+    public async Task MinimalUnifiedRule_DoesNotNeedALabelOrOptionalSettings()
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(_directory, "minimal.json"),
+            """
+            {
+              "Name": "Secrets file",
+              "Matches": [
+                {
+                  "Target": "FileName",
+                  "Patterns": [ "secrets.txt" ]
+                }
+              ]
+            }
+            """);
+
+        var catalog = await CliRuleCatalogLoader.LoadAsync(_directory, NullLogger.Instance);
+
+        var classifier = Assert.Single(catalog.Classifiers);
+        var policy = Assert.Single(catalog.Policies);
+        Assert.False(catalog.UsesLegacyPolicies);
+        Assert.Equal("Secrets file", classifier.Name);
+        Assert.Equal(Severity.Medium, policy.Severity);
+        Assert.Same(classifier, Assert.Single(policy.PolicyClassifiers).Classifier);
+    }
+
+    [Fact]
+    public void ContentMatch_RequiresAnExtensionScope()
+    {
+        var rule = new SiftingRule
+        {
+            Name = "Unscoped content",
+            Matches =
+            [
+                new()
+                {
+                    Target = RuleTarget.Content,
+                    Patterns = ["secret"]
+                }
+            ]
+        };
+
+        var error = Assert.Throws<InvalidOperationException>(() => SiftingRuleMaterializer.Materialize(rule));
+
+        Assert.Contains("content match 0 requires ExtensionProfile", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

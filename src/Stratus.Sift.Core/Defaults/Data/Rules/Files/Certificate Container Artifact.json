@@ -1,7 +1,6 @@
 {
   "Name": "Certificate Container Artifact",
   "Description": "Detects certificate and keystore container files that may include exportable private key material.",
-  "Label": "Files",
   "Severity": "High",
   "Matches": [
     {

@@ -1,7 +1,6 @@
 {
   "Name": "Cloud API Key Artifact",
   "Description": "Detects files whose names strongly suggest a local cloud credential artifact.",
-  "Label": "Cloud",
   "Severity": "Critical",
   "Matches": [
     {

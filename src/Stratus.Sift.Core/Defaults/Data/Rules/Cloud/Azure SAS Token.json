@@ -1,7 +1,6 @@
 {
   "Name": "Azure SAS Token",
   "Description": "Detects Azure Shared Access Signature (SAS) tokens",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

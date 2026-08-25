@@ -1,7 +1,6 @@
 {
   "Name": "AWS MWS Auth Token",
   "Description": "Detects legacy Amazon MWS Auth Tokens (amzn.mws.UUID)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

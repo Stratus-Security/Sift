@@ -1,7 +1,6 @@
 {
   "Name": "Anthropic API Key",
   "Description": "Detects Anthropic API keys with the sk-ant prefix.",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

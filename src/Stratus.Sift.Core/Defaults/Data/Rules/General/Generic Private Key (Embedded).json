@@ -1,7 +1,6 @@
 {
   "Name": "Generic Private Key (Embedded)",
   "Description": "Detects PEM encoded private keys embedded in code or configuration files",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

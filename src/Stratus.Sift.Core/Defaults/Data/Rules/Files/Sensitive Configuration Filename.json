@@ -1,7 +1,6 @@
 {
   "Name": "Sensitive Configuration Filename",
   "Description": "Detects sensitive configuration filenames with a strong history of containing credentials.",
-  "Label": "Files",
   "Severity": "High",
   "Matches": [
     {

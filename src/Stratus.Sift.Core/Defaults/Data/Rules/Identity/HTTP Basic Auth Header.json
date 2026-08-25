@@ -1,7 +1,6 @@
 {
   "Name": "HTTP Basic Auth Header",
   "Description": "Detects hardcoded HTTP Basic Authentication headers (Base64 encoded credentials)",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {

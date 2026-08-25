@@ -1,7 +1,6 @@
 {
   "Name": "PostgreSQL Connection URI",
   "Description": "Detects PostgreSQL connection strings containing credentials",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

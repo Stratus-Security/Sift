@@ -1,7 +1,6 @@
 {
   "Name": "SCCM Boot Variable Artifact",
   "Description": "Detects SCCM and REMINST deployment artifacts that commonly hold task sequence or deployment credentials.",
-  "Label": "Files",
   "Severity": "High",
   "Matches": [
     {

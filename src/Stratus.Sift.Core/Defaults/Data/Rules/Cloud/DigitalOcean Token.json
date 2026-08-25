@@ -1,7 +1,6 @@
 {
   "Name": "DigitalOcean Token",
   "Description": "Detects DigitalOcean Personal Access Tokens (dop_v1_ prefix)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

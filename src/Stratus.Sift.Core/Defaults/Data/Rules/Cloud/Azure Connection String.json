@@ -1,7 +1,6 @@
 {
   "Name": "Azure Connection String",
   "Description": "Detects Azure Storage Account Connection Strings",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

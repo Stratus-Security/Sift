@@ -11,11 +11,11 @@ public static class SiftingRuleMaterializer
         ArgumentNullException.ThrowIfNull(rule);
 
         var policies = new List<Policy>();
-        var classifier = MaterializeClassifier(rule, policies);
+        var classifier = MaterializeClassifier(rule, policies, isSubRule: false);
         return (classifier, policies);
     }
 
-    private static Classifier MaterializeClassifier(SiftingRule rule, List<Policy> policies)
+    private static Classifier MaterializeClassifier(SiftingRule rule, List<Policy> policies, bool isSubRule)
     {
         if (string.IsNullOrWhiteSpace(rule.Name))
         {
@@ -27,12 +27,26 @@ public static class SiftingRuleMaterializer
             throw new InvalidOperationException($"Sifting rule '{rule.Name}' must use MinMatchCount of at least 1.");
         }
 
+        if (!isSubRule)
+        {
+            var unscopedContentMatch = (rule.Matches ?? []).FindIndex(static match =>
+                match.Target == RuleTarget.Content
+                && string.IsNullOrWhiteSpace(match.ExtensionProfile)
+                && (match.IncludedExtensions is null
+                    || match.IncludedExtensions.Count == 0
+                    || match.IncludedExtensions.All(string.IsNullOrWhiteSpace)));
+            if (unscopedContentMatch >= 0)
+            {
+                throw new InvalidOperationException(
+                    $"Sifting rule '{rule.Name}' content match {unscopedContentMatch} requires ExtensionProfile, IncludedExtensions, or both.");
+            }
+        }
+
         var classifier = new Classifier
         {
             IsEnabled = rule.Enabled,
             Name = rule.Name.Trim(),
             Description = rule.Description,
-            Label = string.IsNullOrWhiteSpace(rule.Label) ? "Custom" : rule.Label.Trim(),
             Matches = rule.Matches ?? [],
             Validator = rule.Validator,
             EntropyThreshold = rule.EntropyThreshold,
@@ -41,7 +55,7 @@ public static class SiftingRuleMaterializer
 
         foreach (var subRule in rule.SubRules ?? [])
         {
-            classifier.SubClassifiers.Add(MaterializeClassifier(subRule, policies));
+            classifier.SubClassifiers.Add(MaterializeClassifier(subRule, policies, isSubRule: true));
         }
 
         if (!rule.ReportFinding)

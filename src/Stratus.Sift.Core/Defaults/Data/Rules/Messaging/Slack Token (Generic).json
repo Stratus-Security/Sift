@@ -1,7 +1,6 @@
 {
   "Name": "Slack Token (Generic)",
   "Description": "Detects Slack API Tokens (Bot, User, Workspace, Enterprise)",
-  "Label": "General",
   "Severity": "Critical",
   "Matches": [
     {

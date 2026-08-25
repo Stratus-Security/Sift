@@ -1,7 +1,6 @@
 {
   "Name": "Google API Key",
   "Description": "Detects Google Cloud API Keys (AIza prefix)",
-  "Label": "General",
   "Severity": "High",
   "Matches": [
     {
