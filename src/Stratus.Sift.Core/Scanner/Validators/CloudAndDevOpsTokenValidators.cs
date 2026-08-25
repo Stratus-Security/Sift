@@ -35,12 +35,7 @@ public sealed class AzureDevOpsPatValidator : StructuredTokenValidatorBase
             return Invalid("Azure DevOps PAT length is invalid");
         }
 
-        if (LooksLikePlaceholderToken(token, 12))
-        {
-            return Invalid("Azure DevOps PAT looks like a placeholder");
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(token, 12) ?? ValidWithContextReview(context);
     }
 
     private static bool HasNearbyContext(ValidationContext context, params string[] indicators)
@@ -77,12 +72,7 @@ public sealed class AwsSessionTokenValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "AWS session token is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(token, 16))
-        {
-            return new ValidationResult { IsValid = false, Reason = "AWS session token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(token, 16) ?? ValidWithContextReview(context);
     }
 }
 
@@ -111,12 +101,7 @@ public sealed class GitLabOperationalTokenValidator : StructuredTokenValidatorBa
             return new ValidationResult { IsValid = false, Reason = "GitLab token body is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(suffix, 10))
-        {
-            return new ValidationResult { IsValid = false, Reason = "GitLab token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(suffix, 10) ?? ValidWithContextReview(context);
     }
 }
 
@@ -139,12 +124,7 @@ public sealed class PyPiApiTokenValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "PyPI token payload is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(payload, 16))
-        {
-            return new ValidationResult { IsValid = false, Reason = "PyPI token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(payload, 16) ?? ValidWithContextReview(context);
     }
 }
 
@@ -169,12 +149,7 @@ public sealed class DockerAccessTokenValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "Docker token body is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(suffix, 10))
-        {
-            return new ValidationResult { IsValid = false, Reason = "Docker token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(suffix, 10) ?? ValidWithContextReview(context);
     }
 }
 
@@ -191,9 +166,19 @@ public sealed class DockerConfigAuthValidator : StructuredTokenValidatorBase
         {
             var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
             var separator = decoded.IndexOf(':');
-            if (separator <= 0 || separator == decoded.Length - 1 || decoded.Any(char.IsControl))
+            if (separator < 0 || decoded.Any(char.IsControl))
             {
                 return new ValidationResult { IsValid = false, Reason = "Docker auth value is not username:secret" };
+            }
+
+            if (separator == 0 || separator == decoded.Length - 1)
+            {
+                return new ValidationResult
+                {
+                    IsValid = true,
+                    Confidence = 0.4,
+                    Reason = "Docker auth contains an empty username or secret"
+                };
             }
         }
         catch (FormatException)

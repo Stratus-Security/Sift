@@ -7,29 +7,10 @@
     {
       "Target": "Content",
       "Keywords": [
-        "-us1",
-        "-us2",
-        "-us3",
-        "-us4",
-        "-us5",
-        "-us6",
-        "-us7",
-        "-us8",
-        "-us9",
-        "-us10",
-        "-us11",
-        "-us12",
-        "-us13",
-        "-us14",
-        "-us15",
-        "-us16",
-        "-us17",
-        "-us18",
-        "-us19",
-        "-us20"
+        "-us"
       ],
       "Patterns": [
-        "\\b[0-9a-f]{32}-us[0-9]{1,2}\\b"
+        "\\b[0-9a-f]{32}-us[1-9][0-9]*\\b"
       ],
       "ExtensionProfile": "SourceAndConfig"
     }

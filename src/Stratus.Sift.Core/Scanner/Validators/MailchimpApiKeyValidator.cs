@@ -29,16 +29,13 @@ public class MailchimpApiKeyValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "Mailchimp API key hash segment is malformed" };
         }
 
-        if (!int.TryParse(dataCenterPart, out var dataCenter) || dataCenter is < 1 or > 20)
+        if (dataCenterPart.Length == 0
+            || dataCenterPart[0] == '0'
+            || !dataCenterPart.All(char.IsAsciiDigit))
         {
             return new ValidationResult { IsValid = false, Reason = "Mailchimp API key data center suffix is invalid" };
         }
 
-        if (LooksLikePlaceholderToken(hexPart, 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "Mailchimp API key looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(hexPart, 12) ?? ValidWithContextReview(context);
     }
 }

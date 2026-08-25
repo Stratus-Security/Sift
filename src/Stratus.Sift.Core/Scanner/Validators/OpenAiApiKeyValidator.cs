@@ -43,11 +43,6 @@ public class OpenAiApiKeyValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "OpenAI API key body is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(suffix, 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "OpenAI API key looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(suffix, 12) ?? ValidWithContextReview(context);
     }
 }

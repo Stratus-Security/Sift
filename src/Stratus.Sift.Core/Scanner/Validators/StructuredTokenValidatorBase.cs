@@ -37,6 +37,18 @@ public abstract class StructuredTokenValidatorBase : BaseValidator
         return contextResult ?? new ValidationResult { IsValid = true, Confidence = 1.0 };
     }
 
+    protected static ValidationResult? CheckPlaceholderClues(string value, int minimumLength = 8)
+    {
+        return LooksLikePlaceholderToken(value, minimumLength)
+            ? new ValidationResult
+            {
+                IsValid = true,
+                Confidence = 0.15,
+                Reason = "Token resembles a placeholder or deliberately weak value"
+            }
+            : null;
+    }
+
     protected static bool IsAlphaNumericDashOrUnderscore(string value)
     {
         return !string.IsNullOrWhiteSpace(value)

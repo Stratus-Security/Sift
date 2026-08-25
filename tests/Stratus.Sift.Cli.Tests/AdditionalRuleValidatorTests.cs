@@ -107,11 +107,23 @@ public sealed class AdditionalRuleValidatorTests
     }
 
     [Fact]
+    public void CredentialedServiceUriValidator_RetainsWeakPasswordAtLowConfidence()
+    {
+        var result = new CredentialedServiceUriValidator().Validate(CreateContext("redis://admin:x@stratus.security"));
+
+        Assert.True(result.IsValid);
+        Assert.InRange(result.Confidence, 0.0, 0.49);
+    }
+
+    [Fact]
     public void BearerTokenValidator_DefersJwtAndProviderSpecificTokens()
     {
         var validator = new BearerTokenValidator();
 
         Assert.True(validator.Validate(CreateContext("Authorization: Bearer Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0")).IsValid);
+        var shortToken = validator.Validate(CreateContext("Authorization: Bearer abc123"));
+        Assert.True(shortToken.IsValid);
+        Assert.InRange(shortToken.Confidence, 0.0, 0.49);
         Assert.False(validator.Validate(CreateContext("Authorization: Bearer ghp_" + BuildToken(36))).IsValid);
         Assert.False(validator.Validate(CreateContext("Authorization: Bearer aaa.bbb.ccc")).IsValid);
     }
@@ -119,13 +131,27 @@ public sealed class AdditionalRuleValidatorTests
     [Theory]
     [InlineData("CLIENT_SECRET=xWHbCd2vpcO0rltk_WhgA7roZ0c3BRxdS", true)]
     [InlineData("\"RefClientSecret\": \"xWHbCd2vpcO0rltk_WhgA7roZ0c3BRxdS", true)]
-    [InlineData("API_KEY=REDACTED-REDACTED", false)]
+    [InlineData("API_KEY=REDACTED-REDACTED", true)]
     [InlineData("ACCESS_TOKEN=@" + "Microsoft.KeyVault(SecretUri=https://vault.example/secrets/app)", false)]
-    [InlineData("PASSWORD=aaaaaaaaaaaaaaaa", false)]
-    [InlineData("Credentials = credentials;", false)]
+    [InlineData("PASSWORD=aaaaaaaaaaaaaaaa", true)]
+    [InlineData("PASSWORD=letmein1", true)]
+    [InlineData("PASSWORD=$2b$12$abcdefghijklmnopqrstuv", true)]
+    [InlineData("PASSWORD=%21encoded", true)]
+    [InlineData("Credentials = credentials;", true)]
+    [InlineData("publicKeyToken=cc7b13ffcd2ddd51", false)]
+    [InlineData("PUBLIC_KEY_TOKEN=31bf3856ad364e35", false)]
     public void EnvironmentSecretAssignmentValidator_FiltersReferencesAndPlaceholders(string candidate, bool expected)
     {
         Assert.Equal(expected, new EnvironmentSecretAssignmentValidator().Validate(CreateContext(candidate)).IsValid);
+    }
+
+    [Fact]
+    public void EnvironmentSecretAssignmentValidator_LowersConfidenceForWeakValues()
+    {
+        var result = new EnvironmentSecretAssignmentValidator().Validate(CreateContext("PASSWORD=aaaaaaaaaaaaaaaa"));
+
+        Assert.True(result.IsValid);
+        Assert.InRange(result.Confidence, 0.0, 0.49);
     }
 
     [Theory]

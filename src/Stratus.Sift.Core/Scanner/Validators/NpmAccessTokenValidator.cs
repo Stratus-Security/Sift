@@ -23,11 +23,6 @@ public class NpmAccessTokenValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "NPM token body is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(suffix, 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "NPM token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(suffix, 12) ?? ValidWithContextReview(context);
     }
 }

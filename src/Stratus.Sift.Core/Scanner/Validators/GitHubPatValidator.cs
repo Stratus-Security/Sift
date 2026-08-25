@@ -46,11 +46,6 @@ public class GitHubPatValidator : StructuredTokenValidatorBase
             }
         }
 
-        if (LooksLikePlaceholderToken(suffix, 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "GitHub token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(suffix, 12) ?? ValidWithContextReview(context);
     }
 }

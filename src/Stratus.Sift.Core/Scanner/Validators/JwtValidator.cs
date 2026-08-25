@@ -28,22 +28,34 @@ public class JwtValidator : BaseValidator
             return new ValidationResult { IsValid = false, Reason = "JWT segments are not valid base64url" };
         }
 
-        if (!TryParseObject(headerJson, out var header)
-            || !TryParseObject(payloadJson, out var payload))
+        if (!TryParseObject(headerJson, out var header))
         {
-            return new ValidationResult { IsValid = false, Reason = "JWT header or payload is not valid JSON" };
+            return new ValidationResult { IsValid = false, Reason = "JWT header is not a valid JSON object" };
         }
 
-        if (!header.RootElement.TryGetProperty("alg", out var algorithm)
-            || algorithm.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(algorithm.GetString()))
+        using (header)
         {
-            return new ValidationResult { IsValid = false, Reason = "JWT header does not declare an algorithm" };
-        }
+            if (!TryParseObject(payloadJson, out var payload))
+            {
+                return new ValidationResult { IsValid = false, Reason = "JWT payload is not a valid JSON object" };
+            }
 
-        if (!payload.RootElement.EnumerateObject().Any())
-        {
-            return new ValidationResult { IsValid = false, Reason = "JWT payload is empty" };
+            using (payload)
+            {
+                if (!header.RootElement.TryGetProperty("alg", out var algorithm)
+                    || algorithm.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(algorithm.GetString()))
+                {
+                    return new ValidationResult { IsValid = false, Reason = "JWT header does not declare an algorithm" };
+                }
+
+                var algorithmName = algorithm.GetString();
+                var hasSignature = segments[2].Length > 0;
+                if (string.Equals(algorithmName, "none", StringComparison.OrdinalIgnoreCase) == hasSignature)
+                {
+                    return new ValidationResult { IsValid = false, Reason = "JWT signature does not match its declared algorithm" };
+                }
+            }
         }
 
         var contextResult = CheckCommonContextClues(context);

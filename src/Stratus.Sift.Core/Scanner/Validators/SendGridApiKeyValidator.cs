@@ -31,11 +31,8 @@ public class SendGridApiKeyValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "SendGrid API key contains invalid characters" };
         }
 
-        if (LooksLikePlaceholderToken(segments[1], 10) || LooksLikePlaceholderToken(segments[2], 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "SendGrid API key looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(segments[1], 10)
+            ?? CheckPlaceholderClues(segments[2], 12)
+            ?? ValidWithContextReview(context);
     }
 }

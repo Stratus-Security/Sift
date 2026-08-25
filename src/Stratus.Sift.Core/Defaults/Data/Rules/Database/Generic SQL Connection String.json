@@ -1,17 +1,18 @@
 {
   "Name": "Generic SQL Connection String",
-  "Description": "Detects SQL connection strings with credentials (requires 'User ID' or 'Server' context)",
+  "Description": "Detects SQL connection strings containing a server and password in any field order.",
   "Label": "General",
   "Severity": "High",
   "Matches": [
     {
       "Target": "Content",
       "Keywords": [
-        "Password=",
-        "Pwd="
+        "Password",
+        "Pwd"
       ],
       "Patterns": [
-        "(?:User ID|Uid|User|Server|Data Source|Initial Catalog)\\s*=[^;]+\\s*;\\s*(?:Password|Pwd)\\s*=\\s*([^;\"\\r\\n]{1,128})"
+        "(?:Server|Data Source|Host|Addr|Address|Network Address)\\s*=[^;\"\\r\\n]+;(?:[^;\"\\r\\n]*;){0,32}\\s*(?:Password|Pwd)\\s*=\\s*[^;\"\\r\\n]{0,128}",
+        "(?:Password|Pwd)\\s*=\\s*[^;\"\\r\\n]{0,128};(?:[^;\"\\r\\n]*;){0,32}\\s*(?:Server|Data Source|Host|Addr|Address|Network Address)\\s*=\\s*[^;\"\\r\\n]+"
       ],
       "ExtensionProfile": "SourceAndConfig"
     }

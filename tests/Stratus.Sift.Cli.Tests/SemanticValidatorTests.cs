@@ -26,6 +26,17 @@ public class SemanticValidatorTests
         Assert.False(result.IsValid);
     }
 
+    [Theory]
+    [InlineData("YWRtaW46YWRtaW4=")]
+    [InlineData("OnNlY3JldA==")]
+    [InlineData("dXNlcjo=")]
+    public void BasicAuthValidator_RetainsShortOrEmptyPartCredentials(string payload)
+    {
+        var result = new BasicAuthValidator().Validate(CreateContext($"Authorization: Basic {payload}"));
+
+        Assert.True(result.IsValid);
+    }
+
     [Fact]
     public void JwtValidator_AcceptsValidJwt()
     {
@@ -48,6 +59,14 @@ public class SemanticValidatorTests
         Assert.False(result.IsValid);
     }
 
+    [Theory]
+    [InlineData("eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UifQ.")]
+    [InlineData("eyJhbGciOiJub25lIn0.e30.")]
+    public void JwtValidator_AcceptsUnsecuredJwtIncludingEmptyClaims(string jwt)
+    {
+        Assert.True(new JwtValidator().Validate(CreateContext(jwt)).IsValid);
+    }
+
     [Fact]
     public void SqlConnectionStringValidator_AcceptsStructuredConnectionString()
     {
@@ -56,6 +75,15 @@ public class SemanticValidatorTests
         var result = validator.Validate(CreateContext("Server=db.example;User ID=app;Password=S3cret!"));
 
         Assert.True(result.IsValid);
+    }
+
+    [Theory]
+    [InlineData("Server=db;User ID=sa;Database=app;Password=x")]
+    [InlineData("Password=x;Encrypt=True;Server=db;User ID=sa")]
+    [InlineData("Server=db;Password=")]
+    public void SqlConnectionStringValidator_RetainsWeakCredentialsInAnyFieldOrder(string connectionString)
+    {
+        Assert.True(new SqlConnectionStringValidator().Validate(CreateContext(connectionString)).IsValid);
     }
 
     [Fact]
@@ -105,23 +133,31 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void TwilioValidator_RejectsPlaceholderIdentifier()
+    public void TwilioValidator_RejectsPublicIdentifier()
     {
         var validator = new TwilioValidator();
 
-        var result = validator.Validate(CreateContext("AC00000000000000000000000000000000", "TWILIO_ACCOUNT_SID=AC00000000000000000000000000000000", 19));
+        var result = validator.Validate(CreateContext("TWILIO_ACCOUNT_SID=AC00000000000000000000000000000000"));
 
         Assert.False(result.IsValid);
     }
 
     [Fact]
-    public void TwilioValidator_AcceptsStructuredIdentifier()
+    public void TwilioValidator_AcceptsAssignedAuthToken()
     {
         var validator = new TwilioValidator();
 
-        var result = validator.Validate(CreateContext("AC0123456789abcdef0123456789abcdef", "TWILIO_ACCOUNT_SID=AC0123456789abcdef0123456789abcdef", 19));
+        var result = validator.Validate(CreateContext("TWILIO_AUTH_TOKEN=0123456789abcdef0123456789abcdef"));
 
         Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void TwilioValidator_RetainsPlaceholderSecretAtLowConfidence()
+    {
+        var result = new TwilioValidator().Validate(CreateContext("TWILIO_API_SECRET=exampleexampleexample"));
+
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -135,13 +171,13 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void SlackTokenValidator_RejectsPlaceholderSegment()
+    public void SlackTokenValidator_RetainsPlaceholderSegmentAtLowConfidence()
     {
         var validator = new SlackTokenValidator();
 
         var result = validator.Validate(CreateContext("xoxb-123456789012-123456789012-exampleexampleexample"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -155,13 +191,13 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void StripeSecretKeyValidator_RejectsPlaceholderSuffix()
+    public void StripeSecretKeyValidator_RetainsPlaceholderSuffixAtLowConfidence()
     {
         var validator = new StripeSecretKeyValidator();
 
         var result = validator.Validate(CreateContext("sk_test_exampleexampleexampleexample1234"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -175,13 +211,13 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void OpenAiApiKeyValidator_RejectsPlaceholderKey()
+    public void OpenAiApiKeyValidator_RetainsPlaceholderKeyAtLowConfidence()
     {
         var validator = new OpenAiApiKeyValidator();
 
         var result = validator.Validate(CreateContext("sk-proj-exampleexampleexampleexampleexample12"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -195,14 +231,14 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void GitHubPatValidator_RejectsPlaceholderFineGrainedToken()
+    public void GitHubPatValidator_RetainsPlaceholderFineGrainedTokenAtLowConfidence()
     {
         var validator = new GitHubPatValidator();
         var suffix = string.Concat(Enumerable.Repeat("example", 12));
 
         var result = validator.Validate(CreateContext($"github_pat_{suffix}"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -216,13 +252,13 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void GitLabPatValidator_RejectsPlaceholderToken()
+    public void GitLabPatValidator_RetainsPlaceholderTokenAtLowConfidence()
     {
         var validator = new GitLabPatValidator();
 
-        var result = validator.Validate(CreateContext("glpat-exampleexampleexam"));
+        var result = validator.Validate(CreateContext("glpat-exampleexampleexample"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -236,13 +272,13 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void NpmAccessTokenValidator_RejectsRepeatedPlaceholderToken()
+    public void NpmAccessTokenValidator_RetainsRepeatedPlaceholderTokenAtLowConfidence()
     {
         var validator = new NpmAccessTokenValidator();
 
         var result = validator.Validate(CreateContext("npm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -256,13 +292,13 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void SendGridApiKeyValidator_RejectsPlaceholderSegments()
+    public void SendGridApiKeyValidator_RetainsPlaceholderSegmentsAtLowConfidence()
     {
         var validator = new SendGridApiKeyValidator();
 
         var result = validator.Validate(CreateContext("SG.exampleexampleexampleex.placeholderplaceholderplaceholderplaceholder12"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
     }
 
     [Fact]
@@ -296,13 +332,28 @@ public class SemanticValidatorTests
     }
 
     [Fact]
-    public void MailchimpApiKeyValidator_RejectsRepeatedHalfPlaceholder()
+    public void MailchimpApiKeyValidator_AcceptsUs21DataCenter()
+    {
+        var result = new MailchimpApiKeyValidator().Validate(CreateContext("0123456789abcdeffedcba9876543210-us21"));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void MailchimpApiKeyValidator_RetainsRepeatedHalfAtLowConfidence()
     {
         var validator = new MailchimpApiKeyValidator();
 
         var result = validator.Validate(CreateContext("0123456789abcdef0123456789abcdef-us19"));
 
-        Assert.False(result.IsValid);
+        AssertLowConfidence(result);
+    }
+
+    private static void AssertLowConfidence(ValidationResult result)
+    {
+        Assert.True(result.IsValid);
+        Assert.InRange(result.Confidence, 0.0, 0.49);
+        Assert.False(string.IsNullOrWhiteSpace(result.Reason));
     }
 
     private static ValidationContext CreateContext(string candidate, string? fullText = null, int? index = null)

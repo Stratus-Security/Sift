@@ -31,12 +31,7 @@ public sealed class VaultTokenValidator : StructuredTokenValidatorBase
             return Invalid("Legacy Vault token lacks Vault context");
         }
 
-        if (LooksLikePlaceholderToken(payload, 12))
-        {
-            return Invalid("Vault token looks like a placeholder");
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(payload, 12) ?? ValidWithContextReview(context);
     }
 
     private static bool HasVaultContext(ValidationContext context)
@@ -71,12 +66,7 @@ public sealed class TerraformTokenValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "Terraform token is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(candidate, 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "Terraform token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(candidate, 12) ?? ValidWithContextReview(context);
     }
 }
 
@@ -107,7 +97,12 @@ public sealed class CredentialedServiceUriValidator : BaseValidator
         var password = Uri.UnescapeDataString(uri.UserInfo[(separator + 1)..]);
         if (password.Length < 4 || LooksLikeRepeatedPlaceholder(password))
         {
-            return new ValidationResult { IsValid = false, Reason = "Service URI password is not credible" };
+            return new ValidationResult
+            {
+                IsValid = true,
+                Confidence = 0.25,
+                Reason = "Service URI contains a weak-looking password"
+            };
         }
 
         return CheckCommonContextClues(context) ?? new ValidationResult { IsValid = true, Confidence = 1.0 };
@@ -141,17 +136,22 @@ public sealed class BearerTokenValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "Bearer token is handled by the JWT detector" };
         }
 
-        if (token.Length is < 20 or > 4096
+        if (token.Length is < 1 or > 4096
             || token.Any(static c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or '~' or '+' or '/' or '=')))
         {
             return new ValidationResult { IsValid = false, Reason = "Bearer token is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(token, 12))
+        if (token.Length < 12)
         {
-            return new ValidationResult { IsValid = false, Reason = "Bearer token looks like a placeholder" };
+            return new ValidationResult
+            {
+                IsValid = true,
+                Confidence = 0.35,
+                Reason = "Bearer token is unusually short but may be a weak credential"
+            };
         }
 
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(token, 12) ?? ValidWithContextReview(context);
     }
 }

@@ -34,11 +34,6 @@ public class TelegramBotTokenValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "Telegram bot secret is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(secret, 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "Telegram bot token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(secret, 12) ?? ValidWithContextReview(context);
     }
 }

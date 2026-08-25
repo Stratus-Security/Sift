@@ -25,12 +25,7 @@ public class StripeSecretKeyValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "Stripe key body is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(suffix, 12))
-        {
-            return new ValidationResult { IsValid = false, Reason = "Stripe key looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(suffix, 12) ?? ValidWithContextReview(context);
     }
 
     private static bool TryParseKey(string candidate, out string suffix)

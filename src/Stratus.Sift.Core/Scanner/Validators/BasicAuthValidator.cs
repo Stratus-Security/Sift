@@ -38,9 +38,19 @@ public class BasicAuthValidator : BaseValidator
         }
 
         var separatorIndex = decoded.IndexOf(':');
-        if (separatorIndex <= 0 || separatorIndex == decoded.Length - 1)
+        if (separatorIndex < 0)
         {
             return new ValidationResult { IsValid = false, Reason = "Decoded payload is not in username:password format" };
+        }
+
+        if (separatorIndex == 0 || separatorIndex == decoded.Length - 1)
+        {
+            return new ValidationResult
+            {
+                IsValid = true,
+                Confidence = 0.4,
+                Reason = "Basic auth contains an empty username or password"
+            };
         }
 
         var contextResult = CheckCommonContextClues(context, ExampleCredentialIndicators);

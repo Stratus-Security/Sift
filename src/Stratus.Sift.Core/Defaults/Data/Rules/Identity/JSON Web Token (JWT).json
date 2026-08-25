@@ -1,6 +1,6 @@
 {
   "Name": "JSON Web Token (JWT)",
-  "Description": "Detects hardcoded JWTs (Header.Payload.Signature structure)",
+  "Description": "Detects signed and unsecured compact JSON Web Tokens.",
   "Label": "General",
   "Severity": "High",
   "Matches": [
@@ -11,7 +11,7 @@
         "eyJ"
       ],
       "Patterns": [
-        "\\beyJ[a-zA-Z0-9\\-_]+\\.[a-zA-Z0-9\\-_]+\\.[a-zA-Z0-9\\-_]{20,}\\b"
+        "(?<![A-Za-z0-9_-])eyJ[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]*(?![A-Za-z0-9_-])"
       ],
       "ExtensionProfile": "SourceAndConfig"
     }

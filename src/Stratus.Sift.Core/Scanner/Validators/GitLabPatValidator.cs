@@ -23,11 +23,6 @@ public class GitLabPatValidator : StructuredTokenValidatorBase
             return new ValidationResult { IsValid = false, Reason = "GitLab token body is malformed" };
         }
 
-        if (LooksLikePlaceholderToken(suffix, 10))
-        {
-            return new ValidationResult { IsValid = false, Reason = "GitLab token looks like a placeholder" };
-        }
-
-        return ValidWithContextReview(context);
+        return CheckPlaceholderClues(suffix, 10) ?? ValidWithContextReview(context);
     }
 }

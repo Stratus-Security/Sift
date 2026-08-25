@@ -39,9 +39,10 @@ public class SlackTokenValidator : StructuredTokenValidatorBase
                 return new ValidationResult { IsValid = false, Reason = "Slack token contains invalid characters" };
             }
 
-            if (LooksLikePlaceholderToken(segment))
+            var placeholderResult = CheckPlaceholderClues(segment);
+            if (placeholderResult is not null)
             {
-                return new ValidationResult { IsValid = false, Reason = "Slack token looks like a placeholder" };
+                return placeholderResult;
             }
         }
 

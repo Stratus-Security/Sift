@@ -26,16 +26,38 @@ public class SqlConnectionStringValidator : BaseValidator
             return new ValidationResult { IsValid = false, Reason = "Malformed connection string" };
         }
 
-        if (!TryGetValue(builder, out var password, "Password", "Pwd")
-            || string.IsNullOrWhiteSpace(password))
+        var hasPassword = TryGetValue(builder, out var password, "Password", "Pwd");
+        if (!hasPassword && !ContainsEmptyValue(candidate, "Password", "Pwd"))
         {
             return new ValidationResult { IsValid = false, Reason = "Connection string does not contain a password value" };
         }
+
+        password ??= string.Empty;
 
         if (!TryGetValue(builder, out var host, "Server", "Data Source", "Host", "Addr", "Address", "Network Address")
             || string.IsNullOrWhiteSpace(host))
         {
             return new ValidationResult { IsValid = false, Reason = "Connection string does not contain a server or host value" };
+        }
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            return new ValidationResult
+            {
+                IsValid = true,
+                Confidence = 0.25,
+                Reason = "Connection string contains an empty password"
+            };
+        }
+
+        if (password.Length < 4 || LooksLikeRepeatedPlaceholder(password))
+        {
+            return new ValidationResult
+            {
+                IsValid = true,
+                Confidence = 0.25,
+                Reason = "Connection string contains a weak-looking password"
+            };
         }
 
         var contextResult = CheckCommonContextClues(context);
@@ -59,6 +81,26 @@ public class SqlConnectionStringValidator : BaseValidator
         }
 
         value = null;
+        return false;
+    }
+
+    private static bool ContainsEmptyValue(string connectionString, params string[] keys)
+    {
+        foreach (var segment in connectionString.Split(';', StringSplitOptions.TrimEntries))
+        {
+            var separator = segment.IndexOf('=');
+            if (separator <= 0 || !string.IsNullOrWhiteSpace(segment[(separator + 1)..]))
+            {
+                continue;
+            }
+
+            var key = segment[..separator].Trim();
+            if (keys.Any(candidate => key.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 }

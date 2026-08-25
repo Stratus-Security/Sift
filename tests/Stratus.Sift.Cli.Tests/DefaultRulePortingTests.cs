@@ -326,9 +326,9 @@ public class DefaultRulePortingTests : IDisposable
 
     [Theory]
     [InlineData("API_KEY: REDACTED-REDACTED")]
-    [InlineData("ACCESS_TOKEN: @" + "Microsoft.KeyVault(SecretUri=https://vault.example/secrets/app)")]
     [InlineData("PASSWORD: aaaaaaaaaaaaaaaa")]
-    public async Task DefaultConfiguration_ShouldIgnoreEnvironmentSecretPlaceholders(string content)
+    [InlineData("PASSWORD: letmein1")]
+    public async Task DefaultConfiguration_ShouldRetainWeakEnvironmentSecretsAtLowConfidence(string content)
     {
         var scanner = CreateScannerWithAdditionalValidators();
         var (classifiers, policies) = await LoadDefaultConfigurationAsync();
@@ -337,7 +337,69 @@ public class DefaultRulePortingTests : IDisposable
 
         var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
 
+        var issue = Assert.Single(issues, issue => issue.ClassifierName == "Environment Secret Assignment");
+        Assert.InRange(issue.Confidence, 0.0, 0.49);
+    }
+
+    [Fact]
+    public async Task DefaultConfiguration_ShouldRetainDollarPrefixedPasswordHash()
+    {
+        var scanner = CreateScannerWithAdditionalValidators();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "settings.yml");
+        await File.WriteAllTextAsync(filePath, "PASSWORD: $2b$12$abcdefghijklmnopqrstuv");
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.Contains(issues, issue => issue.ClassifierName == "Environment Secret Assignment");
+    }
+
+    [Fact]
+    public async Task DefaultConfiguration_ShouldIgnoreIndirectEnvironmentSecretReference()
+    {
+        var scanner = CreateScannerWithAdditionalValidators();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "settings.yml");
+        await File.WriteAllTextAsync(filePath, "ACCESS_TOKEN: @Microsoft.KeyVault(SecretUri=https://vault.example/secrets/app)");
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
         Assert.DoesNotContain(issues, issue => issue.ClassifierName == "Environment Secret Assignment");
+    }
+
+    [Fact]
+    public async Task DefaultConfiguration_ShouldIgnoreDotNetAssemblyPublicKeyTokens()
+    {
+        var scanner = CreateScannerWithAdditionalValidators();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "application.dll-help.xml");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+              <dependentAssembly>
+                <assemblyIdentity name="System.Buffers" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+                <bindingRedirect oldVersion="0.0.0.0-4.0.3.0" newVersion="4.0.3.0" />
+              </dependentAssembly>
+            </assemblyBinding>
+            """);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.DoesNotContain(issues, issue => issue.ClassifierName == "Environment Secret Assignment");
+    }
+
+    [Fact]
+    public async Task DefaultConfiguration_ShouldNotTreatTwilioSidAsCredential()
+    {
+        var scanner = CreateScannerWithAdditionalValidators();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "twilio.env");
+        await File.WriteAllTextAsync(filePath, "TWILIO_ACCOUNT_SID=AC0123456789abcdef0123456789abcdef");
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.DoesNotContain(issues, issue => issue.ClassifierName == "Twilio Credentials");
     }
 
     [Fact]
@@ -718,7 +780,14 @@ public class DefaultRulePortingTests : IDisposable
             ["vault.hcl"] = ("VAULT_TOKEN=hvs." + BuildToken(30), "Vault Token"),
             ["terraform.rc"] = ("token=tftk." + BuildToken(30), "HCP Terraform Token"),
             ["redis.go"] = ("redis://app:S3cret-value@stratus.security:6379/0", "Credentialed Service URI"),
-            ["bearer.md"] = ("Authorization: Bearer Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0", "HTTP Bearer Token")
+            ["weak-redis.go"] = ("redis://admin:x@stratus.security", "Credentialed Service URI"),
+            ["bearer.md"] = ("Authorization: Bearer Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0", "HTTP Bearer Token"),
+            ["short-bearer.md"] = ("Authorization: Bearer abc123", "HTTP Bearer Token"),
+            ["basic.txt"] = ("Authorization: Basic YWRtaW46YWRtaW4=", "HTTP Basic Auth Header"),
+            ["jwt.txt"] = ("eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UifQ.", "JSON Web Token (JWT)"),
+            ["mailchimp.env"] = ("MAILCHIMP_API_KEY=0123456789abcdeffedcba9876543210-us21", "Mailchimp API Key"),
+            ["twilio.env"] = ("TWILIO_AUTH_TOKEN=0123456789abcdef0123456789abcdef", "Twilio Credentials"),
+            ["database.config"] = ("Server=db;User ID=sa;Database=app;Password=x", "Generic SQL Connection String")
         };
 
         foreach (var (fileName, expectation) in cases)
@@ -860,6 +929,11 @@ public class DefaultRulePortingTests : IDisposable
             new TerraformTokenValidator(),
             new CredentialedServiceUriValidator(),
             new BearerTokenValidator(),
+            new BasicAuthValidator(),
+            new JwtValidator(),
+            new MailchimpApiKeyValidator(),
+            new SqlConnectionStringValidator(),
+            new TwilioValidator(),
             new EnvironmentSecretAssignmentValidator(),
             new PowerShellCredentialUsageValidator()
         ];

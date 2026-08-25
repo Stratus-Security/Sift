@@ -5,48 +5,53 @@ namespace Stratus.Sift.Scanner.Validators;
 
 public class TwilioValidator : BaseValidator
 {
-    private static readonly HashSet<string> TwilioIndicators = new(CommonTestIndicators, StringComparer.OrdinalIgnoreCase)
-    {
-        "twilio",
-        "accountsid",
-        "apikeysid",
-        "authtoken"
-    };
-
     public override string Name => ClassifierValidatorCatalog.Twilio;
 
     public override ValidationResult Validate(ValidationContext context)
     {
         var candidate = context.Candidate?.Trim();
-        if (string.IsNullOrWhiteSpace(candidate) || candidate.Length != 34)
+        if (string.IsNullOrWhiteSpace(candidate))
         {
-            return new ValidationResult { IsValid = false, Reason = "Twilio identifier must be 34 characters" };
+            return Invalid("Twilio credential assignment is empty");
         }
 
-        var prefix = candidate[..2];
-        if (!prefix.Equals("AC", StringComparison.OrdinalIgnoreCase)
-            && !prefix.Equals("SK", StringComparison.OrdinalIgnoreCase))
+        var delimiter = candidate.IndexOfAny(['=', ':']);
+        if (delimiter <= 0 || delimiter == candidate.Length - 1)
         {
-            return new ValidationResult { IsValid = false, Reason = "Unsupported Twilio identifier prefix" };
+            return Invalid("Twilio credential assignment is malformed");
         }
 
-        var suffix = candidate[2..];
-        if (!suffix.All(Uri.IsHexDigit))
+        var name = candidate[..delimiter].Trim().Trim('"', '\'', '`');
+        var normalizedName = new string(name.Where(char.IsAsciiLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        if (normalizedName is not "twilioauthtoken" and not "twilioapisecret")
         {
-            return new ValidationResult { IsValid = false, Reason = "Twilio identifier suffix must be hexadecimal" };
+            return Invalid("Candidate is not a Twilio Auth Token or API Secret assignment");
         }
 
-        if (LooksLikeRepeatedPlaceholder(suffix))
+        var value = candidate[(delimiter + 1)..]
+            .Trim()
+            .TrimEnd(';', ',')
+            .Trim('"', '\'', '`');
+        if (value.Length is < 1 or > 4096 || value.Any(char.IsWhiteSpace))
         {
-            return new ValidationResult { IsValid = false, Reason = "Twilio identifier looks like a placeholder" };
+            return Invalid("Twilio secret value is malformed");
         }
 
-        var contextResult = CheckCommonContextClues(context, TwilioIndicators);
-        if (contextResult != null)
+        if (LooksLikeRepeatedPlaceholder(value)
+            || value.Contains("example", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("placeholder", StringComparison.OrdinalIgnoreCase))
         {
-            return contextResult;
+            return new ValidationResult
+            {
+                IsValid = true,
+                Confidence = 0.15,
+                Reason = "Twilio secret resembles a placeholder or weak value"
+            };
         }
 
-        return new ValidationResult { IsValid = true, Confidence = 1.0 };
+        return CheckCommonContextClues(context)
+            ?? new ValidationResult { IsValid = true, Confidence = 1.0 };
     }
+
+    private static ValidationResult Invalid(string reason) => new() { IsValid = false, Reason = reason };
 }
