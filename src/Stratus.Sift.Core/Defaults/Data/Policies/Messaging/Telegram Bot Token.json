@@ -1,7 +1,0 @@
-{
-    "Name":  "Telegram Bot Token",
-    "Description":  "Default policy for Telegram Bot Token",
-    "StopOnMatch":  false,
-    "Severity":  "High",
-    "Active":  true
-}

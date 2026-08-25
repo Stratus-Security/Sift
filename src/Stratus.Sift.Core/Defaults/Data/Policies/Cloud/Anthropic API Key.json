@@ -1,7 +1,0 @@
-{
-    "Name": "Anthropic API Key",
-    "Description": "Default policy for Anthropic API Key",
-    "Severity": "Critical",
-    "StopOnMatch": false,
-    "Active": true
-}

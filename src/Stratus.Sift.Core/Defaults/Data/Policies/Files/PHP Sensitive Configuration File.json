@@ -1,7 +1,0 @@
-{
-    "Name": "PHP Sensitive Configuration File",
-    "Description": "Default policy for PHP Sensitive Configuration File",
-    "Severity": "High",
-    "StopOnMatch": false,
-    "Active": true
-}

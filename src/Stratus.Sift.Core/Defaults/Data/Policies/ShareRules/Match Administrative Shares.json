@@ -1,7 +1,0 @@
-{
-    "Name":  "Match Administrative Shares",
-    "Description":  "Default policy for Match Administrative Shares",
-    "StopOnMatch":  false,
-    "Severity":  "Low",
-    "Active":  true
-}

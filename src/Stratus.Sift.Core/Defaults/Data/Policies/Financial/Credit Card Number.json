@@ -1,7 +1,0 @@
-{
-    "Name":  "Credit Card Number",
-    "Description":  "Default policy for Credit Card Number",
-    "StopOnMatch":  false,
-    "Severity":  "High",
-    "Active":  true
-}

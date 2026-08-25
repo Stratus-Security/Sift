@@ -1,7 +1,0 @@
-{
-    "Name":  "NPM Access Token",
-    "Description":  "Default policy for NPM Access Token",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

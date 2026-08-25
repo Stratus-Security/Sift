@@ -1,0 +1,20 @@
+{
+  "Name": "Azure SAS Token",
+  "Description": "Detects Azure Shared Access Signature (SAS) tokens",
+  "Label": "General",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "sig=",
+        "sv="
+      ],
+      "Patterns": [
+        "(?<=[?&]sig=)[a-zA-Z0-9%+\\/=]{43,}"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "AzureSas"
+}

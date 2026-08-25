@@ -1,0 +1,23 @@
+{
+  "Name": "Terraform State or Plan Artifact",
+  "Description": "Detects Terraform state, state backups, and saved plans, which may retain plaintext secrets and sensitive infrastructure values.",
+  "Label": "DevOps",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".tfstate",
+        ".tfplan"
+      ]
+    },
+    {
+      "Target": "FileName",
+      "Patterns": [
+        "^(?:tfplan|.*\\.tfplan|.*\\.tfstate\\.backup)$"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

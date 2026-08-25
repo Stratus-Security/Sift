@@ -1,7 +1,0 @@
-{
-  "Name": "Passport Number (Contextual)",
-  "Description": "Opt-in contextual handling for passport identifiers.",
-  "Severity": "Critical",
-  "StopOnMatch": false,
-  "Active": false
-}

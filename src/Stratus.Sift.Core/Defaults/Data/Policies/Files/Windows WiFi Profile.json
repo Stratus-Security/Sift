@@ -1,7 +1,0 @@
-{
-    "Name":  "Windows WiFi Profile",
-    "Description":  "Default policy for Windows WiFi Profile",
-    "StopOnMatch":  false,
-    "Severity":  "High",
-    "Active":  true
-}

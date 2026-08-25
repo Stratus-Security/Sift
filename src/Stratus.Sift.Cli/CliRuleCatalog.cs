@@ -9,7 +9,10 @@ namespace Stratus.Sift.Cli;
 internal sealed record CliRuleCatalog(
     List<Classifier> Classifiers,
     List<Policy> Policies,
-    List<IgnoreRule> IgnoreRules);
+    List<IgnoreRule> IgnoreRules)
+{
+    public bool UsesLegacyPolicies { get; set; }
+}
 
 internal static class CliRuleCatalogLoader
 {
@@ -49,7 +52,14 @@ internal static class CliRuleCatalogLoader
             }
         }
 
-        DataPolicyConventions.LinkPoliciesToClassifiers(catalog.Classifiers, catalog.Policies);
+        FinalizeCatalog(catalog, addPoliciesForUnlinkedLegacyRules: true);
+        if (catalog.UsesLegacyPolicies)
+        {
+            logger.LogWarning(
+                "This rules directory uses the legacy classifier and policy format. " +
+                "It remains supported for compatibility; new rules should use the unified SiftingRule format.");
+        }
+
         return catalog.Classifiers.Count == 0
             ? await LoadBundledDefaultsAsync(logger, cancellationToken)
             : catalog;
@@ -83,7 +93,7 @@ internal static class CliRuleCatalogLoader
             }
         }
 
-        DataPolicyConventions.LinkPoliciesToClassifiers(catalog.Classifiers, catalog.Policies);
+        FinalizeCatalog(catalog, addPoliciesForUnlinkedLegacyRules: false);
         if (catalog.Classifiers.Count == 0)
         {
             throw new InvalidOperationException("The scanner has no usable classifier definitions.");
@@ -106,27 +116,37 @@ internal static class CliRuleCatalogLoader
 
         foreach (var element in elements)
         {
-            if (element.TryGetProperty("patterns", out _)
-                || element.TryGetProperty("Patterns", out _)
-                || element.TryGetProperty("label", out _)
-                || element.TryGetProperty("Label", out _))
-            {
-                var classifier = element.Deserialize(CliJsonContext.Default.Classifier);
-                if (classifier is not null && !string.IsNullOrWhiteSpace(classifier.Name))
-                {
-                    catalog.Classifiers.Add(classifier);
-                }
-
-                continue;
-            }
-
-            if (element.TryGetProperty("matchTarget", out _)
-                || element.TryGetProperty("MatchTarget", out _))
+            if (HasProperty(element, "matchTarget"))
             {
                 var ignoreRule = element.Deserialize(CliJsonContext.Default.IgnoreRule);
                 if (ignoreRule is not null)
                 {
                     catalog.IgnoreRules.Add(ignoreRule);
+                }
+
+                continue;
+            }
+
+            if (IsUnifiedRule(element))
+            {
+                var rule = element.Deserialize(CliJsonContext.Default.SiftingRule);
+                if (rule is null)
+                {
+                    continue;
+                }
+
+                var materialized = SiftingRuleMaterializer.Materialize(rule);
+                catalog.Classifiers.Add(materialized.Classifier);
+                catalog.Policies.AddRange(materialized.Policies);
+                continue;
+            }
+
+            if (HasProperty(element, "patterns") || HasProperty(element, "label"))
+            {
+                var classifier = element.Deserialize(CliJsonContext.Default.Classifier);
+                if (classifier is not null && !string.IsNullOrWhiteSpace(classifier.Name))
+                {
+                    catalog.Classifiers.Add(classifier);
                 }
 
                 continue;
@@ -150,6 +170,65 @@ internal static class CliRuleCatalogLoader
             }
 
             catalog.Policies.Add(policy);
+            catalog.UsesLegacyPolicies = true;
         }
+    }
+
+    private static bool IsUnifiedRule(JsonElement element)
+    {
+        var hasDetectionDefinition = HasProperty(element, "matches")
+            || HasProperty(element, "patterns")
+            || HasProperty(element, "label")
+            || HasProperty(element, "subRules");
+
+        return hasDetectionDefinition
+            && (HasProperty(element, "enabled")
+            || HasProperty(element, "reportFinding")
+            || HasProperty(element, "findingName")
+            || HasProperty(element, "severity")
+            || HasProperty(element, "subRules")
+            || HasProperty(element, "minMatchCount")
+            || HasProperty(element, "includePaths")
+            || HasProperty(element, "excludePaths")
+            || HasProperty(element, "stopOnMatch"));
+    }
+
+    private static bool HasProperty(JsonElement element, string name)
+    {
+        return element.EnumerateObject().Any(
+            property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void FinalizeCatalog(CliRuleCatalog catalog, bool addPoliciesForUnlinkedLegacyRules)
+    {
+        DataPolicyConventions.LinkPoliciesToClassifiers(catalog.Classifiers, catalog.Policies);
+
+        if (!addPoliciesForUnlinkedLegacyRules)
+        {
+            return;
+        }
+
+        foreach (var classifier in DataPolicyConventions.EnumerateClassifiers(catalog.Classifiers))
+        {
+            if (classifier.SubClassifiers.Count > 0 || classifier.PolicyClassifiers.Count > 0)
+            {
+                continue;
+            }
+
+            var generated = SiftingRuleMaterializer.Materialize(new SiftingRule
+            {
+                Enabled = classifier.IsEnabled,
+                Name = classifier.Name,
+                Description = classifier.Description,
+                Label = classifier.Label,
+                Severity = Severity.Medium
+            }).Policies.Single();
+
+            generated.PolicyClassifiers.Clear();
+            generated.ClassifierNames = [classifier.Name];
+            catalog.Policies.Add(generated);
+        }
+
+        DataPolicyConventions.LinkPoliciesToClassifiers(catalog.Classifiers, catalog.Policies);
     }
 }

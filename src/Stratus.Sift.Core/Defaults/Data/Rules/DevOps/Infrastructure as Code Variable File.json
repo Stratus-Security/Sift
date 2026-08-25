@@ -1,0 +1,19 @@
+{
+  "Name": "Infrastructure as Code Variable File",
+  "Description": "Detects infrastructure-as-code variable and cloud deployment config files that often contain secrets.",
+  "Label": "DevOps",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".cscfg",
+        ".ucs",
+        ".bicepparam",
+        ".tfvars"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

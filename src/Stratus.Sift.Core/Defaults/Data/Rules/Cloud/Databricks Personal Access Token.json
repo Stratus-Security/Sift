@@ -1,0 +1,19 @@
+{
+  "Name": "Databricks Personal Access Token",
+  "Description": "Detects Databricks personal access tokens with the dapi prefix.",
+  "Label": "General",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "dapi"
+      ],
+      "Patterns": [
+        "\\bdapi[a-zA-Z0-9]{32}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

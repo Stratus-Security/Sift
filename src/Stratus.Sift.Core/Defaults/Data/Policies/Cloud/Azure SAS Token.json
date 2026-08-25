@@ -1,7 +1,0 @@
-{
-    "Name":  "Azure SAS Token",
-    "Description":  "Default policy for Azure SAS Token",
-    "StopOnMatch":  false,
-    "Severity":  "High",
-    "Active":  true
-}

@@ -1,7 +1,0 @@
-{
-    "Name": "Memory Dump Artifact",
-    "Description": "Default policy for Memory Dump Artifact",
-    "Severity": "Critical",
-    "StopOnMatch": false,
-    "Active": true
-}

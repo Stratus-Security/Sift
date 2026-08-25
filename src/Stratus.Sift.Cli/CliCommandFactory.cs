@@ -746,7 +746,7 @@ internal static class CliCommandFactory
 
         var rulesOption = new Option<string>("--rules")
         {
-            Description = "Path to a folder containing classifier/policy files (JSON). If not provided, bundled defaults are used."
+            Description = "Path to a folder containing sifting rules (JSON). If not provided, bundled defaults are used."
         };
         rulesOption.Aliases.Add("-r");
 
@@ -1113,7 +1113,7 @@ internal static class CliCommandFactory
 
         var rulesOption = new Option<string>("--rules")
         {
-            Description = "Path to a folder containing classifier/policy files (JSON). If not provided, bundled defaults are used."
+            Description = "Path to a folder containing sifting rules (JSON). If not provided, bundled defaults are used."
         };
         rulesOption.Aliases.Add("-r");
 

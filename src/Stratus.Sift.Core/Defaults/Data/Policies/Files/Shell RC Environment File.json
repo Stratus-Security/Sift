@@ -1,7 +1,0 @@
-{
-    "Name": "Shell RC / Environment File",
-    "Description": "Default policy for Shell RC / Environment File",
-    "Severity": "Low",
-    "StopOnMatch": false,
-    "Active": true
-}

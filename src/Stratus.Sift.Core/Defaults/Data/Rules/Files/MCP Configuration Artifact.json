@@ -1,0 +1,30 @@
+{
+  "Name": "MCP Configuration Artifact",
+  "Description": "Detects Model Context Protocol configuration files that may expose command arguments, internal service locations, and server credentials.",
+  "Label": "Files",
+  "Severity": "Medium",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        ".claude.json",
+        ".mcp.json",
+        "claude_desktop_config.json",
+        "cline_mcp_settings.json",
+        "mcp.json",
+        "mcp.yaml",
+        "mcp.yml",
+        "mcp_config.json",
+        "mcp_settings.json"
+      ]
+    },
+    {
+      "Target": "DirectoryPath",
+      "Patterns": [
+        "[\\\\/]\\.gemini[\\\\/]settings\\.json$"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

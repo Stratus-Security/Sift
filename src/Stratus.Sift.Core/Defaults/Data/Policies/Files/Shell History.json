@@ -1,7 +1,0 @@
-{
-    "Name": "Shell History",
-    "Description": "Default policy for Shell History",
-    "Severity": "Medium",
-    "StopOnMatch": false,
-    "Active": true
-}

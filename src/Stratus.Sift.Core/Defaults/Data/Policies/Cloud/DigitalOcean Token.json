@@ -1,7 +1,0 @@
-{
-    "Name":  "DigitalOcean Token",
-    "Description":  "Default policy for DigitalOcean Token",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

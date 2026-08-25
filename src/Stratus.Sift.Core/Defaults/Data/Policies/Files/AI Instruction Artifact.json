@@ -1,7 +1,0 @@
-{
-  "Name": "AI Instruction Artifact",
-  "Description": "AI instructions and prompt artifacts can expose internal architecture, workflows, source context, or sensitive operational guidance.",
-  "Severity": "Low",
-  "StopOnMatch": false,
-  "Active": true
-}

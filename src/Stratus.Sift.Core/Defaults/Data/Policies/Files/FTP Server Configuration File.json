@@ -1,7 +1,0 @@
-{
-    "Name": "FTP Server Configuration File",
-    "Description": "Default policy for FTP Server Configuration File",
-    "Severity": "High",
-    "StopOnMatch": false,
-    "Active": true
-}

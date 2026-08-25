@@ -1,7 +1,0 @@
-{
-    "Name":  "Slack Token (Generic)",
-    "Description":  "Default policy for Slack Token (Generic)",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

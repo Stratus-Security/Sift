@@ -1,8 +1,0 @@
-{
-    "Name": "HTTP Basic Auth Header",
-    "Description": "Default policy for HTTP Basic Auth Header",
-    "Domain": "Data",
-    "StopOnMatch": false,
-    "Severity": "High",
-    "Active": true
-}

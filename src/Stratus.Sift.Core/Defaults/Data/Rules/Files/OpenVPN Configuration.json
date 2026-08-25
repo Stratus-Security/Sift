@@ -1,0 +1,23 @@
+{
+  "Name": "OpenVPN Configuration",
+  "Description": "Detects OpenVPN config files containing embedded private keys",
+  "Label": "General",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "<key>",
+        "-----BEGIN PRIVATE KEY-----"
+      ],
+      "Patterns": [
+        "<key>\\s*-----BEGIN.*?PRIVATE KEY-----"
+      ],
+      "ExtensionProfile": "SourceAndConfig",
+      "IncludedExtensions": [
+        ".ovpn"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

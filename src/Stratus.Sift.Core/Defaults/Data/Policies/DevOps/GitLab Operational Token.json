@@ -1,7 +1,0 @@
-{
-  "Name": "GitLab Operational Token",
-  "Description": "GitLab operational tokens can control deployments, runners, jobs, agents, feeds, or administrative integrations.",
-  "Severity": "Critical",
-  "StopOnMatch": false,
-  "Active": true
-}

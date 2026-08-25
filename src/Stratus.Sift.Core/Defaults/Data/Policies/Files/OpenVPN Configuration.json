@@ -1,7 +1,0 @@
-{
-    "Name":  "OpenVPN Configuration",
-    "Description":  "Default policy for OpenVPN Configuration",
-    "StopOnMatch":  false,
-    "Severity":  "High",
-    "Active":  true
-}

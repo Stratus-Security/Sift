@@ -1,7 +1,0 @@
-{
-    "Name": "Database File Artifact",
-    "Description": "Default policy for Database File Artifact",
-    "Severity": "Medium",
-    "StopOnMatch": false,
-    "Active": true
-}

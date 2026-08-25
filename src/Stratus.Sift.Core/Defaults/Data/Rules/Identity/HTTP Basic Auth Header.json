@@ -1,0 +1,20 @@
+{
+  "Name": "HTTP Basic Auth Header",
+  "Description": "Detects hardcoded HTTP Basic Authentication headers (Base64 encoded credentials)",
+  "Label": "General",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "Authorization: Basic",
+        "Authorization:Basic"
+      ],
+      "Patterns": [
+        "Authorization:\\s*Basic\\s*[a-zA-Z0-9+/=]{20,}"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "BasicAuth"
+}

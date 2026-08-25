@@ -1,0 +1,20 @@
+{
+  "Name": "GitLab Personal Access Token",
+  "Description": "Detects GitLab Personal Access Tokens (glpat- prefix)",
+  "Label": "General",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "glpat-"
+      ],
+      "Patterns": [
+        "(?<![0-9a-zA-Z_-])glpat-[0-9a-zA-Z_-]{20,255}(?![0-9a-zA-Z_-])"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "GitLabPat"
+}

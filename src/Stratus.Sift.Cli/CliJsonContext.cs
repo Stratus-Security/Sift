@@ -11,6 +11,7 @@ namespace Stratus.Sift.Cli;
 [JsonSerializable(typeof(Classifier))]
 [JsonSerializable(typeof(Policy))]
 [JsonSerializable(typeof(IgnoreRule))]
+[JsonSerializable(typeof(SiftingRule))]
 [JsonSerializable(typeof(CliJsonOutputDocument))]
 [JsonSerializable(typeof(CliOutputEventRecord))]
 [JsonSerializable(typeof(CliOutputFindingRecord))]

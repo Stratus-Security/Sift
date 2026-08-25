@@ -1,7 +1,0 @@
-{
-  "Name": "Docker Access Token",
-  "Description": "Docker access tokens may permit access to private images or modification of published artifacts.",
-  "Severity": "Critical",
-  "StopOnMatch": false,
-  "Active": true
-}

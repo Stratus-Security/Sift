@@ -1,0 +1,16 @@
+{
+  "Name": "HTTP Capture Artifact",
+  "Description": "Detects HTTP Archive captures, which commonly retain request headers, cookies, tokens, and response data.",
+  "Label": "Files",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".har"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

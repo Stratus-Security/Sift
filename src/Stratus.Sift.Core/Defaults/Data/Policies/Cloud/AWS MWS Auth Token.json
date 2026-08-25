@@ -1,7 +1,0 @@
-{
-    "Name":  "AWS MWS Auth Token",
-    "Description":  "Default policy for AWS MWS Auth Token",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

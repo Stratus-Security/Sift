@@ -65,7 +65,7 @@ Options:
   --ollama-model <ollama-model>                 Ollama model to use for classifier validation. If omitted with --llm-validate, an interactive prompt is used when possible.
   --llm-timeout-seconds <llm-timeout-seconds>   Timeout for each Ollama validation request in seconds. [default: 20]
   --snaffler, --snaffler-mode                   Render console and CLI text output in Snaffler's logging style.
-  -r, --rules <rules>                           Path to a folder containing classifier/policy files (JSON). If not provided, bundled defaults are used.
+  -r, --rules <rules>                           Path to a folder containing sifting rules (JSON). If not provided, bundled defaults are used.
   -o, --output <output>                         Write scan output to a file. Resumed scans append; new scans replace it.
   -f, --output-format <output-format>           Output file format. Supported values: cli, json.
   --resume                                      Continue from durable checkpoints saved by an earlier scan with the same target, credentials, rules, and scan settings.
@@ -174,3 +174,183 @@ Check downloaded files against [SHA256SUMS.txt](https://github.com/Stratus-Secur
 Sift is licensed under [AGPL-3.0-only](LICENSE). Report security problems through [SECURITY.md](SECURITY.md) and read [CONTRIBUTING.md](CONTRIBUTING.md) before sending a change.
 
 🪲 If there's any problems, please feel free to open an issue (or PR!) 🪲
+
+## Sifting rules
+
+Sift uses two kinds of JSON rule:
+
+- A **sifting rule** describes what to find and how to report it.
+- An **ignore rule** skips known noise before Sift opens or scans it.
+
+The bundled catalogue lives under [`src/Stratus.Sift.Core/Defaults/Data`](src/Stratus.Sift.Core/Defaults/Data). It is usually easiest to copy a nearby example and change it.
+
+Pass a rule directory to any scan command with `--rules`:
+
+```powershell
+.\sift.exe local --path C:\Review --rules .\my-rules
+```
+
+Sift reads every `.json` file below that directory. A file may contain one rule or an array of rules. File and folder names are only for organisation. Comments, trailing commas and case-insensitive property names are accepted.
+
+The custom directory is the complete catalogue for that scan. It replaces the bundled rules rather than adding to them. Include every sifting rule and ignore rule that you want to use. If Sift cannot load any sifting rules, it falls back to the bundled catalogue.
+
+### Example custom rule
+
+Create `acme-token.json`:
+
+```json
+{
+  "Name": "Acme API Token",
+  "Description": "Finds Acme API tokens in source and configuration files.",
+  "Label": "Custom",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Patterns": [
+        "\\bacme_[A-Za-z0-9]{32}\\b"
+      ],
+      "Keywords": [
+        "acme_"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "EnableLlmValidation": false,
+  "ExcludePaths": [ "**/test-fixtures/**" ]
+}
+```
+
+A sifting rule contains one or more match blocks. Every enabled rule reports its matches. Patterns within a rule are alternatives, so any matching pattern can produce a match.
+
+| Field | Purpose |
+| --- | --- |
+| `Name` | Required stable rule and finding name. |
+| `FindingName` | Optional different name for the reported finding. |
+| `Description` | Short explanation of what the rule detects. |
+| `Label` | Category shown with the match. The default is `Custom`. |
+| `Severity` | `Info`, `Informational`, `Low`, `Medium`, `High`, or `Critical`. The default is `Medium`. |
+| `Enabled` | Enables the rule. The default is `true`. |
+| `Matches` | One or more metadata or content match blocks. |
+| `Validator` | Optional built-in validation step used after a pattern matches. |
+| `EntropyThreshold` | Optional minimum Shannon entropy for the matched value. `0` disables this check. |
+| `EnableLlmValidation` | Allows the match to be checked when the scan uses `--llm-validate`. No LLM is called unless that command option is supplied. |
+| `MinMatchCount` | Number of matches required on one item before a finding is kept. The default is `1`. |
+| `IncludePaths` | Optional allowlist of full-path wildcard expressions. |
+| `ExcludePaths` | Optional blocklist of full-path wildcard expressions. |
+| `StopOnMatch` | Stops the current matching pass after this rule reports a match. |
+| `ReportFinding` | Set to `false` for a parent rule that only gates its `SubRules`. |
+| `SubRules` | Optional second-stage rules evaluated after their parent matches. |
+
+Each item in `Matches` supports:
+
+| Field | Purpose |
+| --- | --- |
+| `Target` | The part of the item to inspect. See the table below. |
+| `Patterns` | Required list of literal values or .NET regular expressions. |
+| `IsLiteral` | Treats patterns as plain text. Use this when regex behaviour is not wanted. |
+| `CaseSensitive` | Makes patterns and keywords case-sensitive. The default is `false`. |
+| `Keywords` | Optional fast prefilter for content rules. At least one keyword must be present before the regex runs. The regex must still match. |
+| `ExtensionProfile` | Named extension allowlist. `SourceAndConfig` is currently provided. |
+| `IncludedExtensions` | Additional extensions such as `.txt`, `.config`, or `.ps1`. |
+
+The available targets are:
+
+| Target | What it checks |
+| --- | --- |
+| `Content` | File, message, page, issue, or attachment text. Patterns are regex unless `IsLiteral` is true. |
+| `FileName` | The leaf filename, such as `id_rsa` or `secrets.json`. |
+| `FileExtension` | The file extension, such as `.env` or `.pem`. |
+| `DirectoryName` | An individual directory name, such as `.git`. |
+| `DirectoryPath` | The full path. Plain values match the beginning of the path; regex patterns can express more complex scopes. |
+| `ShareName` | The share component of a UNC path, such as `Finance` in `\\server\Finance`. |
+
+Content rules must declare `ExtensionProfile`, `IncludedExtensions`, or both. The two lists are combined. This keeps broad content expressions away from file types where they are unlikely to be useful.
+
+`Keywords` are an optimisation, not extra evidence. Choose a short literal that every valid match is expected to contain. Leave the list empty when no safe keyword exists. A poor keyword can prevent valid matches from being tested.
+
+Content regexes have a one-second match timeout. Sift uses the .NET non-backtracking engine where the expression supports it. Keep expressions bounded and avoid broad forms such as `.*` across large regions. The entire regex match becomes the reported value; a capture group does not change which text is used as evidence.
+
+`Validator` can add checks that are awkward to express safely in regex, such as a checksum or token structure. JSON rules can use the built-in names in the [`ClassifierValidatorCatalog`](src/Stratus.Sift.Core/Validation/ClassifierValidatorCatalog.cs). Adding a validator requires a code change. JSON files cannot load executable code.
+
+Path scopes and ignore rules use filesystem wildcards such as `*`, `?`, and character classes, not regular expressions. Exclusions are checked after inclusions.
+
+### Two-stage rules
+
+Use a parent rule when a cheap metadata check should gate a more specific content check. Set `ReportFinding` to `false` on the parent, then place the reporting rules in `SubRules`:
+
+```json
+{
+  "Name": "Acme credential file",
+  "ReportFinding": false,
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [ "acme.json" ]
+    }
+  ],
+  "SubRules": [
+    {
+      "Name": "Acme credential",
+      "Severity": "Critical",
+      "Matches": [
+        {
+          "Target": "Content",
+          "Patterns": [ "\\\"token\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"" ],
+          "IncludedExtensions": [ ".json" ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+See [`Firefox Login Store.json`](src/Stratus.Sift.Core/Defaults/Data/Rules/Files/Firefox%20Login%20Store.json) for a bundled example.
+
+### Ignore rules
+
+Ignore rules remove known noise early. They use simple filesystem wildcards rather than regex.
+
+```json
+[
+  {
+    "Pattern": "node_modules",
+    "MatchTarget": "DirectoryName",
+    "Description": "Third-party Node dependencies",
+    "IsEnabled": true
+  },
+  {
+    "Pattern": "*.min.js",
+    "MatchTarget": "FileName",
+    "Description": "Generated minified JavaScript",
+    "IsEnabled": true
+  }
+]
+```
+
+`MatchTarget` accepts the same target names as sifting rules. `Content` on an ignore rule is treated as a path match because ignore rules run before content is read. Directory, path, and share ignores can prune an entire branch, so test broad patterns carefully.
+
+### Older rule directories
+
+The earlier split classifier and policy format is still accepted so existing rule directories continue to work. Sift prints a deprecation warning when it loads legacy policy files. A legacy classifier with no policy now reports at `Medium` severity. New rules should use the unified format.
+
+### Testing a rule
+
+Make a small fixture directory containing:
+
+- One file that should match.
+- Similar values that should not match.
+- Examples in allowed and disallowed extensions.
+- Uppercase and lowercase variants if case matters.
+- A path covered by each include, exclude, or ignore rule.
+
+Run only that fixture while developing:
+
+```powershell
+.\sift.exe local --path .\rule-fixtures --rules .\my-rules --output .\rule-test.json --output-format json
+```
+
+Review the rule name, severity, exact matched value and surrounding snippet in the output. Rule-loading and regex errors are written to the console. `--enum-only` does not test content rules.
+
+Changing the contents of a custom rule directory changes its checkpoint fingerprint. A later `--resume` run will not reuse a checkpoint created with a different version of the rules.

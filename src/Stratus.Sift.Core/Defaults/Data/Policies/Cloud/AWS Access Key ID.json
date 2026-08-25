@@ -1,7 +1,0 @@
-{
-    "Name":  "AWS Access Key ID",
-    "Description":  "Default policy for AWS Access Key ID",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

@@ -825,6 +825,19 @@ public class DefaultRulePortingTests : IDisposable
         }
     }
 
+    [Fact]
+    public void CliPolicyMap_ExcludesInactivePolicies()
+    {
+        var classifier = new Classifier { Name = "Example" };
+        var active = CreateLinkedPolicy("Active", classifier, active: true);
+        var inactive = CreateLinkedPolicy("Inactive", classifier, active: false);
+
+        var map = CliScannerBootstrap.BuildPolicyMap([active, inactive]);
+
+        var policy = Assert.Single(map[classifier.Id]);
+        Assert.Same(active, policy);
+    }
+
     private static FileScanner CreateScanner()
     {
         return new FileScanner(
@@ -867,6 +880,23 @@ public class DefaultRulePortingTests : IDisposable
                 yield return child;
             }
         }
+    }
+
+    private static Policy CreateLinkedPolicy(string name, Classifier classifier, bool active)
+    {
+        var policy = new Policy
+        {
+            Name = name,
+            Active = active
+        };
+        policy.PolicyClassifiers.Add(new PolicyClassifier
+        {
+            Policy = policy,
+            PolicyId = policy.Id,
+            Classifier = classifier,
+            ClassifierId = classifier.Id
+        });
+        return policy;
     }
 
     private static string BuildToken(int length)

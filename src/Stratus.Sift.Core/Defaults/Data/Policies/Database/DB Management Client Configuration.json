@@ -1,7 +1,0 @@
-{
-    "Name": "DB Management Client Configuration",
-    "Description": "Default policy for DB Management Client Configuration",
-    "Severity": "High",
-    "StopOnMatch": false,
-    "Active": true
-}

@@ -1,0 +1,34 @@
+[
+  {
+    "Name": "Git Configuration",
+    "Description": "Detects Git configuration files that may reference identity, remotes, or credential helpers.",
+    "Label": "General",
+    "Severity": "Low",
+    "Matches": [
+      {
+        "Target": "FileName",
+        "IsLiteral": true,
+        "Patterns": [
+          ".gitconfig"
+        ]
+      }
+    ],
+    "EnableLlmValidation": false
+  },
+  {
+    "Name": "Git Credential File",
+    "Description": "Detects Git credential store files that commonly contain saved usernames and access tokens.",
+    "Label": "General",
+    "Severity": "High",
+    "Matches": [
+      {
+        "Target": "FileName",
+        "IsLiteral": true,
+        "Patterns": [
+          ".git-credentials"
+        ]
+      }
+    ],
+    "EnableLlmValidation": false
+  }
+]

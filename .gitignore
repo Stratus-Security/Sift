@@ -7,6 +7,7 @@ coverage/
 .vs/
 .idea/
 .vscode/
+src/**/Properties/PublishProfiles/
 *.user
 *.suo
 *.pdb

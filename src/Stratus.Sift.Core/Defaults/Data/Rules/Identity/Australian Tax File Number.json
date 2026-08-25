@@ -1,0 +1,34 @@
+{
+  "Enabled": false,
+  "Name": "Australian Tax File Number",
+  "Description": "Opt-in detection of checksum-valid Australian Tax File Numbers when TFN context is present.",
+  "Label": "Identity",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "TFN",
+        "tax file number"
+      ],
+      "Patterns": [
+        "(?<![0-9])[0-9]{3}[ -]?[0-9]{3}[ -]?[0-9]{3}(?![0-9])"
+      ],
+      "IncludedExtensions": [
+        ".txt",
+        ".log",
+        ".csv",
+        ".tsv",
+        ".json",
+        ".xml",
+        ".yaml",
+        ".yml",
+        ".pdf",
+        ".docx",
+        ".xlsx"
+      ]
+    }
+  ],
+  "Validator": "AustralianTfn",
+  "EnableLlmValidation": false
+}

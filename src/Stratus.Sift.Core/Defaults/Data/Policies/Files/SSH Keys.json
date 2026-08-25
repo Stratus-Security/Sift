@@ -1,7 +1,0 @@
-{
-    "Name": "SSH Keys",
-    "Description": "Default policy for SSH Keys",
-    "Severity": "Critical",
-    "StopOnMatch": false,
-    "Active": true
-}

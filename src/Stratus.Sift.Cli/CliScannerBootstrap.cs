@@ -56,7 +56,10 @@ internal static class CliScannerBootstrap
         {
             var logger = host.Services.GetRequiredService<ILogger<Program>>();
             var catalog = await CliRuleCatalogLoader.LoadAsync(rulesPath, logger, cancellationToken);
-            var classifiers = catalog.Classifiers;
+            var classifiers = ClassifierRuntimeValidator
+                .FilterValidClassifiers(catalog.Classifiers, logger)
+                .Where(classifier => classifier.IsEnabled)
+                .ToList();
             var policies = catalog.Policies;
             var ignoreRules = catalog.IgnoreRules;
 
@@ -85,12 +88,12 @@ internal static class CliScannerBootstrap
         }
     }
 
-    private static Dictionary<Guid, List<Policy>> BuildPolicyMap(IEnumerable<Policy> policies)
+    internal static Dictionary<Guid, List<Policy>> BuildPolicyMap(IEnumerable<Policy> policies)
     {
         var policyMap = new Dictionary<Guid, List<Policy>>();
         foreach (var policy in policies)
         {
-            if (policy.PolicyClassifiers == null)
+            if (!policy.Active || policy.PolicyClassifiers == null)
             {
                 continue;
             }

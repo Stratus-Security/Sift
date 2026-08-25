@@ -1,0 +1,20 @@
+{
+  "Name": "HTTP Bearer Token",
+  "Description": "Detects hardcoded non-placeholder HTTP Bearer authorization tokens not covered by a more specific detector.",
+  "Label": "Identity",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "Authorization: Bearer",
+        "Authorization:Bearer"
+      ],
+      "Patterns": [
+        "Authorization\\s*:\\s*Bearer\\s+[A-Za-z0-9._~+/=-]{20,4096}"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "BearerToken"
+}

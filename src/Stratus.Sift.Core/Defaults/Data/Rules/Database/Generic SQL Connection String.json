@@ -1,0 +1,20 @@
+{
+  "Name": "Generic SQL Connection String",
+  "Description": "Detects SQL connection strings with credentials (requires 'User ID' or 'Server' context)",
+  "Label": "General",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "Password=",
+        "Pwd="
+      ],
+      "Patterns": [
+        "(?:User ID|Uid|User|Server|Data Source|Initial Catalog)\\s*=[^;]+\\s*;\\s*(?:Password|Pwd)\\s*=\\s*([^;\"\\r\\n]{1,128})"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "SqlConnectionString"
+}

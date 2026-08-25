@@ -1,7 +1,0 @@
-{
-    "Name":  "SendGrid API Key",
-    "Description":  "Default policy for SendGrid API Key",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

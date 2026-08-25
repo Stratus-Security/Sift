@@ -1,0 +1,21 @@
+{
+  "Name": "Telegram Bot Token",
+  "Description": "Detects Telegram Bot API Tokens (BotId:Secret)",
+  "Label": "General",
+  "Severity": "High",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "api.telegram.org",
+        "telegram_token",
+        "bot_token"
+      ],
+      "Patterns": [
+        "\\b[0-9]{8,12}:[a-zA-Z0-9_-]{30,50}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "TelegramBotToken"
+}

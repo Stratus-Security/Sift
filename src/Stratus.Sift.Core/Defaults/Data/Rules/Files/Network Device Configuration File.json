@@ -1,0 +1,46 @@
+{
+  "ReportFinding": false,
+  "Name": "Network Device Configuration File",
+  "Description": "Looks inside common network device configuration files for embedded credentials or shared secrets.",
+  "Label": "Files",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "running-config.cfg",
+        "startup-config.cfg",
+        "running-config",
+        "startup-config"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false,
+  "SubRules": [
+    {
+      "Name": "Network Device Credential",
+      "Description": "Detects network device credentials and shared secrets in configuration files.",
+      "Label": "Files",
+      "Severity": "High",
+      "Matches": [
+        {
+          "Target": "Content",
+          "Patterns": [
+            "NVRAM config last updated",
+            "enable password \\.",
+            "simple-bind authenticated encrypt",
+            "pac key [0-7] ",
+            "snmp-server community\\s.+\\sRW"
+          ],
+          "Keywords": [
+            "NVRAM",
+            "enable password",
+            "simple-bind",
+            "pac key",
+            "snmp-server community"
+          ]
+        }
+      ]
+    }
+  ]
+}

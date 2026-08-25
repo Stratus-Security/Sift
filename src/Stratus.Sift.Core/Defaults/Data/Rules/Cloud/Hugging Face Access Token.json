@@ -1,0 +1,19 @@
+{
+  "Name": "Hugging Face Access Token",
+  "Description": "Detects Hugging Face access tokens with the hf_ prefix.",
+  "Label": "General",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "hf_"
+      ],
+      "Patterns": [
+        "\\bhf_[A-Za-z0-9]{30,}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

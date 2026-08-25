@@ -1,0 +1,19 @@
+{
+  "Name": "Amazon SP-API Token (LWA)",
+  "Description": "Detects Amazon Selling Partner API (Login with Amazon) tokens (Atza|Access, Atzr|Refresh)",
+  "Label": "General",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "Atza|",
+        "Atzr|"
+      ],
+      "Patterns": [
+        "\\b(Atza|Atzr)\\|[A-Za-z0-9\\-_=]{64,}"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

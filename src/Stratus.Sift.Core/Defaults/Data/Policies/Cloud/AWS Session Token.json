@@ -1,7 +1,0 @@
-{
-  "Name": "AWS Session Token",
-  "Description": "Temporary AWS session credentials can be abused together with their access key and secret.",
-  "Severity": "Critical",
-  "StopOnMatch": false,
-  "Active": true
-}

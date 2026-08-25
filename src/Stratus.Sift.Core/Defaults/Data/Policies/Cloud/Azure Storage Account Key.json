@@ -1,8 +1,0 @@
-{
-    "Name": "Azure Storage Account Key",
-    "ClassifierNames": [ "Azure Storage Account Key" ],
-    "Description": "Default policy for Azure Storage Account Key",
-    "Severity": "Critical",
-    "StopOnMatch": false,
-    "Active": true
-}

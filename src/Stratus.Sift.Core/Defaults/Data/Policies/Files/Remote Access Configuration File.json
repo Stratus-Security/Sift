@@ -1,7 +1,0 @@
-{
-    "Name": "Remote Access Configuration File",
-    "Description": "Default policy for Remote Access Configuration File",
-    "Severity": "Critical",
-    "StopOnMatch": false,
-    "Active": true
-}

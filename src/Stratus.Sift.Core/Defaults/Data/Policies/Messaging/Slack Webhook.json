@@ -1,7 +1,0 @@
-{
-    "Name":  "Slack Webhook",
-    "Description":  "Default policy for Slack Webhook",
-    "StopOnMatch":  false,
-    "Severity":  "High",
-    "Active":  true
-}

@@ -1,7 +1,0 @@
-{
-    "Name": "SCCM Content Library Share",
-    "Description": "Default policy for SCCM Content Library Share",
-    "Severity": "Medium",
-    "StopOnMatch": false,
-    "Active": true
-}

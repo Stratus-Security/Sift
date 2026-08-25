@@ -1,0 +1,30 @@
+{
+  "Name": "Remote Access Configuration File",
+  "Description": "Detects remote access client configuration files that often contain saved connections or credentials.",
+  "Label": "Files",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "mobaxterm.ini",
+        "mobaxterm backup.zip",
+        "confCons.xml"
+      ]
+    },
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".rdg",
+        ".rtsz",
+        ".rtsx",
+        ".ovpn",
+        ".tvopt",
+        ".sdtid"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

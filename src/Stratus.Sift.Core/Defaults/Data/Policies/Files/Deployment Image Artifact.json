@@ -1,7 +1,0 @@
-{
-    "Name": "Deployment Image Artifact",
-    "Description": "Default policy for Deployment Image Artifact",
-    "Severity": "Medium",
-    "StopOnMatch": false,
-    "Active": true
-}

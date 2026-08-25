@@ -1,0 +1,18 @@
+{
+  "Name": "AWS MWS Auth Token",
+  "Description": "Detects legacy Amazon MWS Auth Tokens (amzn.mws.UUID)",
+  "Label": "General",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "Keywords": [
+        "amzn.mws."
+      ],
+      "Patterns": [
+        "\\bamzn\\.mws\\.[a-f0-9-]{36}\\b"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}

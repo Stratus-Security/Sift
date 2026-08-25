@@ -1,7 +1,0 @@
-{
-  "Name": "International Bank Account Number",
-  "Description": "Opt-in handling for checksum-valid IBAN financial identifiers.",
-  "Severity": "High",
-  "StopOnMatch": false,
-  "Active": false
-}

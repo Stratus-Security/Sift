@@ -1,0 +1,49 @@
+{
+  "Name": "SSH Keys",
+  "Description": "Detects SSH Private Keys, configuration files, and related artifacts.",
+  "Label": "Security",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Patterns": [
+        "-----BEGIN( RSA| OPENSSH| DSA| EC| PGP)? PRIVATE KEY( BLOCK)?-----",
+        "-----BEGIN OPENSSH PRIVATE KEY-----"
+      ]
+    },
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "known_hosts",
+        "authorized_keys"
+      ]
+    },
+    {
+      "Target": "FileName",
+      "Patterns": [
+        ".*(_rsa|_dsa|_ed25519|_ecdsa)$"
+      ]
+    },
+    {
+      "Target": "FileExtension",
+      "IsLiteral": true,
+      "Patterns": [
+        ".ppk",
+        ".pem"
+      ]
+    },
+    {
+      "Target": "DirectoryPath",
+      "Patterns": [
+        "[\\\\/]\\.ssh[\\\\/]"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

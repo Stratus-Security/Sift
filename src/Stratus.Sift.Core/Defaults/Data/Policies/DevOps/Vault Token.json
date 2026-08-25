@@ -1,7 +1,0 @@
-{
-  "Name": "Vault Token",
-  "Description": "Vault tokens can expose centrally managed secrets and dynamic credentials.",
-  "Severity": "Critical",
-  "StopOnMatch": false,
-  "Active": true
-}

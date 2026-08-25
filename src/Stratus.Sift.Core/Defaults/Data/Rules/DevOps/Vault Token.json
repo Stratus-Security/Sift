@@ -1,0 +1,25 @@
+{
+  "Name": "Vault Token",
+  "Description": "Detects current and context-qualified legacy HashiCorp Vault service, batch, and recovery tokens.",
+  "Label": "DevOps",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "hvs.",
+        "hvb.",
+        "hvr.",
+        "VAULT_TOKEN",
+        "X-Vault-Token"
+      ],
+      "Patterns": [
+        "(?<![A-Za-z0-9_.-])(?:hvs|hvb|hvr)\\.[A-Za-z0-9_.-]{24,4096}(?![A-Za-z0-9_.-])",
+        "(?<![A-Za-z0-9_.-])(?:s|b|r)\\.[A-Za-z0-9_.-]{24,4096}(?![A-Za-z0-9_.-])"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "VaultToken"
+}

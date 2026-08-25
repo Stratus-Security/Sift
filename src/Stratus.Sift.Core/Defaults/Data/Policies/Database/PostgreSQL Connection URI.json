@@ -1,7 +1,0 @@
-{
-    "Name":  "PostgreSQL Connection URI",
-    "Description":  "Default policy for PostgreSQL Connection URI",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

@@ -1,7 +1,0 @@
-{
-    "Name": "Unix Local Hash Store",
-    "Description": "Default policy for Unix Local Hash Store",
-    "Severity": "Critical",
-    "StopOnMatch": false,
-    "Active": true
-}

@@ -1,7 +1,0 @@
-{
-    "Name":  "Google API Key",
-    "Description":  "Default policy for Google API Key",
-    "StopOnMatch":  false,
-    "Severity":  "High",
-    "Active":  true
-}

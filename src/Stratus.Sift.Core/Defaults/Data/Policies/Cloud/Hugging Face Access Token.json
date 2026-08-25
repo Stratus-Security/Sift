@@ -1,7 +1,0 @@
-{
-    "Name": "Hugging Face Access Token",
-    "Description": "Default policy for Hugging Face Access Token",
-    "Severity": "Critical",
-    "StopOnMatch": false,
-    "Active": true
-}

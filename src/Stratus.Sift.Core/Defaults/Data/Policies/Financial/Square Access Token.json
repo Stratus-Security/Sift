@@ -1,7 +1,0 @@
-{
-    "Name":  "Square Access Token",
-    "Description":  "Default policy for Square Access Token",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

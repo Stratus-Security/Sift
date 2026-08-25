@@ -1,7 +1,0 @@
-{
-    "Name":  "Generic Private Key (Embedded)",
-    "Description":  "Default policy for Generic Private Key (Embedded)",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

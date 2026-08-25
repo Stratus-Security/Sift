@@ -1,0 +1,16 @@
+{
+  "Name": "MDT Domain Join Configuration File",
+  "Description": "Detects MDT CustomSettings.ini files, which often contain domain join or deployment credentials.",
+  "Label": "Files",
+  "Severity": "Medium",
+  "Matches": [
+    {
+      "Target": "FileName",
+      "IsLiteral": true,
+      "Patterns": [
+        "customsettings.ini"
+      ]
+    }
+  ],
+  "EnableLlmValidation": false
+}

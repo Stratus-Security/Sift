@@ -1,0 +1,26 @@
+{
+  "Name": "Azure DevOps Personal Access Token",
+  "Description": "Detects current Azure DevOps PATs with the AZDO signature and legacy PATs when Azure DevOps context is present.",
+  "Label": "DevOps",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "AZDO",
+        "azuredevops",
+        "azure_devops",
+        "vsts",
+        "dev.azure.com",
+        "visualstudio.com"
+      ],
+      "Patterns": [
+        "(?<![A-Za-z0-9])[A-Za-z0-9]{75}AZDO[A-Za-z0-9]{5}(?![A-Za-z0-9])",
+        "(?<![A-Za-z0-9])[A-Za-z0-9]{52}(?![A-Za-z0-9])"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ],
+  "Validator": "AzureDevOpsPat"
+}

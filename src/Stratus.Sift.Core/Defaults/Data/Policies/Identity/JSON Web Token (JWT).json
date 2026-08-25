@@ -1,8 +1,0 @@
-{
-    "Name": "JSON Web Token (JWT)",
-    "Description": "Default policy for JSON Web Token (JWT)",
-    "Domain": "Data",
-    "StopOnMatch": false,
-    "Severity": "High",
-    "Active": true
-}

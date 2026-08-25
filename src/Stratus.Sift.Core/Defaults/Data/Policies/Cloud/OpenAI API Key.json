@@ -1,7 +1,0 @@
-{
-    "Name":  "OpenAI API Key",
-    "Description":  "Default policy for OpenAI API Key",
-    "StopOnMatch":  false,
-    "Severity":  "Critical",
-    "Active":  true
-}

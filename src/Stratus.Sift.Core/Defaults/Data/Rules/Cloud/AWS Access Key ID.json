@@ -1,0 +1,27 @@
+{
+  "Name": "AWS Access Key ID",
+  "Description": "Detects AWS Access Key IDs (AKIA, ASIA, AGPA, AROA, etc.)",
+  "Label": "General",
+  "Severity": "Critical",
+  "Matches": [
+    {
+      "Target": "Content",
+      "CaseSensitive": true,
+      "Keywords": [
+        "AKIA",
+        "ASIA",
+        "ABIA",
+        "AGPA",
+        "AROA",
+        "AIPA",
+        "ANPA",
+        "ANVA"
+      ],
+      "Patterns": [
+        "\\b(AKIA|ASIA|ABIA|AGPA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}\\b",
+        "(\\s|'|\"|\\^|=)(A3T[A-Z0-9]|AKIA|AGPA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z2-7]{12,16}(\\s|'|\"|$)"
+      ],
+      "ExtensionProfile": "SourceAndConfig"
+    }
+  ]
+}
