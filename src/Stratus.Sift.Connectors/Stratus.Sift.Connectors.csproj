@@ -2,7 +2,7 @@
   <PropertyGroup>
     <PackageId Condition="'$(CommercialBuild)' != 'true'">Stratus.Sift.Connectors</PackageId>
     <PackageId Condition="'$(CommercialBuild)' == 'true'">Stratus.Sift.Connectors.Commercial</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <Authors>Stratus</Authors>
     <Description>SharePoint, Slack and Atlassian content connectors for Stratus Sift.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>

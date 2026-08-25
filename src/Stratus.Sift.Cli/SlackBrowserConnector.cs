@@ -11,7 +11,7 @@ using Stratus.Sift.Core.Enums;
 
 namespace Stratus.Sift.Cli;
 
-internal sealed class SlackBrowserConnector : IConnector, IAsyncDisposable
+internal sealed class SlackBrowserConnector : IConnector, IConnectorCheckpointScopeProvider, IAsyncDisposable
 {
     private SlackBrowserSession? _session;
     private HashSet<string>? _channelFilter;
@@ -20,6 +20,8 @@ internal sealed class SlackBrowserConnector : IConnector, IAsyncDisposable
     private string _workspaceUrl = "https://app.slack.com";
 
     public string ProviderName => CommonConstants.ConnectorProviders.Slack;
+    public string CheckpointScope => _session?.CheckpointScope
+        ?? throw new InvalidOperationException("The Slack browser connector has not been initialized.");
 
     public async Task InitializeAsync(Dictionary<string, string> configuration, CancellationToken cancellationToken = default)
     {
@@ -220,6 +222,7 @@ internal sealed partial class SlackBrowserSession : ISlackBrowserSession, IAsync
         _rootDirectory = rootDirectory;
         _token = token;
         _apiBaseUri = apiBaseUri;
+        CheckpointScope = CliResumeIdentity.Hash($"slack-browser\0{token}");
         WorkspaceId = workspaceId;
         WorkspaceName = workspaceName;
         WorkspaceUrl = workspaceUrl;
@@ -228,6 +231,7 @@ internal sealed partial class SlackBrowserSession : ISlackBrowserSession, IAsync
     internal string WorkspaceId { get; }
     internal string WorkspaceName { get; }
     internal string WorkspaceUrl { get; }
+    internal string CheckpointScope { get; }
 
     internal static async Task<SlackBrowserSession> OpenAsync(
         string browserChannel,
@@ -660,59 +664,76 @@ internal sealed class SlackBrowserDrive : IRemoteDrive
         Func<string, Task>? onCheckpoint = null,
         CancellationToken cancellationToken = default)
     {
-        string? cursor = null;
-        var newest = deltaToken;
-        var threadParents = new List<string>();
-        var seenThreadParents = new HashSet<string>(StringComparer.Ordinal);
-        do
+        var resume = SlackDrive.ParseCheckpoint(deltaToken);
+        var boundary = resume.Boundary;
+        var cursor = resume.Cursor;
+        var newest = resume.Newest ?? boundary;
+        var threadParents = resume.ThreadParents.ToList();
+        var seenThreadParents = threadParents.ToHashSet(StringComparer.Ordinal);
+        if (!resume.RepliesPhase)
         {
-            using var document = await _session.CallAsync("conversations.history", new Dictionary<string, string?>
+            do
             {
-                ["channel"] = Id,
-                ["limit"] = "100",
-                ["cursor"] = cursor
-            }, cancellationToken);
-            foreach (var message in document.RootElement.GetProperty("messages").EnumerateArray())
-            {
-                var timestamp = SlackBrowserConnector.GetString(message, "ts") ?? string.Empty;
-                var edited = message.TryGetProperty("edited", out var editedObject)
-                    ? SlackBrowserConnector.GetString(editedObject, "ts")
-                    : null;
-                newest = MaxTimestamp(newest, timestamp);
-                newest = MaxTimestamp(newest, edited);
-                if (string.IsNullOrWhiteSpace(deltaToken) || IsAfter(timestamp, deltaToken) || IsAfter(edited, deltaToken))
+                using var document = await _session.CallAsync("conversations.history", new Dictionary<string, string?>
                 {
-                    await EmitMessageAsync(message, onChange);
-                }
-
-                if (message.TryGetProperty("reply_count", out var replyCount)
-                    && replyCount.TryGetInt32(out var count)
-                    && count > 0)
+                    ["channel"] = Id,
+                    ["limit"] = "100",
+                    ["cursor"] = cursor
+                }, cancellationToken);
+                foreach (var message in document.RootElement.GetProperty("messages").EnumerateArray())
                 {
-                    var latestReply = message.TryGetProperty("latest_reply", out var latestReplyElement)
-                        ? latestReplyElement.GetString()
+                    var timestamp = SlackBrowserConnector.GetString(message, "ts") ?? string.Empty;
+                    var edited = message.TryGetProperty("edited", out var editedObject)
+                        ? SlackBrowserConnector.GetString(editedObject, "ts")
                         : null;
-                    if (string.IsNullOrWhiteSpace(deltaToken) || IsAfter(latestReply, deltaToken))
+                    newest = MaxTimestamp(newest, timestamp);
+                    newest = MaxTimestamp(newest, edited);
+                    if (string.IsNullOrWhiteSpace(boundary) || IsAfter(timestamp, boundary) || IsAfter(edited, boundary))
                     {
-                        newest = MaxTimestamp(newest, latestReply);
-                        if (!string.IsNullOrWhiteSpace(timestamp) && seenThreadParents.Add(timestamp))
+                        await EmitMessageAsync(message, onChange);
+                    }
+
+                    if (message.TryGetProperty("reply_count", out var replyCount)
+                        && replyCount.TryGetInt32(out var count)
+                        && count > 0)
+                    {
+                        var latestReply = message.TryGetProperty("latest_reply", out var latestReplyElement)
+                            ? latestReplyElement.GetString()
+                            : null;
+                        if (string.IsNullOrWhiteSpace(boundary) || IsAfter(latestReply, boundary))
                         {
-                            threadParents.Add(timestamp);
+                            newest = MaxTimestamp(newest, latestReply);
+                            if (!string.IsNullOrWhiteSpace(timestamp) && seenThreadParents.Add(timestamp))
+                            {
+                                threadParents.Add(timestamp);
+                            }
                         }
                     }
                 }
+
+                cursor = SlackBrowserConnector.GetNextCursor(document.RootElement);
+                if (onCheckpoint != null)
+                {
+                    await onCheckpoint(SlackDrive.CreateCheckpoint(
+                        boundary,
+                        cursor,
+                        newest,
+                        repliesPhase: string.IsNullOrWhiteSpace(cursor),
+                        threadParents));
+                }
             }
-
-            cursor = SlackBrowserConnector.GetNextCursor(document.RootElement);
+            while (!string.IsNullOrWhiteSpace(cursor));
         }
-        while (!string.IsNullOrWhiteSpace(cursor));
 
-        // Fetch thread replies only after all root messages have been emitted. conversations.replies
-        // has a separate, frequently tighter quota; deferring it prevents a single busy thread from
-        // blocking discovery and classification of the rest of the channel history.
-        foreach (var parentTimestamp in threadParents)
+        while (threadParents.Count > 0)
         {
-            newest = MaxTimestamp(newest, await EmitRepliesAsync(parentTimestamp, deltaToken, onChange, cancellationToken));
+            var parentTimestamp = threadParents[0];
+            newest = MaxTimestamp(newest, await EmitRepliesAsync(parentTimestamp, boundary, onChange, cancellationToken));
+            threadParents.RemoveAt(0);
+            if (onCheckpoint != null)
+            {
+                await onCheckpoint(SlackDrive.CreateCheckpoint(boundary, null, newest, repliesPhase: true, threadParents));
+            }
         }
 
         return newest ?? string.Empty;

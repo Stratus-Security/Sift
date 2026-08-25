@@ -22,6 +22,7 @@ internal sealed class JiraDrive : IRemoteDrive
     private readonly AtlassianApiClient _api;
     private readonly Uri _siteUri;
     private readonly string _projectKey;
+    private readonly string _checkpointScope;
     private readonly string? _additionalJql;
     private readonly string _filterHash;
     private readonly IReadOnlyDictionary<string, string> _customFields;
@@ -34,12 +35,14 @@ internal sealed class JiraDrive : IRemoteDrive
         string projectKey,
         string projectName,
         string? additionalJql,
-        IReadOnlyDictionary<string, string> customFields)
+        IReadOnlyDictionary<string, string> customFields,
+        string checkpointScope)
     {
         _api = api;
         _siteUri = siteUri;
         Id = projectId;
         _projectKey = projectKey;
+        _checkpointScope = checkpointScope;
         Name = $"{projectKey} - {projectName}";
         _additionalJql = string.IsNullOrWhiteSpace(additionalJql) ? null : additionalJql.Trim();
         _filterHash = ComputeFilterHash(_additionalJql);
@@ -52,7 +55,7 @@ internal sealed class JiraDrive : IRemoteDrive
 
     public string Id { get; }
     public string Name { get; }
-    public string ConnectionId => $"atlassian://{_siteUri.Host}/jira/{_projectKey}";
+    public string ConnectionId => $"atlassian-v2://{_siteUri.Host}/{_checkpointScope}/jira/{Uri.EscapeDataString(_projectKey)}";
     public string WebUrl => new Uri(_siteUri, $"browse/{Uri.EscapeDataString(_projectKey)}").AbsoluteUri;
     public DatastoreType DriveType => DatastoreType.Jira;
     public long? TotalSize => null;
@@ -77,10 +80,11 @@ internal sealed class JiraDrive : IRemoteDrive
         Func<string, Task>? onCheckpoint = null,
         CancellationToken cancellationToken = default)
     {
-        var scanStartedAt = DateTimeOffset.UtcNow;
-        var previousUpdated = GetDeltaTimestamp(deltaToken);
-        string? nextPageToken = null;
-        var newestUpdated = previousUpdated;
+        var resume = GetResumeState(deltaToken);
+        var scanStartedAt = resume.ScanStartedAt ?? DateTimeOffset.UtcNow;
+        var previousUpdated = resume.Boundary;
+        var nextPageToken = resume.NextPageToken;
+        var newestUpdated = resume.NewestUpdated ?? previousUpdated;
 
         do
         {
@@ -104,6 +108,14 @@ internal sealed class JiraDrive : IRemoteDrive
             }
 
             nextPageToken = root.TryGetProperty("nextPageToken", out var nextPage) ? nextPage.GetString() : null;
+            if (!string.IsNullOrWhiteSpace(nextPageToken) && onCheckpoint != null)
+            {
+                await onCheckpoint(CreatePageCheckpoint(
+                    previousUpdated,
+                    nextPageToken,
+                    newestUpdated,
+                    scanStartedAt));
+            }
         }
         while (!string.IsNullOrWhiteSpace(nextPageToken));
 
@@ -230,10 +242,13 @@ internal sealed class JiraDrive : IRemoteDrive
     }
 
     private string? GetDeltaTimestamp(string? deltaToken)
+        => GetResumeState(deltaToken).Boundary;
+
+    private JiraResumeState GetResumeState(string? deltaToken)
     {
         if (string.IsNullOrWhiteSpace(deltaToken))
         {
-            return null;
+            return default;
         }
 
         try
@@ -242,16 +257,44 @@ internal sealed class JiraDrive : IRemoteDrive
             var root = document.RootElement;
             var filter = AtlassianConnector.GetScalarString(root, "filter");
             var updated = AtlassianConnector.GetScalarString(root, "updated");
-            return string.Equals(filter, _filterHash, StringComparison.Ordinal) && DateTimeOffset.TryParse(updated, out _)
-                ? updated
-                : null;
+            var nextPageToken = AtlassianConnector.GetScalarString(root, "nextPageToken");
+            if (!string.Equals(filter, _filterHash, StringComparison.Ordinal)
+                || (string.IsNullOrWhiteSpace(nextPageToken) && !DateTimeOffset.TryParse(updated, out _)))
+            {
+                return default;
+            }
+
+            var newest = AtlassianConnector.GetScalarString(root, "newest");
+            var started = AtlassianConnector.GetScalarString(root, "startedAt");
+            return new JiraResumeState(
+                updated,
+                nextPageToken,
+                DateTimeOffset.TryParse(newest, out _) ? newest : updated,
+                DateTimeOffset.TryParse(started, out var parsedStarted) ? parsedStarted : null);
         }
         catch (JsonException)
         {
             return _additionalJql == null && DateTimeOffset.TryParse(deltaToken, out _)
-                ? deltaToken
-                : null;
+                ? new JiraResumeState(deltaToken, null, deltaToken, null)
+                : default;
         }
+    }
+
+    private string CreatePageCheckpoint(
+        string? boundary,
+        string nextPageToken,
+        string? newest,
+        DateTimeOffset scanStartedAt)
+    {
+        return new System.Text.Json.Nodes.JsonObject
+        {
+            ["version"] = 2,
+            ["filter"] = _filterHash,
+            ["updated"] = boundary,
+            ["nextPageToken"] = nextPageToken,
+            ["newest"] = newest,
+            ["startedAt"] = scanStartedAt.ToUniversalTime().ToString("O")
+        }.ToJsonString();
     }
 
     private string CreateDeltaToken(string updated)
@@ -397,4 +440,10 @@ internal sealed class JiraDrive : IRemoteDrive
     {
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(jql?.Trim() ?? string.Empty)));
     }
+
+    private readonly record struct JiraResumeState(
+        string? Boundary,
+        string? NextPageToken,
+        string? NewestUpdated,
+        DateTimeOffset? ScanStartedAt);
 }

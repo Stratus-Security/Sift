@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -7,7 +8,7 @@ using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Connectors.Atlassian;
 
-public sealed class AtlassianConnector : IConnector
+public sealed class AtlassianConnector : IConnector, IConnectorCheckpointScopeProvider
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger? _logger;
@@ -17,6 +18,7 @@ public sealed class AtlassianConnector : IConnector
     private HashSet<string>? _projectFilter;
     private HashSet<string>? _spaceFilter;
     private string? _additionalJql;
+    private string? _checkpointScope;
     private IReadOnlyDictionary<string, string> _customFields = new Dictionary<string, string>();
 
     public AtlassianConnector(HttpClient httpClient, ILogger<AtlassianConnector>? logger = null)
@@ -31,6 +33,8 @@ public sealed class AtlassianConnector : IConnector
     }
 
     public string ProviderName => CommonConstants.ConnectorProviders.Atlassian;
+    public string CheckpointScope => _checkpointScope
+        ?? throw new InvalidOperationException("The Atlassian connector has not been initialized.");
 
     public async Task InitializeAsync(Dictionary<string, string> configuration, CancellationToken cancellationToken = default)
     {
@@ -57,6 +61,7 @@ public sealed class AtlassianConnector : IConnector
         }
 
         _siteUri = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
+        _checkpointScope = CreateCheckpointScope(email, token);
         _projectFilter = SplitValues(configuration.GetValueOrDefault("Project"));
         _spaceFilter = SplitValues(configuration.GetValueOrDefault("Space"));
         _additionalJql = configuration.GetValueOrDefault("Jql")?.Trim();
@@ -167,7 +172,7 @@ public sealed class AtlassianConnector : IConnector
                     continue;
                 }
 
-                drives.Add(new JiraDrive(_jiraApi, _siteUri!, id, key, name, _additionalJql, _customFields));
+                drives.Add(new JiraDrive(_jiraApi, _siteUri!, id, key, name, _additionalJql, _customFields, _checkpointScope!));
             }
 
             var count = values.GetArrayLength();
@@ -197,12 +202,34 @@ public sealed class AtlassianConnector : IConnector
                 var key = GetScalarString(space, "key") ?? id;
                 var name = GetScalarString(space, "name") ?? key;
                 if (_spaceFilter is { Count: > 0 } && !_spaceFilter.Contains(id) && !_spaceFilter.Contains(key)) continue;
-                drives.Add(new ConfluenceDrive(_confluenceApi, _siteUri!, id, key, name));
+                drives.Add(new ConfluenceDrive(_confluenceApi, _siteUri!, id, key, name, _checkpointScope!));
             }
 
             cursor = ConfluenceDrive.GetNextCursor(document.RootElement);
         }
         while (!string.IsNullOrWhiteSpace(cursor));
+    }
+
+    internal static string CreateCheckpointScope(string? email, string token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+
+        // Include the credential secret in the one-way input so an email address cannot be
+        // recovered from the persisted value. Rotating the credential deliberately starts a
+        // new incremental history rather than trusting a checkpoint owned by an old identity.
+        var authenticationMode = string.IsNullOrWhiteSpace(email) ? "bearer" : "basic";
+        var account = email?.Trim().ToUpperInvariant() ?? string.Empty;
+        var material = Encoding.UTF8.GetBytes($"atlassian-checkpoint-v2\0{authenticationMode}\0{account}\0{token.Trim()}");
+        try
+        {
+            Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(material, digest);
+            return Convert.ToHexString(digest[..16]).ToLowerInvariant();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(material);
+        }
     }
 
     private async Task<string> DiscoverCloudIdAsync(Uri siteUri, CancellationToken cancellationToken)

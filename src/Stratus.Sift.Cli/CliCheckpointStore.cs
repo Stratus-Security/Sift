@@ -5,8 +5,9 @@ using Microsoft.Extensions.Logging;
 namespace Stratus.Sift.Cli;
 
 /// <summary>
-/// Persists only scanner continuation tokens. It deliberately contains no agent identity,
-/// enrolment, tenant, command, or management state.
+/// Persists only scanner continuation tokens under source- and credential-scoped opaque keys.
+/// It deliberately contains no credentials, agent identity, enrolment, tenant, command, or
+/// management state.
 /// </summary>
 internal sealed class CliCheckpointStore
 {
@@ -51,6 +52,19 @@ internal sealed class CliCheckpointStore
         {
             _remoteDriveTokens[driveId] = token;
             Save();
+        }
+    }
+
+    public void ClearRemoteDriveToken(string driveId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(driveId);
+
+        lock (_sync)
+        {
+            if (_remoteDriveTokens.Remove(driveId))
+            {
+                Save();
+            }
         }
     }
 

@@ -42,7 +42,8 @@ public class RemoteDriveScanner
         Action<int>? onQueueDepth,
         Action<string>? onCurrentPath,
         Func<CancellationToken, ValueTask>? ensureScanActive,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RemoteDriveScanExecutionOptions? executionOptions = null)
     {
         await ScanDriveChangesAsync(
             drive,
@@ -59,7 +60,11 @@ public class RemoteDriveScanner
             onQueueDepth,
             onCurrentPath,
             ensureScanActive,
-            cancellationToken);
+            cancellationToken,
+            executionOptions,
+            shouldSkipItem: null,
+            onItemProcessed: null,
+            onScanIncomplete: null);
     }
 
     public async Task ScanDriveChangesAsync(
@@ -77,15 +82,24 @@ public class RemoteDriveScanner
         Action<int>? onQueueDepth,
         Action<string>? onCurrentPath,
         Func<CancellationToken, ValueTask>? ensureScanActive,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RemoteDriveScanExecutionOptions? executionOptions = null,
+        Func<IRemoteFile, bool>? shouldSkipItem = null,
+        Func<IRemoteFile, CancellationToken, ValueTask>? onItemProcessed = null,
+        Action? onScanIncomplete = null)
     {
         _logger.LogInformation("Scanning Drive: {DriveName} ({DriveId})", drive.Name, drive.Id);
+
+        executionOptions ??= new RemoteDriveScanExecutionOptions();
+        var workerCount = Math.Clamp(executionOptions.WorkerCount, 1, 256);
+        var queueCapacity = Math.Clamp(executionOptions.QueueCapacity, workerCount, 4096);
+        var executionPlan = ScannerExecutionPlan.Create(optimizer, policyMap, ignoreRules);
 
         var pendingItems = 0;
         long queuedItems = 0;
         long completedItems = 0;
         long deferredContentItems = 0;
-        var channel = Channel.CreateBounded<RemoteScanItem>(new BoundedChannelOptions(256)
+        var channel = Channel.CreateBounded<RemoteScanItem>(new BoundedChannelOptions(queueCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleWriter = true,
@@ -95,7 +109,7 @@ public class RemoteDriveScanner
         Exception? producerException = null;
         string newDeltaToken = string.Empty;
 
-        var workers = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
+        var workers = Enumerable.Range(0, workerCount).Select(_ => Task.Run(async () =>
         {
             await foreach (var scanItem in channel.Reader.ReadAllAsync(cancellationToken))
             {
@@ -107,7 +121,7 @@ public class RemoteDriveScanner
                     }
 
                     onCurrentPath?.Invoke(GetFindingResourcePath(scanItem.Item));
-                    var outcome = await ProcessItemAsync(scanItem, optimizer, policyMap, ignoreRules, options, onIssueFound, cancellationToken);
+                    var outcome = await ProcessItemAsync(scanItem, executionPlan, policyMap, options, onIssueFound, cancellationToken);
                     if (outcome == RemoteScanOutcome.DeferredRetry)
                     {
                         Interlocked.Increment(ref deferredContentItems);
@@ -115,6 +129,10 @@ public class RemoteDriveScanner
                     else
                     {
                         onFilesScanned?.Invoke(1);
+                        if (onItemProcessed != null)
+                        {
+                            await onItemProcessed(scanItem.Item, cancellationToken);
+                        }
                     }
                 }
                 finally
@@ -144,23 +162,45 @@ public class RemoteDriveScanner
 
                     onCurrentPath?.Invoke(GetFindingResourcePath(item));
 
+                    if (shouldSkipItem?.Invoke(item) == true)
+                    {
+                        return;
+                    }
+
                     if (item.IsDeleted)
                     {
+                        if (onItemProcessed != null)
+                        {
+                            await onItemProcessed(item, cancellationToken);
+                        }
                         return;
                     }
 
                     if (item.IsLink && (!item.IsExternal || !options.ScanExternalFiles))
                     {
+                        if (onItemProcessed != null)
+                        {
+                            await onItemProcessed(item, cancellationToken);
+                        }
                         return;
                     }
 
                     var matchedIgnoreRules = IgnoreRuleEvaluator.GetMatchedRules(item.Path, ignoreRules);
                     if (IgnoreRuleEvaluator.ShouldIgnoreDespiteMetadata(matchedIgnoreRules, []))
                     {
+                        if (onItemProcessed != null)
+                        {
+                            await onItemProcessed(item, cancellationToken);
+                        }
                         return;
                     }
 
                     onFilesDiscovered?.Invoke(1);
+
+                    if (executionOptions.EnumerateOnly)
+                    {
+                        return;
+                    }
 
                     var ext = item.IsDirectory ? string.Empty : Path.GetExtension(item.Name);
                     var metadataPath = item.IsDirectory ? EnsureDirectoryMetadataPath(item.Path) : item.Path;
@@ -176,6 +216,10 @@ public class RemoteDriveScanner
                     var hasContentRules = !item.IsDirectory && optimizer.HasRulesForExtension(ext);
                     if (!metadataClassifiers.Any() && !hasContentRules)
                     {
+                        if (onItemProcessed != null)
+                        {
+                            await onItemProcessed(item, cancellationToken);
+                        }
                         return;
                     }
 
@@ -212,6 +256,7 @@ public class RemoteDriveScanner
         }
         catch (Exception ex) when (IsRetriableThrottleFailure(ex, out var statusCode))
         {
+            onScanIncomplete?.Invoke();
             _logger.LogWarning(
                 ex,
                 "Drive enumeration for {DriveName} ({DriveId}) was throttled with status {StatusCode}. The scan will resume on the next cycle.",
@@ -259,9 +304,8 @@ public class RemoteDriveScanner
 
     private async Task<RemoteScanOutcome> ProcessItemAsync(
         RemoteScanItem scanItem,
-        ClassifierOptimizer optimizer,
+        ScannerExecutionPlan executionPlan,
         Dictionary<Guid, List<Policy>> policyMap,
-        List<IgnoreRule> ignoreRules,
         ScanOptions options,
         Func<ScanFinding, Task> onIssueFound,
         CancellationToken cancellationToken)
@@ -269,6 +313,7 @@ public class RemoteDriveScanner
         var item = scanItem.Item;
         try
         {
+            var optimizer = executionPlan.Optimizer;
             var exposure = item.IsExternal ? "External" : "Internal";
             var ext = Path.GetExtension(item.Name ?? string.Empty);
             var scopedPolicyMap = ScopePolicyMap(item.Path, policyMap);
@@ -300,12 +345,11 @@ public class RemoteDriveScanner
                         return RemoteScanOutcome.Completed;
                     }
 
-                    var headScanResult = await _scanner.ScanStreamAsync(
+                    var headScanResult = await ((FileScanner)_scanner).ScanStreamAsync(
                         headStream,
                         item.Path,
-                        optimizer,
-                        scopedPolicyMap,
-                        ignoreRules,
+                        executionPlan,
+                        options,
                         exposure,
                         "Cloud",
                         null,
@@ -355,11 +399,11 @@ public class RemoteDriveScanner
                 {
                     var text = _contentExtractor.Extract(stream, ext);
                     using var textStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(text));
-                    scanResult = await ((FileScanner)_scanner).ScanStreamAsync(textStream, item.Path, optimizer, scopedPolicyMap, ignoreRules, exposure, "Cloud", null, cancellationToken);
+                    scanResult = await ((FileScanner)_scanner).ScanStreamAsync(textStream, item.Path, executionPlan, options, exposure, "Cloud", null, cancellationToken);
                 }
                 else
                 {
-                    scanResult = await ((FileScanner)_scanner).ScanStreamAsync(stream, item.Path, optimizer, scopedPolicyMap, ignoreRules, exposure, "Cloud", null, cancellationToken);
+                    scanResult = await ((FileScanner)_scanner).ScanStreamAsync(stream, item.Path, executionPlan, options, exposure, "Cloud", null, cancellationToken);
                 }
 
                 foreach (var issue in scanResult.Issues)
@@ -375,6 +419,15 @@ public class RemoteDriveScanner
                 return HandleContentUnavailable(ex, item);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogDebug(ex, "Skipping inaccessible item {ItemPath}", item.Path);
+            return RemoteScanOutcome.Completed;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error scanning item {ItemName}", item.Name);
@@ -385,6 +438,12 @@ public class RemoteDriveScanner
     private RemoteScanOutcome HandleContentUnavailable(RemoteContentUnavailableException exception, IRemoteFile item)
     {
         var statusSuffix = exception.StatusCode is int httpStatusCode ? $" HTTP {httpStatusCode}." : string.Empty;
+        if (exception.IsExpected)
+        {
+            _logger.LogDebug(exception, "Skipping temporarily unavailable item {ItemPath}", item.Path);
+            return RemoteScanOutcome.Completed;
+        }
+
         if (exception.ShouldRetry)
         {
             _logger.LogWarning(

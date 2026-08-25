@@ -18,17 +18,6 @@ public class AtlassianConnectorTests
     }
 
     [Fact]
-    public void LegacyJiraConnector_ForwardsToAtlassianConnector()
-    {
-#pragma warning disable CS0618
-        var connector = new Stratus.Sift.Connectors.Jira.JiraConnector(
-            new HttpClient(new DelegateHandler(_ => Task.FromResult(Json("{}")))));
-#pragma warning restore CS0618
-
-        Assert.Equal("Atlassian", connector.ProviderName);
-    }
-
-    [Fact]
     public async Task ConfluenceDiscovery_ContinuesWhenJiraIsUnavailable()
     {
         var handler = new DelegateHandler(request => Task.FromResult(request.RequestUri!.AbsolutePath switch
@@ -160,8 +149,8 @@ public class AtlassianConnectorTests
             return Json("""{"isLast":true,"issues":[]}""");
         });
         var api = new AtlassianApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
-        var firstDrive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", "status = Open", new Dictionary<string, string>());
-        var secondDrive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", "status = Closed", new Dictionary<string, string>());
+        var firstDrive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", "status = Open", new Dictionary<string, string>(), "account-a");
+        var secondDrive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", "status = Closed", new Dictionary<string, string>(), "account-a");
 
         var token = await firstDrive.ProcessChangesAsync(null, _ => Task.CompletedTask);
         await secondDrive.ProcessChangesAsync(token, _ => Task.CompletedTask);
@@ -185,7 +174,7 @@ public class AtlassianConnectorTests
             return Json("""{"isLast":true,"issues":[]}""");
         });
         var api = new AtlassianApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
-        var drive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", null, new Dictionary<string, string>());
+        var drive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", null, new Dictionary<string, string>(), "account-a");
 
         var token = await drive.ProcessChangesAsync(null, _ => Task.CompletedTask);
         await drive.ProcessChangesAsync(token, _ => Task.CompletedTask);
@@ -194,6 +183,82 @@ public class AtlassianConnectorTests
         var secondJql = secondRequest.RootElement.GetProperty("jql").GetString();
         Assert.Contains("updated >=", secondJql);
         Assert.EndsWith("ORDER BY updated DESC", secondJql);
+    }
+
+    [Fact]
+    public async Task JiraScan_ResumesFromTheLastCompletedResultPage()
+    {
+        var requests = new List<string>();
+        var responses = new Queue<string>([
+            """{"isLast":false,"issues":[],"nextPageToken":"page-2"}""",
+            """{"isLast":true,"issues":[]}"""
+        ]);
+        var handler = new DelegateHandler(async request =>
+        {
+            requests.Add(await request.Content!.ReadAsStringAsync());
+            return Json(responses.Dequeue());
+        });
+        var api = new AtlassianApiClient(new HttpClient(handler), new Uri("https://example.atlassian.net/"));
+        var drive = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", null, new Dictionary<string, string>(), "account-a");
+        string? checkpoint = null;
+
+        await Assert.ThrowsAsync<CheckpointCapturedException>(() => drive.ProcessChangesAsync(
+            null,
+            _ => Task.CompletedTask,
+            token =>
+            {
+                checkpoint = token;
+                throw new CheckpointCapturedException();
+            }));
+
+        Assert.NotNull(checkpoint);
+        await drive.ProcessChangesAsync(checkpoint, _ => Task.CompletedTask);
+
+        using var resumedRequest = JsonDocument.Parse(requests[1]);
+        Assert.Equal("page-2", resumedRequest.RootElement.GetProperty("nextPageToken").GetString());
+    }
+
+    [Fact]
+    public void CheckpointScope_IsStableAndDoesNotExposeCredentials()
+    {
+        const string email = "pentester@stratussecurity.com";
+        const string token = "secret-api-token";
+
+        var scope = AtlassianConnector.CreateCheckpointScope(email, token);
+        var equivalentScope = AtlassianConnector.CreateCheckpointScope(" PENTESTER@stratussecurity.com ", $" {token} ");
+
+        Assert.Equal(equivalentScope, scope);
+        Assert.DoesNotContain(email, scope, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(token, scope, StringComparison.Ordinal);
+        Assert.Matches("^[0-9a-f]{32}$", scope);
+    }
+
+    [Fact]
+    public void CheckpointScope_SeparatesAccountsAndCredentialRotations()
+    {
+        var original = AtlassianConnector.CreateCheckpointScope("first@stratussecurity.com", "token-one");
+        var otherAccount = AtlassianConnector.CreateCheckpointScope("second@stratussecurity.com", "token-one");
+        var rotatedCredential = AtlassianConnector.CreateCheckpointScope("first@stratussecurity.com", "token-two");
+
+        Assert.NotEqual(original, otherAccount);
+        Assert.NotEqual(original, rotatedCredential);
+    }
+
+    [Fact]
+    public void DriveCheckpointKeys_IncludeOpaqueCredentialScope()
+    {
+        var api = new AtlassianApiClient(
+            new HttpClient(new DelegateHandler(_ => Task.FromResult(Json("{}")))),
+            new Uri("https://example.atlassian.net/"));
+        var firstScope = AtlassianConnector.CreateCheckpointScope("first@stratussecurity.com", "token-one");
+        var secondScope = AtlassianConnector.CreateCheckpointScope("second@stratussecurity.com", "token-one");
+        var first = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", null, new Dictionary<string, string>(), firstScope);
+        var second = new JiraDrive(api, new Uri("https://example.atlassian.net/"), "1", "SEC", "Security", null, new Dictionary<string, string>(), secondScope);
+
+        Assert.NotEqual(first.ConnectionId, second.ConnectionId);
+        Assert.StartsWith("atlassian-v2://example.atlassian.net/", first.ConnectionId, StringComparison.Ordinal);
+        Assert.DoesNotContain("first@stratussecurity.com", first.ConnectionId, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("token-one", first.ConnectionId, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -279,4 +344,6 @@ public class AtlassianConnectorTests
             return callback(request);
         }
     }
+
+    private sealed class CheckpointCapturedException : Exception;
 }

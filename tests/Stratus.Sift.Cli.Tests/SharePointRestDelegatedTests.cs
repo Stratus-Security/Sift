@@ -505,7 +505,7 @@ public class SharePointRestDelegatedTests
     {
         return new SharePointRestClient(
             new TestTokenCredential(),
-            "StratusSnareConnector.Tests",
+            "StratusSiftConnector.Tests",
             new HttpClient(handler)
             {
                 Timeout = TimeSpan.FromSeconds(15)

@@ -57,65 +57,157 @@ public sealed class SlackDrive : IRemoteDrive
         Func<string, Task>? onCheckpoint = null,
         CancellationToken cancellationToken = default)
     {
-        string? cursor = null;
-        var newestTimestamp = deltaToken;
-        var threadParents = new List<string>();
-        var seenThreadParents = new HashSet<string>(StringComparer.Ordinal);
+        var resume = ParseCheckpoint(deltaToken);
+        var boundary = resume.Boundary;
+        var cursor = resume.Cursor;
+        var newestTimestamp = resume.Newest ?? boundary;
+        var threadParents = resume.ThreadParents.ToList();
+        var seenThreadParents = threadParents.ToHashSet(StringComparer.Ordinal);
 
-        do
+        if (!resume.RepliesPhase)
         {
-            using var document = await _connector.GetSlackDocumentAsync(
-                "conversations.history",
-                new Dictionary<string, string?>
-                {
-                    ["channel"] = Id,
-                    ["limit"] = "15",
-                    ["cursor"] = cursor
-                },
-                cancellationToken);
-
-            foreach (var message in document.RootElement.GetProperty("messages").EnumerateArray())
+            do
             {
-                var timestamp = message.GetProperty("ts").GetString() ?? string.Empty;
-                newestTimestamp = MaxSlackTimestamp(newestTimestamp, timestamp);
-                var editedTimestamp = GetNestedTimestamp(message, "edited", "ts");
-                newestTimestamp = MaxSlackTimestamp(newestTimestamp, editedTimestamp);
-                if (string.IsNullOrWhiteSpace(deltaToken)
-                    || IsAfter(timestamp, deltaToken)
-                    || IsAfter(editedTimestamp, deltaToken))
-                {
-                    await EmitMessageAsync(message, onChange);
-                }
-
-                if (message.TryGetProperty("reply_count", out var replyCount) && replyCount.GetInt32() > 0)
-                {
-                    var latestReply = message.TryGetProperty("latest_reply", out var latestReplyElement)
-                        ? latestReplyElement.GetString()
-                        : null;
-                    if (string.IsNullOrWhiteSpace(deltaToken) || IsAfter(latestReply, deltaToken))
+                using var document = await _connector.GetSlackDocumentAsync(
+                    "conversations.history",
+                    new Dictionary<string, string?>
                     {
-                        newestTimestamp = MaxSlackTimestamp(newestTimestamp, latestReply);
-                        if (!string.IsNullOrWhiteSpace(timestamp) && seenThreadParents.Add(timestamp))
+                        ["channel"] = Id,
+                        ["limit"] = "15",
+                        ["cursor"] = cursor
+                    },
+                    cancellationToken);
+
+                foreach (var message in document.RootElement.GetProperty("messages").EnumerateArray())
+                {
+                    var timestamp = message.GetProperty("ts").GetString() ?? string.Empty;
+                    newestTimestamp = MaxSlackTimestamp(newestTimestamp, timestamp);
+                    var editedTimestamp = GetNestedTimestamp(message, "edited", "ts");
+                    newestTimestamp = MaxSlackTimestamp(newestTimestamp, editedTimestamp);
+                    if (string.IsNullOrWhiteSpace(boundary)
+                        || IsAfter(timestamp, boundary)
+                        || IsAfter(editedTimestamp, boundary))
+                    {
+                        await EmitMessageAsync(message, onChange);
+                    }
+
+                    if (message.TryGetProperty("reply_count", out var replyCount) && replyCount.GetInt32() > 0)
+                    {
+                        var latestReply = message.TryGetProperty("latest_reply", out var latestReplyElement)
+                            ? latestReplyElement.GetString()
+                            : null;
+                        if (string.IsNullOrWhiteSpace(boundary) || IsAfter(latestReply, boundary))
                         {
-                            threadParents.Add(timestamp);
+                            newestTimestamp = MaxSlackTimestamp(newestTimestamp, latestReply);
+                            if (!string.IsNullOrWhiteSpace(timestamp) && seenThreadParents.Add(timestamp))
+                            {
+                                threadParents.Add(timestamp);
+                            }
                         }
                     }
                 }
+
+                cursor = SlackConnector.GetNextCursor(document.RootElement);
+                if (onCheckpoint != null)
+                {
+                    await onCheckpoint(CreateCheckpoint(
+                        boundary,
+                        cursor,
+                        newestTimestamp,
+                        repliesPhase: string.IsNullOrWhiteSpace(cursor),
+                        threadParents));
+                }
             }
-
-            cursor = SlackConnector.GetNextCursor(document.RootElement);
+            while (!string.IsNullOrWhiteSpace(cursor));
         }
-        while (!string.IsNullOrWhiteSpace(cursor));
 
-        foreach (var parentTimestamp in threadParents)
+        while (threadParents.Count > 0)
         {
+            var parentTimestamp = threadParents[0];
             newestTimestamp = MaxSlackTimestamp(
                 newestTimestamp,
-                await EmitRepliesAsync(parentTimestamp, deltaToken, onChange, cancellationToken));
+                await EmitRepliesAsync(parentTimestamp, boundary, onChange, cancellationToken));
+            threadParents.RemoveAt(0);
+            if (onCheckpoint != null)
+            {
+                await onCheckpoint(CreateCheckpoint(boundary, null, newestTimestamp, repliesPhase: true, threadParents));
+            }
         }
 
         return newestTimestamp ?? string.Empty;
     }
+
+    internal static string CreateCheckpoint(
+        string? boundary,
+        string? cursor,
+        string? newest,
+        bool repliesPhase,
+        IReadOnlyCollection<string> threadParents)
+        => $"sift-slack-v3:{Encode(boundary)}.{Encode(cursor)}.{Encode(newest)}.{(repliesPhase ? "r" : "h")}.{string.Join(',', threadParents.Select(Encode))}";
+
+    internal static SlackResumeState ParseCheckpoint(string? token)
+    {
+        const string prefix = "sift-slack-v3:";
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return new SlackResumeState(null, null, null, false, []);
+        }
+
+        if (!token.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return new SlackResumeState(token, null, token, false, []);
+        }
+
+        var parts = token[prefix.Length..].Split('.', 5);
+        if (parts.Length != 5)
+        {
+            return new SlackResumeState(null, null, null, false, []);
+        }
+
+        var parents = parts[4]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Decode)
+            .Where(value => value != null)
+            .Cast<string>()
+            .ToArray();
+        return new SlackResumeState(
+            Decode(parts[0]),
+            Decode(parts[1]),
+            Decode(parts[2]),
+            parts[3] == "r",
+            parents);
+    }
+
+    private static string Encode(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(value))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static string? Decode(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return null;
+        try
+        {
+            var normalized = value.Replace('-', '+').Replace('_', '/');
+            normalized = normalized.PadRight(normalized.Length + ((4 - normalized.Length % 4) % 4), '=');
+            return Encoding.UTF8.GetString(Convert.FromBase64String(normalized));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    internal readonly record struct SlackResumeState(
+        string? Boundary,
+        string? Cursor,
+        string? Newest,
+        bool RepliesPhase,
+        IReadOnlyList<string> ThreadParents);
 
     private async Task<string?> EmitRepliesAsync(
         string parentTimestamp,

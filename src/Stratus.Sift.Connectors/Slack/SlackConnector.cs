@@ -2,11 +2,12 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Stratus.Sift.Connectors.Interfaces;
+using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Connectors.Slack;
 
-public sealed class SlackConnector : IConnector
+public sealed class SlackConnector : IConnector, IConnectorCheckpointScopeProvider
 {
     private const int MaximumApiAttempts = 8;
     private readonly HttpClient _httpClient;
@@ -18,6 +19,7 @@ public sealed class SlackConnector : IConnector
     private string _workspaceId = string.Empty;
     private string _workspaceName = "Slack";
     private string _workspaceUrl = "https://slack.com";
+    private string _checkpointScope = string.Empty;
 
     public SlackConnector(HttpClient httpClient, ILogger<SlackConnector>? logger = null)
     {
@@ -26,6 +28,9 @@ public sealed class SlackConnector : IConnector
     }
 
     public string ProviderName => CommonConstants.ConnectorProviders.Slack;
+    public string CheckpointScope => !string.IsNullOrWhiteSpace(_checkpointScope)
+        ? _checkpointScope
+        : throw new InvalidOperationException("The Slack connector has not been initialized.");
 
     public async Task InitializeAsync(Dictionary<string, string> configuration, CancellationToken cancellationToken = default)
     {
@@ -39,6 +44,7 @@ public sealed class SlackConnector : IConnector
         _client = _httpClient;
         _client.BaseAddress = new Uri("https://slack.com/api/");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
+        _checkpointScope = ConnectorCheckpointIdentity.Create("slack", token);
 
         using var document = await GetSlackDocumentAsync("auth.test", null, cancellationToken);
         var root = document.RootElement;

@@ -6,7 +6,6 @@ public static class CommonConstants
     {
         public const string Microsoft365 = "Microsoft 365";
         public const string Slack = "Slack";
-        public const string SlackExport = "Slack Export";
         public const string Atlassian = "Atlassian";
     }
 }

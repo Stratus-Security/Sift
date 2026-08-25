@@ -13,10 +13,11 @@ using System.Text.Json;
 
 namespace Stratus.Sift.Connectors.SharePoint;
 
-public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
+public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider, IConnectorCheckpointScopeProvider
 {
     private const int MaxConcurrentSiteRequests = 6;
     private const string DefaultInteractiveRedirectUri = "http://localhost";
+    private const string ProductPrefix = "StratusSiftConnector.SharePoint";
     private static readonly string[] DefaultDelegatedScopes = ["Sites.Read.All", "Team.ReadBasic.All", "Channel.ReadBasic.All"];
 
     private static readonly HashSet<string> SystemLibraries = new(StringComparer.OrdinalIgnoreCase)
@@ -41,6 +42,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
     private SharePointRestClient? _sharePointRestClient;
     private Uri? _sharePointRestRootUrl;
     private string _tenantId = string.Empty;
+    private string _checkpointScope = string.Empty;
     private readonly ILogger<SharePointConnector>? _logger;
     private readonly ThrottleNotificationHub? _throttleNotifications;
     private readonly List<Uri> _configuredSiteTargets = [];
@@ -120,12 +122,16 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
     }
 
     public string ProviderName => CommonConstants.ConnectorProviders.Microsoft365;
+    public string CheckpointScope => !string.IsNullOrWhiteSpace(_checkpointScope)
+        ? _checkpointScope
+        : throw new InvalidOperationException("The Microsoft 365 connector has not been initialized.");
 
     public async Task InitializeAsync(Dictionary<string, string> config, CancellationToken cancellationToken = default)
     {
         _graphClient = null;
         _sharePointRestClient = null;
         _sharePointRestRootUrl = null;
+        _checkpointScope = string.Empty;
         _tenantId = config.GetValueOrDefault("TenantId") ?? string.Empty;
         var clientId = config.GetValueOrDefault("ClientId") ?? string.Empty;
         var clientSecret = config.GetValueOrDefault("ClientSecret") ?? string.Empty;
@@ -157,11 +163,16 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
 
                 _graphClient = MicrosoftGraphClientBuilder.Create(
                     credential,
-                    "StratusSnareConnector.SharePoint",
+                    ProductPrefix,
                     timeout: null,
                     finalHandler: null,
                     retryOptions: null,
                     throttleNotifications: _throttleNotifications);
+                _checkpointScope = ConnectorCheckpointIdentity.Create(
+                    "m365-app",
+                    _tenantId,
+                    clientId,
+                    clientSecret);
                 break;
 
             case SharePointAuthenticationMode.DeviceCode:
@@ -176,16 +187,16 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                     credential = authMode == SharePointAuthenticationMode.DeviceCode
                         ? CreateDeviceCodeCredential(clientId, authorityHost)
                         : CreateInteractiveBrowserCredential(clientId, authorityHost, config.GetValueOrDefault("RedirectUri"));
+                    credential = ObserveDelegatedCredential(credential);
 
                     _graphClient = MicrosoftGraphClientBuilder.Create(
                         credential,
-                        "StratusSnareConnector.SharePoint",
+                        ProductPrefix,
                         delegatedScopes,
                         timeout: null,
                         finalHandler: null,
                         retryOptions: null,
                         throttleNotifications: _throttleNotifications);
-                    await TryResolveDelegatedTenantIdAsync(credential, delegatedScopes, cancellationToken);
                     break;
                 }
 
@@ -209,22 +220,28 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                 credential = authMode == SharePointAuthenticationMode.DeviceCode
                     ? CreateDeviceCodeCredential(sharePointClientId, authorityHost)
                     : CreateInteractiveBrowserCredential(sharePointClientId, authorityHost, config.GetValueOrDefault("RedirectUri"));
+                credential = ObserveDelegatedCredential(credential);
 
                 _sharePointRestClient = SharePointRestClient.Create(
                     credential,
-                    "StratusSnareConnector.SharePoint",
+                    ProductPrefix,
                     _logger,
                     _throttleNotifications);
-                var tenantResolutionRoot = _sharePointRestRootUrl
-                    ?? SharePointRestClient.NormalizeRootUrl(_configuredSiteTargets[0]);
-                await TryResolveDelegatedTenantIdAsync(
-                    credential,
-                    [$"{tenantResolutionRoot.Scheme}://{tenantResolutionRoot.Authority}/.default"],
-                    cancellationToken);
                 break;
 
             default:
                 throw new InvalidOperationException($"Unsupported SharePoint auth mode '{authMode}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(_checkpointScope))
+        {
+            _checkpointScope = ConnectorCheckpointIdentity.Create(
+                "m365-fallback",
+                _tenantId,
+                clientId,
+                authMode.ToString(),
+                Environment.UserDomainName,
+                Environment.UserName);
         }
 
         await Task.CompletedTask;
@@ -1392,43 +1409,69 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         }
     }
 
-    private async Task TryResolveDelegatedTenantIdAsync(
-        TokenCredential credential,
-        IEnumerable<string> delegatedScopes,
-        CancellationToken cancellationToken)
+    private TokenCredential ObserveDelegatedCredential(TokenCredential credential)
+        => new ObservingTokenCredential(credential, UpdateDelegatedCheckpointScope);
+
+    private void UpdateDelegatedCheckpointScope(string accessToken)
     {
-        if (!string.IsNullOrWhiteSpace(_tenantId)
-            && !string.Equals(_tenantId, "common", StringComparison.OrdinalIgnoreCase))
+        _checkpointScope = CreateDelegatedCheckpointScope(accessToken);
+        if (TryGetTenantIdFromAccessToken(accessToken, out var tenantId)
+            && !string.IsNullOrWhiteSpace(tenantId))
         {
-            return;
+            _tenantId = tenantId;
         }
+    }
 
-        var scopes = delegatedScopes
-            .Where(scope => !string.IsNullOrWhiteSpace(scope))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (scopes.Length == 0)
-        {
-            return;
-        }
-
+    private static string CreateDelegatedCheckpointScope(string accessToken)
+    {
         try
         {
-            var accessToken = await credential.GetTokenAsync(new TokenRequestContext(scopes), cancellationToken);
-            if (TryGetTenantIdFromAccessToken(accessToken.Token, out var tenantId)
-                && !string.IsNullOrWhiteSpace(tenantId))
+            var parts = accessToken.Split('.');
+            if (parts.Length < 2)
             {
-                _tenantId = tenantId;
+                return ConnectorCheckpointIdentity.Create("m365-delegated-token", accessToken);
             }
+
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
+            using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+            var root = document.RootElement;
+            var tenant = GetClaim(root, "tid");
+            var principal = GetClaim(root, "oid") ?? GetClaim(root, "sub");
+            var client = GetClaim(root, "azp") ?? GetClaim(root, "appid");
+            return !string.IsNullOrWhiteSpace(principal)
+                ? ConnectorCheckpointIdentity.Create("m365-delegated", tenant, principal, client)
+                : ConnectorCheckpointIdentity.Create("m365-delegated-token", accessToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch
         {
-            throw;
+            return ConnectorCheckpointIdentity.Create("m365-delegated-token", accessToken);
         }
-        catch (Exception ex)
+
+        static string? GetClaim(JsonElement root, string name)
+            => root.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+    }
+
+    private sealed class ObservingTokenCredential(
+        TokenCredential inner,
+        Action<string> onTokenReceived) : TokenCredential
+    {
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
         {
-            _logger?.LogDebug(ex, "Unable to auto-discover tenant id from delegated authentication.");
+            var token = inner.GetToken(requestContext, cancellationToken);
+            onTokenReceived(token.Token);
+            return token;
+        }
+
+        public override async ValueTask<AccessToken> GetTokenAsync(
+            TokenRequestContext requestContext,
+            CancellationToken cancellationToken)
+        {
+            var token = await inner.GetTokenAsync(requestContext, cancellationToken);
+            onTokenReceived(token.Token);
+            return token;
         }
     }
 

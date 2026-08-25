@@ -49,8 +49,7 @@ internal static class CliConnectorConfiguration
         AddConfigValues(config, "SiteUrl", siteUrls);
         AddConfigValues(config, "DriveId", driveIds);
 
-        var normalizedProviderName = NormalizeProviderName(providerName);
-        if (!normalizedProviderName.Equals(CommonConstants.ConnectorProviders.Microsoft365, StringComparison.OrdinalIgnoreCase))
+        if (!providerName.Equals(CommonConstants.ConnectorProviders.Microsoft365, StringComparison.OrdinalIgnoreCase))
         {
             return config;
         }
@@ -74,24 +73,6 @@ internal static class CliConnectorConfiguration
         }
 
         return config;
-    }
-
-    internal static string NormalizeProviderName(string providerName)
-    {
-        if (string.IsNullOrWhiteSpace(providerName))
-        {
-            return providerName;
-        }
-
-        var normalized = string.Concat(providerName.Where(ch => !char.IsWhiteSpace(ch) && ch != '-')).ToLowerInvariant();
-        return normalized switch
-        {
-            "m365" or "microsoft365" or "office365" or "sharepoint" or "sharepointonline" => CommonConstants.ConnectorProviders.Microsoft365,
-            "slack" => CommonConstants.ConnectorProviders.Slack,
-            "slackexport" => CommonConstants.ConnectorProviders.SlackExport,
-            "jira" or "atlassian" or "atlassianjira" or "confluence" => CommonConstants.ConnectorProviders.Atlassian,
-            _ => providerName.Trim()
-        };
     }
 
     private static void SetConfigValue(IDictionary<string, string> config, string key, string? value)

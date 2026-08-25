@@ -83,13 +83,13 @@ public class Program
         builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.AustralianMedicareValidator>();
         builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.ContextualIdentifierValidator>();
         builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.EnvironmentSecretAssignmentValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.PowerShellCredentialUsageValidator>();
         builder.Services.AddSingleton<ValidatorFactory>();
 
         builder.Services.AddHttpClient();
 
         builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.SharePoint.SharePointConnector>();
         builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Slack.SlackConnector>();
-        builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Slack.SlackExportConnector>();
         builder.Services.AddTransient<IConnector, Stratus.Sift.Connectors.Atlassian.AtlassianConnector>();
 
         return builder.Build();

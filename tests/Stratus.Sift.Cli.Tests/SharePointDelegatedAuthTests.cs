@@ -609,7 +609,7 @@ public class SharePointDelegatedAuthTests
     {
         return MicrosoftGraphClientBuilder.Create(
             new TestTokenCredential(),
-            "StratusSnareConnector.Tests",
+            "StratusSiftConnector.Tests",
             timeout: TimeSpan.FromSeconds(15),
             finalHandler: handler,
             retryOptions: retryOptions);
