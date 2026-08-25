@@ -8,14 +8,16 @@ public static class IgnoreRuleEvaluator
 {
     public static IReadOnlyList<IgnoreRule> GetMatchedRules(string path, IEnumerable<IgnoreRule>? rules)
     {
-        if (string.IsNullOrWhiteSpace(path) || rules == null)
+        if (string.IsNullOrWhiteSpace(path)
+            || rules == null
+            || rules is IReadOnlyCollection<IgnoreRule> { Count: 0 })
         {
             return [];
         }
 
         var normalizedPath = NormalizePath(path);
         var name = GetLeafName(normalizedPath);
-        var matches = new List<IgnoreRule>();
+        List<IgnoreRule>? matches = null;
 
         foreach (var rule in rules)
         {
@@ -26,11 +28,35 @@ public static class IgnoreRuleEvaluator
 
             if (MatchesRule(rule, normalizedPath, name))
             {
-                matches.Add(rule);
+                (matches ??= new List<IgnoreRule>()).Add(rule);
             }
         }
 
-        return matches;
+        return matches ?? [];
+    }
+
+    public static bool ShouldIgnore(string path, IEnumerable<IgnoreRule>? rules)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || rules == null
+            || rules is IReadOnlyCollection<IgnoreRule> { Count: 0 })
+        {
+            return false;
+        }
+
+        var normalizedPath = NormalizePath(path);
+        var name = GetLeafName(normalizedPath);
+        foreach (var rule in rules)
+        {
+            if (rule.IsEnabled
+                && !string.IsNullOrWhiteSpace(rule.Pattern)
+                && MatchesRule(rule, normalizedPath, name))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool ShouldPruneDirectory(string directoryPath, IEnumerable<IgnoreRule>? rules)

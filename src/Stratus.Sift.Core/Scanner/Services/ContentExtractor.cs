@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -10,6 +11,7 @@ namespace Stratus.Sift.Scanner.Services;
 public class ContentExtractor
 {
     private const long MaxFileSize = 10 * 1024 * 1024; // 10MB limit for extraction
+    private const int MaxExtractedCharacters = 10 * 1024 * 1024;
 
     public bool Supports(string extension)
     {
@@ -48,8 +50,12 @@ public class ContentExtractor
             // PDF and OpenXml libraries usually require seekable streams
             if (!stream.CanSeek)
             {
-                var ms = new MemoryStream();
-                stream.CopyTo(ms);
+                var ms = new MemoryStream(capacity: 64 * 1024);
+                if (!CopyToBounded(stream, ms, MaxFileSize))
+                {
+                    ms.Dispose();
+                    return string.Empty;
+                }
                 ms.Position = 0;
                 streamToUse = ms;
                 shouldDispose = true;
@@ -88,7 +94,7 @@ public class ContentExtractor
             var sb = new StringBuilder();
             foreach (var page in document.GetPages())
             {
-                sb.AppendLine(page.Text);
+                if (!AppendBounded(sb, page.Text, appendNewLine: true)) break;
             }
             return sb.ToString();
         }
@@ -103,13 +109,20 @@ public class ContentExtractor
         try
         {
             using var doc = WordprocessingDocument.Open(stream, false);
-            if (doc.MainDocumentPart?.Document?.Body == null) return string.Empty;
+            if (doc.MainDocumentPart == null) return string.Empty;
 
             var sb = new StringBuilder();
-            // Iterate over paragraphs to ensure separation
-            foreach (var paragraph in doc.MainDocumentPart.Document.Body.Descendants<Word.Paragraph>())
+            using var reader = OpenXmlReader.Create(doc.MainDocumentPart);
+            while (reader.Read())
             {
-                sb.AppendLine(paragraph.InnerText);
+                if (reader.ElementType == typeof(Word.Text) && reader.IsStartElement)
+                {
+                    if (!AppendBounded(sb, reader.GetText(), appendNewLine: false)) break;
+                }
+                else if (reader.ElementType == typeof(Word.Paragraph) && reader.IsEndElement)
+                {
+                    if (!AppendBounded(sb, string.Empty, appendNewLine: true)) break;
+                }
             }
             return sb.ToString();
         }
@@ -156,12 +169,16 @@ public class ContentExtractor
                                          var item = sharedStringTable.ElementAtOrDefault(index);
                                          if (item != null) text = item.InnerText;
                                      }
-                                     sb.Append(text + " ");
+                                     if (!AppendBounded(sb, text, appendNewLine: false)
+                                         || !AppendBounded(sb, " ", appendNewLine: false))
+                                     {
+                                         return sb.ToString();
+                                     }
                                  }
                              }
                         }
                     }
-                    sb.AppendLine();
+                    if (!AppendBounded(sb, string.Empty, appendNewLine: true)) break;
                 }
             }
             return sb.ToString();
@@ -170,5 +187,39 @@ public class ContentExtractor
         {
              return string.Empty;
         }
+    }
+
+    private static bool CopyToBounded(Stream source, Stream destination, long maximumBytes)
+    {
+        var pool = ArrayPool<byte>.Shared;
+        var buffer = pool.Rent(64 * 1024);
+        long totalBytes = 0;
+        try
+        {
+            while (true)
+            {
+                var read = source.Read(buffer, 0, buffer.Length);
+                if (read <= 0) return true;
+                totalBytes += read;
+                if (totalBytes > maximumBytes) return false;
+                destination.Write(buffer, 0, read);
+            }
+        }
+        finally
+        {
+            pool.Return(buffer);
+        }
+    }
+
+    private static bool AppendBounded(StringBuilder builder, string value, bool appendNewLine)
+    {
+        var newlineLength = appendNewLine ? Environment.NewLine.Length : 0;
+        var remaining = MaxExtractedCharacters - builder.Length;
+        if (remaining <= newlineLength) return false;
+
+        var charactersToAppend = Math.Min(value.Length, remaining - newlineLength);
+        builder.Append(value.AsSpan(0, charactersToAppend));
+        if (appendNewLine) builder.AppendLine();
+        return charactersToAppend == value.Length && builder.Length < MaxExtractedCharacters;
     }
 }

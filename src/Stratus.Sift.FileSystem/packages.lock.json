@@ -57,7 +57,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "PdfPig": "[0.1.13, )",
-          "Stratus.Sift.Contracts": "[0.1.0, )",
+          "Stratus.Sift.Contracts": "[0.3.0, )",
           "System.IO.FileSystem.AccessControl": "[5.0.0, )"
         }
       }

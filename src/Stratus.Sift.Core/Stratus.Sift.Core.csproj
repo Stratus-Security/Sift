@@ -6,7 +6,7 @@
     <IsAotCompatible>true</IsAotCompatible>
     <PackageId Condition="'$(CommercialBuild)' != 'true'">Stratus.Sift.Core</PackageId>
     <PackageId Condition="'$(CommercialBuild)' == 'true'">Stratus.Sift.Core.Commercial</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <Authors>Stratus</Authors>
     <Description>Tenant-neutral content matching and filesystem scanning engine for Stratus Sift.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -14,6 +14,10 @@
     <PackageLicenseFile Condition="'$(CommercialBuild)' == 'true'">LICENSE.txt</PackageLicenseFile>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Stratus.Sift.Cli.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Stratus.Sift.Contracts\Stratus.Sift.Contracts.csproj" />
   </ItemGroup>

@@ -36,5 +36,7 @@ public class ScanOptions
 
     public int LlmTimeoutSeconds { get; set; } = 20;
 
-    public long MaxDiskReadBytesPerSecond { get; set; } = 10 * 1024 * 1024;
+    public long MaxDiskReadBytesPerSecond { get; set; }
+
+    public ScanDiagnostics? Diagnostics { get; set; }
 }

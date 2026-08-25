@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -13,9 +14,9 @@ public readonly record struct SiftValidationResult(bool IsValid, double Confiden
     public static SiftValidationResult Invalid => new(false, 0.0);
 }
 
-public sealed record SiftRuleMatch(int Index, int Length, string Value, double Confidence);
+public readonly record struct SiftRuleMatch(int Index, int Length, string Value, double Confidence);
 
-public sealed record SiftRuleEvaluation(IReadOnlyList<SiftRuleMatch> Matches, bool TimedOut);
+public readonly record struct SiftRuleEvaluation(IReadOnlyList<SiftRuleMatch> Matches, bool TimedOut);
 
 public static class SiftMatchEngine
 {
@@ -121,6 +122,30 @@ public static class SiftEvidence
             return 0;
         }
 
+        Span<int> asciiCounts = stackalloc int[128];
+        foreach (var character in value)
+        {
+            if (character >= asciiCounts.Length)
+            {
+                return CalculateUnicodeShannonEntropy(value);
+            }
+
+            asciiCounts[character]++;
+        }
+
+        var entropy = 0.0;
+        foreach (var count in asciiCounts)
+        {
+            if (count == 0) continue;
+            var probability = (double)count / value.Length;
+            entropy -= probability * Math.Log2(probability);
+        }
+
+        return entropy;
+    }
+
+    private static double CalculateUnicodeShannonEntropy(ReadOnlySpan<char> value)
+    {
         var counts = new Dictionary<char, int>();
         foreach (var character in value)
         {
@@ -168,7 +193,30 @@ public static class SiftEvidence
     }
 
     public static string ComputeSha256Base64(string value)
-        => Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    {
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        byte[]? rented = null;
+        Span<byte> encoded = byteCount <= 512
+            ? stackalloc byte[byteCount]
+            : (rented = ArrayPool<byte>.Shared.Rent(byteCount));
+        encoded = encoded[..byteCount];
+
+        try
+        {
+            Encoding.UTF8.GetBytes(value, encoded);
+            Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(encoded, hash);
+            return Convert.ToBase64String(hash);
+        }
+        finally
+        {
+            if (rented != null)
+            {
+                CryptographicOperations.ZeroMemory(rented.AsSpan(0, byteCount));
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+    }
 
     public static bool LooksBinary(ReadOnlySpan<byte> bytes)
     {

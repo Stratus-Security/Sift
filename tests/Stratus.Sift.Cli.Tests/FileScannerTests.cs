@@ -9,6 +9,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using System.Text;
+using Stratus.Sift.Scanner.Models;
 
 namespace Stratus.Sift.Cli.Tests;
 
@@ -525,5 +526,80 @@ public class FileScannerTests : IDisposable
         Assert.Single(findings);
         Assert.Equal("AWS Access Key", findings[0].RuleName);
         Assert.Contains(secret, findings[0].Snippet);
+    }
+
+    [Fact]
+    public void ScanOptions_DefaultsToUnlimitedReadThroughput()
+    {
+        Assert.Equal(0, new ScanOptions().MaxDiskReadBytesPerSecond);
+    }
+
+    [Fact]
+    public async Task CompiledExecutionPlan_MatchesLegacyScannerResults()
+    {
+        var filePath = Path.Combine(_tempDirectory, "compiled-plan.txt");
+        File.WriteAllText(filePath, "api_secret=SIFT-COMPILED-PLAN-SECRET");
+        var (classifiers, policies) = CreateConfig(
+            "Compiled plan secret",
+            ["SIFT-COMPILED-PLAN-SECRET"],
+            Severity.High,
+            keywords: ["api_secret"],
+            extensions: [".txt"],
+            isLiteral: true);
+        var optimizer = new ClassifierOptimizer();
+        optimizer.LoadClassifiers(classifiers);
+        var policyMap = new Dictionary<Guid, List<Policy>>
+        {
+            [classifiers[0].Id] = policies
+        };
+        var plan = ScannerExecutionPlan.Create(optimizer, policyMap);
+        var scanner = new FileScanner(
+            NullLogger<FileScanner>.Instance,
+            new ContentExtractor(),
+            new ValidatorFactory([]));
+
+        var legacy = scanner.ScanFile(filePath, optimizer, policyMap).ToList();
+        var compiled = await scanner.ScanFileWithResultAsync(filePath, plan);
+
+        var legacyFinding = Assert.Single(legacy);
+        var compiledFinding = Assert.Single(compiled.Issues);
+        Assert.Equal(legacyFinding.RuleName, compiledFinding.RuleName);
+        Assert.Equal(legacyFinding.RedactedValue, compiledFinding.RedactedValue);
+        Assert.Equal(legacyFinding.Severity, compiledFinding.Severity);
+    }
+
+    [Fact]
+    public async Task ScanDiagnostics_ReportsOpenedFilesAndPhysicalReads()
+    {
+        var filePath = Path.Combine(_tempDirectory, "diagnostics.txt");
+        File.WriteAllText(filePath, "token=SIFT-DIAGNOSTICS-SECRET");
+        var (classifiers, policies) = CreateConfig(
+            "Diagnostics secret",
+            ["SIFT-DIAGNOSTICS-SECRET"],
+            Severity.High,
+            keywords: ["token"],
+            extensions: [".txt"],
+            isLiteral: true);
+        var optimizer = new ClassifierOptimizer();
+        optimizer.LoadClassifiers(classifiers);
+        var plan = ScannerExecutionPlan.Create(
+            optimizer,
+            new Dictionary<Guid, List<Policy>> { [classifiers[0].Id] = policies });
+        var diagnostics = new ScanDiagnostics();
+        var scanner = new FileScanner(
+            NullLogger<FileScanner>.Instance,
+            new ContentExtractor(),
+            new ValidatorFactory([]));
+
+        var result = await scanner.ScanFileWithResultAsync(
+            filePath,
+            plan,
+            new ScanOptions { Diagnostics = diagnostics });
+
+        Assert.Single(result.Issues);
+        var snapshot = diagnostics.Snapshot();
+        Assert.Equal(1, snapshot.FilesOpened);
+        Assert.Equal(new FileInfo(filePath).Length, snapshot.PhysicalBytesRead);
+        Assert.True(snapshot.AggregateRuleEvaluationTime >= TimeSpan.Zero);
     }
 }

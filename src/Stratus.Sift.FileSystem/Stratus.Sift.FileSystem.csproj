@@ -2,7 +2,7 @@
   <PropertyGroup>
     <PackageId Condition="'$(CommercialBuild)' != 'true'">Stratus.Sift.FileSystem</PackageId>
     <PackageId Condition="'$(CommercialBuild)' == 'true'">Stratus.Sift.FileSystem.Commercial</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <Authors>Stratus</Authors>
     <Description>Local and remote filesystem inventory support for Stratus Sift.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>

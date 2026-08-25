@@ -33,6 +33,41 @@ public class DefaultRulePortingTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultConfiguration_ShouldSuppressOnlyWindowsDebugPasswdLogFilename()
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies, ignoreRules) = await LoadDefaultConfigurationWithIgnoreRulesAsync();
+        var windowsDebugDirectory = Path.Combine(_tempDirectory, "Windows", "debug");
+        var unrelatedDirectory = Path.Combine(_tempDirectory, "operations");
+        Directory.CreateDirectory(windowsDebugDirectory);
+        Directory.CreateDirectory(unrelatedDirectory);
+        var windowsDiagnosticPath = Path.Combine(windowsDebugDirectory, "PASSWD.LOG");
+        var credentialOrientedPath = Path.Combine(unrelatedDirectory, "passwd.log");
+        await File.WriteAllTextAsync(
+            windowsDiagnosticPath,
+            "Windows password-change diagnostic output\napiKey = \"Winterfell-Lab-Secret-2026\"");
+        await File.WriteAllTextAsync(credentialOrientedPath, "operator-managed password export");
+
+        var diagnosticIssues = scanner.ScanFile(windowsDiagnosticPath, classifiers, policies).ToList();
+        var credentialIssues = scanner.ScanFile(credentialOrientedPath, classifiers, policies).ToList();
+        var diagnosticIgnoreRules = IgnoreRuleEvaluator.GetMatchedRules(windowsDiagnosticPath, ignoreRules);
+
+        Assert.DoesNotContain(
+            diagnosticIssues,
+            issue => issue.ClassifierName == "Credential-Oriented Filename");
+        Assert.Contains(
+            diagnosticIssues,
+            issue => issue.ClassifierName == "Generic Secret Assignment");
+        Assert.Contains(
+            credentialIssues,
+            issue => issue.ClassifierName == "Credential-Oriented Filename");
+        Assert.DoesNotContain(
+            diagnosticIgnoreRules,
+            rule => rule.MatchTarget == RuleTarget.DirectoryPath
+                && rule.Pattern.Contains("windows\\debug", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task DefaultConfiguration_ShouldDetectCloudCredentialStorePath_ByPath()
     {
         var (classifiers, _) = await LoadDefaultConfigurationAsync();
@@ -453,6 +488,27 @@ public class DefaultRulePortingTests : IDisposable
         Assert.Single(issues, i => i.ClassifierName == "PowerShell Credential Usage");
     }
 
+    [Theory]
+    [InlineData("ConvertTo-SecureString -AsPlainText -Force -String 'Winterfell2026!'")]
+    [InlineData("ConvertTo-SecureString ('Winterfell2026!') -AsPlainText -Force")]
+    [InlineData("ConvertTo-SecureString $unknownPassword -AsPlainText -Force")]
+    [InlineData("ConvertFrom-SecureString $securePassword -AsPlainText")]
+    [InlineData("[System.Net.NetworkCredential]::new('', $securePassword).Password")]
+    [InlineData("$credential.GetNetworkCredential().Password")]
+    [InlineData("[Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)")]
+    [InlineData("New-Object -TypeName System.Net.NetworkCredential")]
+    public async Task DefaultConfiguration_ShouldRetainBroadPowerShellCredentialCoverage(string content)
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "script.ps1");
+        await File.WriteAllTextAsync(filePath, content);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.Contains(issues, issue => issue.ClassifierName == "PowerShell Credential Usage");
+    }
+
     [Fact]
     public async Task DefaultConfiguration_ShouldDetectCommandCredentialUsage()
     {
@@ -589,6 +645,42 @@ public class DefaultRulePortingTests : IDisposable
         var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
 
         Assert.Single(issues, i => i.ClassifierName == "Generic Secret Assignment");
+    }
+
+    [Theory]
+    [InlineData("module.psm1", "$NuGetApiKey = \"$(Get-Random)\"")]
+    [InlineData("validation.psm1", "$result = Invoke-Pester -Path $path -PassThru")]
+    [InlineData("CHANGELOG.md", "Added -Passthu to Setup to obtain file system object references")]
+    public async Task DefaultConfiguration_ShouldNotTreatPowerShellExpressionsOrPassThruAsGenericSecrets(
+        string fileName,
+        string content)
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, fileName);
+        await File.WriteAllTextAsync(filePath, content);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.DoesNotContain(issues, issue => issue.ClassifierName == "Generic Secret Assignment");
+    }
+
+    [Fact]
+    public async Task DefaultConfiguration_ShouldNotTreatRuntimePowerShellConversionAsEmbeddedCredential()
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "module.psm1");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            $password = [System.Text.RegularExpressions.Regex]::Match($content, '(?<=Password: ).*')
+            $secstr = ConvertTo-SecureString $password -AsPlainText -Force
+            """);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.DoesNotContain(issues, issue => issue.ClassifierName == "PowerShell Credential Usage");
     }
 
     [Theory]
@@ -738,7 +830,7 @@ public class DefaultRulePortingTests : IDisposable
         return new FileScanner(
             NullLogger<FileScanner>.Instance,
             new ContentExtractor(),
-            new ValidatorFactory(Enumerable.Empty<IValidator>()));
+            new ValidatorFactory([new PowerShellCredentialUsageValidator()]));
     }
 
     private static FileScanner CreateScannerWithAdditionalValidators()
@@ -755,7 +847,8 @@ public class DefaultRulePortingTests : IDisposable
             new TerraformTokenValidator(),
             new CredentialedServiceUriValidator(),
             new BearerTokenValidator(),
-            new EnvironmentSecretAssignmentValidator()
+            new EnvironmentSecretAssignmentValidator(),
+            new PowerShellCredentialUsageValidator()
         ];
 
         return new FileScanner(

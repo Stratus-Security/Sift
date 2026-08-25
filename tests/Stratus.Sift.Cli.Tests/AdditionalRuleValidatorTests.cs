@@ -122,6 +122,7 @@ public sealed class AdditionalRuleValidatorTests
     [InlineData("API_KEY=REDACTED-REDACTED", false)]
     [InlineData("ACCESS_TOKEN=@" + "Microsoft.KeyVault(SecretUri=https://vault.example/secrets/app)", false)]
     [InlineData("PASSWORD=aaaaaaaaaaaaaaaa", false)]
+    [InlineData("Credentials = credentials;", false)]
     public void EnvironmentSecretAssignmentValidator_FiltersReferencesAndPlaceholders(string candidate, bool expected)
     {
         Assert.Equal(expected, new EnvironmentSecretAssignmentValidator().Validate(CreateContext(candidate)).IsValid);

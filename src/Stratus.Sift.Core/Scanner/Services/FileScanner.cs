@@ -23,6 +23,7 @@ public class FileScanner : IScanner
     private readonly SharedReadRateLimiter _readRateLimiter = new();
     private const int BufferSize = 64 * 1024; // 64KB
     private const int OverlapSize = 4 * 1024; // 4KB - Sufficient for most lines/secrets
+    private const int ValidationContextRadius = 512;
     private static readonly List<AclEntry> _emptyAclEntries = new();
 
     public FileScanner(ILogger<FileScanner> logger, ContentExtractor contentExtractor, ValidatorFactory validatorFactory)
@@ -54,17 +55,20 @@ public class FileScanner : IScanner
             }
         }
 
-        return ScanFileInternalAsync(filePath, optimizer, policyMap, options, null, "Unknown", null, null, null, null, ruleStats, null, CancellationToken.None).GetAwaiter().GetResult();
+        var plan = ScannerExecutionPlan.Create(optimizer, policyMap);
+        return ScanFileInternalAsync(filePath, plan, options, null, "Unknown", null, null, null, null, ruleStats, CancellationToken.None).GetAwaiter().GetResult();
     }
 
     public IEnumerable<ScanFinding> ScanFile(string filePath, ClassifierOptimizer optimizer, Dictionary<Guid, List<Policy>> policyMap, ScanOptions? options = null, string? exposure = null, string owner = "Unknown", List<AclEntry>? aclEntries = null, long? fileSize = null, string? ext = null, string? name = null, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null, IEnumerable<IgnoreRule>? ignoreRules = null)
     {
-        return ScanFileInternalAsync(filePath, optimizer, policyMap, options, exposure, owner, aclEntries, ext, name, fileSize, ruleStats, ignoreRules, CancellationToken.None).GetAwaiter().GetResult().Issues;
+        var plan = ScannerExecutionPlan.Create(optimizer, policyMap, ignoreRules);
+        return ScanFileInternalAsync(filePath, plan, options, exposure, owner, aclEntries, ext, name, fileSize, ruleStats, CancellationToken.None).GetAwaiter().GetResult().Issues;
     }
 
     public ScanResult ScanFileWithResult(string filePath, ClassifierOptimizer optimizer, Dictionary<Guid, List<Policy>> policyMap, ScanOptions? options = null, string? exposure = null, string owner = "Unknown", List<AclEntry>? aclEntries = null, long? fileSize = null, string? ext = null, string? name = null, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null, IEnumerable<IgnoreRule>? ignoreRules = null)
     {
-        return ScanFileInternalAsync(filePath, optimizer, policyMap, options, exposure, owner, aclEntries, ext, name, fileSize, ruleStats, ignoreRules, CancellationToken.None).GetAwaiter().GetResult();
+        var plan = ScannerExecutionPlan.Create(optimizer, policyMap, ignoreRules);
+        return ScanFileInternalAsync(filePath, plan, options, exposure, owner, aclEntries, ext, name, fileSize, ruleStats, CancellationToken.None).GetAwaiter().GetResult();
     }
 
     public Task<ScanResult> ScanFileWithResultAsync(
@@ -83,8 +87,7 @@ public class FileScanner : IScanner
         CancellationToken cancellationToken = default) =>
         ScanFileInternalAsync(
             filePath,
-            optimizer,
-            policyMap,
+            ScannerExecutionPlan.Create(optimizer, policyMap, ignoreRules),
             options,
             exposure,
             owner,
@@ -93,7 +96,31 @@ public class FileScanner : IScanner
             name,
             fileSize,
             ruleStats,
-            ignoreRules,
+            cancellationToken);
+
+    public Task<ScanResult> ScanFileWithResultAsync(
+        string filePath,
+        ScannerExecutionPlan plan,
+        ScanOptions? options = null,
+        string? exposure = null,
+        string owner = "Unknown",
+        List<AclEntry>? aclEntries = null,
+        long? fileSize = null,
+        string? ext = null,
+        string? name = null,
+        System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null,
+        CancellationToken cancellationToken = default) =>
+        ScanFileInternalAsync(
+            filePath,
+            plan,
+            options,
+            exposure,
+            owner,
+            aclEntries,
+            ext,
+            name,
+            fileSize,
+            ruleStats,
             cancellationToken);
 
     private static bool IsPathIncluded(string filePath, Policy policy)
@@ -132,12 +159,17 @@ public class FileScanner : IScanner
         return true;
     }
 
-    private static Dictionary<Guid, List<Policy>> ScopePolicyMap(string filePath, Dictionary<Guid, List<Policy>> policyMap)
+    private static Dictionary<Guid, List<Policy>> ScopePolicyMap(string filePath, ScannerExecutionPlan plan)
     {
-        var scopedPolicyMap = new Dictionary<Guid, List<Policy>>();
-        foreach (var kvp in policyMap)
+        if (!plan.HasPathScopedPolicies)
         {
-            var validPolicies = kvp.Value.Where(p => p.Active && IsPathIncluded(filePath, p)).ToList();
+            return plan.PolicyMap;
+        }
+
+        var scopedPolicyMap = new Dictionary<Guid, List<Policy>>();
+        foreach (var kvp in plan.PolicyMap)
+        {
+            var validPolicies = kvp.Value.Where(p => IsPathIncluded(filePath, p)).ToList();
             if (validPolicies.Any())
             {
                 scopedPolicyMap[kvp.Key] = validPolicies;
@@ -147,9 +179,11 @@ public class FileScanner : IScanner
         return scopedPolicyMap;
     }
 
-    private async Task<ScanResult> ScanFileInternalAsync(string filePath, ClassifierOptimizer optimizer, Dictionary<Guid, List<Policy>> policyMap, ScanOptions? options, string? exposure, string owner, List<AclEntry>? aclEntries, string? ext, string? name, long? fileSize, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats, IEnumerable<IgnoreRule>? ignoreRules, CancellationToken cancellationToken)
+    private async Task<ScanResult> ScanFileInternalAsync(string filePath, ScannerExecutionPlan plan, ScanOptions? options, string? exposure, string owner, List<AclEntry>? aclEntries, string? ext, string? name, long? fileSize, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats, CancellationToken cancellationToken)
     {
         options ??= new ScanOptions();
+        var optimizer = plan.Optimizer;
+        var ignoreRules = plan.IgnoreRules;
 
         ext ??= Path.GetExtension(filePath);
         name ??= Path.GetFileName(filePath);
@@ -157,52 +191,48 @@ public class FileScanner : IScanner
         owner ??= "Unknown";
         aclEntries ??= _emptyAclEntries;
 
-        // Create a lookup for policies by name for aggregation logic
-        var policyNameLookup = policyMap.Values
-            .SelectMany(list => list)
-            .GroupBy(p => p.Name) // Handle duplicate names if any, though ID preferred
-            .ToDictionary(g => g.Key, g => g.First());
+        var policyNameLookup = plan.PolicyNameLookup;
 
         // Pre-filter Policies based on Path Scope
         // We only want to evaluate policies that apply to this file path.
         // This optimizes performance by reducing the number of active policies.
-        var scopedPolicyMap = ScopePolicyMap(filePath, policyMap);
+        var scopedPolicyMap = ScopePolicyMap(filePath, plan);
 
-        var matchedIgnoreRules = IgnoreRuleEvaluator.GetMatchedRules(filePath, ignoreRules);
-        if (IgnoreRuleEvaluator.ShouldIgnoreDespiteMetadata(matchedIgnoreRules, []))
+        if (IgnoreRuleEvaluator.ShouldIgnore(filePath, ignoreRules))
         {
             return new ScanResult { Issues = Enumerable.Empty<ScanFinding>() };
         }
 
-        var metadataMatches = optimizer.GetMetadataMatches(filePath).ToList();
-        var directMetadataMatches = metadataMatches
-            .Where(match => PathsReferToSameScope(match.ResourcePath, filePath))
-            .ToList();
-        var metadataClassifiers = directMetadataMatches
-            .Select(match => match.Classifier)
-            .DistinctBy(classifier => classifier.Id)
-            .ToList();
+        List<ClassifierOptimizer.MetadataMatch>? directMetadataMatches = null;
+        foreach (var metadataMatch in optimizer.GetMetadataMatches(filePath))
+        {
+            if (PathsReferToSameScope(metadataMatch.ResourcePath, filePath))
+            {
+                (directMetadataMatches ??= new List<ClassifierOptimizer.MetadataMatch>()).Add(metadataMatch);
+            }
+        }
 
         // If no policies apply to this path, we can skip content scanning entirely 
         // UNLESS we are in discovery mode (not implemented yet, assumed false for optimization).
         if (scopedPolicyMap.Count == 0)
         {
+            options.Diagnostics?.RecordFileSkipped();
             return new ScanResult { Issues = Enumerable.Empty<ScanFinding>() };
         }
 
         var result = new ScanResult();
-        var issues = new List<ScanFinding>();
+        List<ScanFinding>? issues = null;
         List<ClassifierOptimizer>? subOptimizers = null;
         bool metadataClassifierMatched = false;
 
         try
         {
             // 2. Check Metadata Classifiers
-            foreach (var metadataMatch in directMetadataMatches)
+            foreach (var metadataMatch in directMetadataMatches ?? [])
             {
                 var classifier = metadataMatch.Classifier;
                 metadataClassifierMatched = true;
-                result.MatchedClassifiers.Add(classifier.Name);
+                result.AddMatchedClassifier(classifier.Name);
 
                 if (scopedPolicyMap.TryGetValue(classifier.Id, out var policies))
                 {
@@ -210,7 +240,7 @@ public class FileScanner : IScanner
                     {
                         if (ruleStats != null) ruleStats.AddOrUpdate(classifier.Name, 1, (_, c) => c + 1);
 
-                        issues.Add(new ScanFinding
+                        (issues ??= new List<ScanFinding>()).Add(new ScanFinding
                         {
                             Id = Guid.NewGuid(),
                             RuleName = policy.Name,
@@ -247,12 +277,20 @@ public class FileScanner : IScanner
             // 3. Rule-Based Extension Allowlist
             if (!metadataClassifierMatched && !optimizer.HasRulesForExtension(ext))
             {
+                options.Diagnostics?.RecordFileSkipped();
                 result.Issues = Enumerable.Empty<ScanFinding>();
                 return result;
             }
 
             if (!optimizer.HasContentClassifiers && (subOptimizers == null || subOptimizers.Count == 0))
             {
+                result.Issues = AggregateIssues(issues, policyNameLookup);
+                return result;
+            }
+
+            if (fileSize.HasValue && fileSize.Value == 0)
+            {
+                options.Diagnostics?.RecordFileSkipped();
                 result.Issues = AggregateIssues(issues, policyNameLookup);
                 return result;
             }
@@ -266,8 +304,8 @@ public class FileScanner : IScanner
                     if (!string.IsNullOrWhiteSpace(extractedText))
                     {
                         var bufferIssues = ScanBuffer(extractedText.AsSpan(), optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, subOptimizers, ruleStats, policyNameLookup);
-                        issues.AddRange(bufferIssues.Issues);
-                        foreach (var c in bufferIssues.MatchedClassifiers) result.MatchedClassifiers.Add(c);
+                        (issues ??= new List<ScanFinding>()).AddRange(bufferIssues.Issues);
+                        foreach (var c in bufferIssues.EnumerateMatchedClassifiers()) result.AddMatchedClassifier(c);
                     }
                 }
                 catch (Exception ex)
@@ -279,12 +317,6 @@ public class FileScanner : IScanner
             }
 
             // Binary Check & Stream Opening
-            if (fileSize.HasValue && fileSize.Value == 0)
-            {
-                result.Issues = AggregateIssues(issues, policyNameLookup);
-                return result;
-            }
-
             Stream? streamObj = null;
             try
             {
@@ -295,19 +327,18 @@ public class FileScanner : IScanner
 
             if (streamObj == null)
             {
+                options.Diagnostics?.RecordFileSkipped();
                 result.Issues = AggregateIssues(issues, policyNameLookup);
                 return result;
             }
 
-            using var stream = options.MaxDiskReadBytesPerSecond > 0
-                ? new RateLimitedReadStream(streamObj, _readRateLimiter, options.MaxDiskReadBytesPerSecond)
-                : streamObj;
+            options.Diagnostics?.RecordFileOpened();
 
-            if (!options.EnableBinaryDocuments && IsLikelyBinary(stream))
-            {
-                result.Issues = AggregateIssues(issues, policyNameLookup);
-                return result;
-            }
+            using var stream = new RateLimitedReadStream(
+                streamObj,
+                _readRateLimiter,
+                options.MaxDiskReadBytesPerSecond,
+                options.Diagnostics);
 
             var effectiveFileSize = fileSize;
             if (!effectiveFileSize.HasValue && stream.CanSeek)
@@ -327,9 +358,9 @@ public class FileScanner : IScanner
                     ? null
                     : options.HeadSize;
 
-                var scanRes = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, forwardScanLimit, ignoreRules, policyNameLookup);
-                issues.AddRange(scanRes.Issues);
-                foreach (var c in scanRes.MatchedClassifiers) result.MatchedClassifiers.Add(c);
+                var scanRes = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, forwardScanLimit, ignoreRules, policyNameLookup, subOptimizers, preflightCompleted: true, rejectBinary: !options.EnableBinaryDocuments, diagnostics: options.Diagnostics);
+                (issues ??= new List<ScanFinding>()).AddRange(scanRes.Issues);
+                foreach (var c in scanRes.EnumerateMatchedClassifiers()) result.AddMatchedClassifier(c);
                 result.Issues = AggregateIssues(issues, policyNameLookup);
                 return result;
             }
@@ -337,31 +368,31 @@ public class FileScanner : IScanner
             // Full Scan
             if (effectiveFileSize!.Value <= options.MaxFileSize)
             {
-                var scanRes = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, null, ignoreRules, policyNameLookup);
-                issues.AddRange(scanRes.Issues);
-                foreach (var c in scanRes.MatchedClassifiers) result.MatchedClassifiers.Add(c);
+                var scanRes = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, null, ignoreRules, policyNameLookup, subOptimizers, preflightCompleted: true, rejectBinary: !options.EnableBinaryDocuments, diagnostics: options.Diagnostics);
+                (issues ??= new List<ScanFinding>()).AddRange(scanRes.Issues);
+                foreach (var c in scanRes.EnumerateMatchedClassifiers()) result.AddMatchedClassifier(c);
                 result.Issues = AggregateIssues(issues, policyNameLookup);
                 return result;
             }
 
             // Large File: Head + Tail
             // Head
-            var headResults = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, options.HeadSize, ignoreRules, policyNameLookup);
+            var headResults = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, options.HeadSize, ignoreRules, policyNameLookup, subOptimizers, preflightCompleted: true, rejectBinary: !options.EnableBinaryDocuments, diagnostics: options.Diagnostics);
             if (headResults != null)
             {
-                issues.AddRange(headResults.Issues);
-                foreach (var c in headResults.MatchedClassifiers) result.MatchedClassifiers.Add(c);
+                (issues ??= new List<ScanFinding>()).AddRange(headResults.Issues);
+                foreach (var c in headResults.EnumerateMatchedClassifiers()) result.AddMatchedClassifier(c);
             }
 
             // Tail
             if (effectiveFileSize.Value > options.TailSize)
             {
                 stream.Seek(-options.TailSize, SeekOrigin.End);
-                var tailResults = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, options.TailSize, ignoreRules, policyNameLookup);
+                var tailResults = await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, options.TailSize, ignoreRules, policyNameLookup, subOptimizers, preflightCompleted: true, rejectBinary: !options.EnableBinaryDocuments, diagnostics: options.Diagnostics);
                 if (tailResults != null)
                 {
-                    issues.AddRange(tailResults.Issues);
-                    foreach (var c in tailResults.MatchedClassifiers) result.MatchedClassifiers.Add(c);
+                    (issues ??= new List<ScanFinding>()).AddRange(tailResults.Issues);
+                    foreach (var c in tailResults.EnumerateMatchedClassifiers()) result.AddMatchedClassifier(c);
                 }
             }
 
@@ -381,41 +412,8 @@ public class FileScanner : IScanner
             _logger.LogError(ex, "Error scanning file: {Path}", filePath);
         }
 
-        result.Issues = AggregateIssues(issues ?? Enumerable.Empty<ScanFinding>(), policyNameLookup);
+        result.Issues = AggregateIssues(issues, policyNameLookup);
         return result;
-    }
-
-    private sealed class SharedReadRateLimiter
-    {
-        private long _nextAvailableTimestamp;
-
-        public async ValueTask AccountAsync(
-            int bytes,
-            long bytesPerSecond,
-            CancellationToken cancellationToken)
-        {
-            if (bytes <= 0 || bytesPerSecond <= 0) return;
-            var now = Stopwatch.GetTimestamp();
-            var duration = Math.Max(1L, checked(bytes * Stopwatch.Frequency / bytesPerSecond));
-            long start;
-            long next;
-            long observed;
-            do
-            {
-                observed = Volatile.Read(ref _nextAvailableTimestamp);
-                start = Math.Max(now, observed);
-                next = checked(start + duration);
-            }
-            while (Interlocked.CompareExchange(ref _nextAvailableTimestamp, next, observed) != observed);
-
-            var waitTicks = start - now;
-            if (waitTicks > 0)
-            {
-                await Task.Delay(
-                    TimeSpan.FromSeconds((double)waitTicks / Stopwatch.Frequency),
-                    cancellationToken);
-            }
-        }
     }
 
     private sealed class RateLimitedReadStream : Stream
@@ -423,15 +421,21 @@ public class FileScanner : IScanner
         private readonly Stream _inner;
         private readonly SharedReadRateLimiter _limiter;
         private readonly long _bytesPerSecond;
+        private readonly ScanDiagnostics? _diagnostics;
+        private const int LeaseSize = 256 * 1024;
+        private const int ProbeAllowance = 1024;
+        private int _remainingLeaseBytes;
 
         public RateLimitedReadStream(
             Stream inner,
             SharedReadRateLimiter limiter,
-            long bytesPerSecond)
+            long bytesPerSecond,
+            ScanDiagnostics? diagnostics)
         {
             _inner = inner;
             _limiter = limiter;
             _bytesPerSecond = bytesPerSecond;
+            _diagnostics = diagnostics;
         }
 
         public override bool CanRead => _inner.CanRead;
@@ -446,11 +450,13 @@ public class FileScanner : IScanner
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            var read = _inner.Read(buffer, offset, count);
-            _limiter.AccountAsync(read, _bytesPerSecond, CancellationToken.None)
+            EnsureLeaseAsync(GetExpectedReadSize(count), CancellationToken.None)
                 .AsTask()
                 .GetAwaiter()
                 .GetResult();
+            var read = _inner.Read(buffer, offset, count);
+            _remainingLeaseBytes -= read;
+            _diagnostics?.RecordBytesRead(read);
             return read;
         }
 
@@ -458,8 +464,10 @@ public class FileScanner : IScanner
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)
         {
+            await EnsureLeaseAsync(GetExpectedReadSize(buffer.Length), cancellationToken);
             var read = await _inner.ReadAsync(buffer, cancellationToken);
-            await _limiter.AccountAsync(read, _bytesPerSecond, cancellationToken);
+            _remainingLeaseBytes -= read;
+            _diagnostics?.RecordBytesRead(read);
             return read;
         }
 
@@ -476,9 +484,46 @@ public class FileScanner : IScanner
             int count,
             CancellationToken cancellationToken)
         {
+            await EnsureLeaseAsync(GetExpectedReadSize(count), cancellationToken);
             var read = await _inner.ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
-            await _limiter.AccountAsync(read, _bytesPerSecond, cancellationToken);
+            _remainingLeaseBytes -= read;
+            _diagnostics?.RecordBytesRead(read);
             return read;
+        }
+
+        private int GetExpectedReadSize(int requestedBytes)
+        {
+            if (!_inner.CanSeek)
+            {
+                return requestedBytes;
+            }
+
+            return (int)Math.Min(requestedBytes, Math.Max(0, _inner.Length - _inner.Position));
+        }
+
+        private async ValueTask EnsureLeaseAsync(int expectedBytes, CancellationToken cancellationToken)
+        {
+            if (_bytesPerSecond <= 0)
+            {
+                return;
+            }
+
+            if (expectedBytes <= _remainingLeaseBytes)
+            {
+                return;
+            }
+
+            var minimumBytes = expectedBytes - Math.Max(0, _remainingLeaseBytes);
+            var remainingLength = _inner.CanSeek
+                ? Math.Max(0, _inner.Length - _inner.Position)
+                : LeaseSize;
+            var repeatedProbeBytes = Math.Min(ProbeAllowance, remainingLength);
+            var preferredLease = (int)Math.Min(
+                LeaseSize,
+                Math.Max(minimumBytes, remainingLength + repeatedProbeBytes));
+            var limiterWait = await _limiter.AcquireAsync(preferredLease, _bytesPerSecond, cancellationToken);
+            _diagnostics?.RecordLimiterWait(limiterWait);
+            _remainingLeaseBytes = Math.Max(0, _remainingLeaseBytes) + preferredLease;
         }
 
         protected override void Dispose(bool disposing)
@@ -511,50 +556,86 @@ public class FileScanner : IScanner
 
     public async Task<ScanResult> ScanStreamAsync(Stream stream, string fileName, ClassifierOptimizer optimizer, Dictionary<Guid, List<Policy>> policyMap, IEnumerable<IgnoreRule>? ignoreRules = null, string exposure = "Unknown", string owner = "Unknown", List<AclEntry>? aclEntries = null, CancellationToken cancellationToken = default, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null)
     {
+        var plan = ScannerExecutionPlan.Create(optimizer, policyMap, ignoreRules);
+        return await ScanStreamAsync(
+            stream,
+            fileName,
+            plan,
+            options: null,
+            exposure,
+            owner,
+            aclEntries,
+            cancellationToken,
+            ruleStats);
+    }
+
+    public async Task<ScanResult> ScanStreamAsync(
+        Stream stream,
+        string fileName,
+        ScannerExecutionPlan plan,
+        ScanOptions? options = null,
+        string exposure = "Unknown",
+        string owner = "Unknown",
+        List<AclEntry>? aclEntries = null,
+        CancellationToken cancellationToken = default,
+        System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null)
+    {
+        options ??= new ScanOptions();
         var ext = Path.GetExtension(fileName);
         var name = Path.GetFileName(fileName);
         aclEntries ??= new List<AclEntry>();
-        var scopedPolicyMap = ScopePolicyMap(fileName, policyMap);
+        var scopedPolicyMap = ScopePolicyMap(fileName, plan);
         if (scopedPolicyMap.Count == 0)
         {
+            options.Diagnostics?.RecordFileSkipped();
             return new ScanResult { Issues = Enumerable.Empty<ScanFinding>() };
         }
 
-        // Create lookup
-        var policyNameLookup = scopedPolicyMap.Values
-            .SelectMany(list => list)
-            .GroupBy(p => p.Name)
-            .ToDictionary(g => g.Key, g => g.First());
+        options.Diagnostics?.RecordFileOpened();
+        var measuredStream = new RateLimitedReadStream(
+            stream,
+            _readRateLimiter,
+            options.MaxDiskReadBytesPerSecond,
+            options.Diagnostics);
 
-        return await ScanStreamInternalAsync(stream, optimizer, scopedPolicyMap, fileName, ext, name, exposure, owner, aclEntries, cancellationToken, ruleStats, null, ignoreRules, policyNameLookup);
+        return await ScanStreamInternalAsync(
+            measuredStream,
+            plan.Optimizer,
+            scopedPolicyMap,
+            fileName,
+            ext,
+            name,
+            exposure,
+            owner,
+            aclEntries,
+            cancellationToken,
+            ruleStats,
+            limitBytes: null,
+            plan.IgnoreRules,
+            plan.PolicyNameLookup,
+            diagnostics: options.Diagnostics);
     }
 
-    private async Task<ScanResult> ScanStreamInternalAsync(Stream stream, ClassifierOptimizer optimizer, Dictionary<Guid, List<Policy>> policyMap, string fileName, string ext, string name, string exposure, string owner, List<AclEntry> aclEntries, CancellationToken cancellationToken, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null, long? limitBytes = null, IEnumerable<IgnoreRule>? ignoreRules = null, Dictionary<string, Policy>? policyLookup = null)
+    private async Task<ScanResult> ScanStreamInternalAsync(Stream stream, ClassifierOptimizer optimizer, Dictionary<Guid, List<Policy>> policyMap, string fileName, string ext, string name, string exposure, string owner, List<AclEntry> aclEntries, CancellationToken cancellationToken, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null, long? limitBytes = null, IEnumerable<IgnoreRule>? ignoreRules = null, Dictionary<string, Policy>? policyLookup = null, List<ClassifierOptimizer>? preparedSubOptimizers = null, bool preflightCompleted = false, Encoding? preparedEncoding = null, bool rejectBinary = false, ScanDiagnostics? diagnostics = null)
     {
         var result = new ScanResult();
-        var issues = new List<ScanFinding>();
-        var subOptimizers = new List<ClassifierOptimizer>();
+        List<ScanFinding>? issues = null;
+        List<ClassifierOptimizer>? subOptimizers = preparedSubOptimizers;
 
-        var matchedIgnoreRules = IgnoreRuleEvaluator.GetMatchedRules(fileName, ignoreRules);
-        if (IgnoreRuleEvaluator.ShouldIgnoreDespiteMetadata(matchedIgnoreRules, []))
+        if (!preflightCompleted)
+        {
+        if (IgnoreRuleEvaluator.ShouldIgnore(fileName, ignoreRules))
         {
             return new ScanResult { Issues = Enumerable.Empty<ScanFinding>() };
         }
 
         // 1. Check Metadata Classifiers
-        var metadataMatches = optimizer.GetMetadataMatches(fileName).ToList();
-        var directMetadataMatches = metadataMatches
-            .Where(match => PathsReferToSameScope(match.ResourcePath, fileName))
-            .ToList();
-        var metadataClassifiers = directMetadataMatches
-            .Select(match => match.Classifier)
-            .DistinctBy(classifier => classifier.Id)
-            .ToList();
-
-        foreach (var metadataMatch in directMetadataMatches)
+        foreach (var metadataMatch in optimizer.GetMetadataMatches(fileName))
         {
+            if (!PathsReferToSameScope(metadataMatch.ResourcePath, fileName)) continue;
+
             var classifier = metadataMatch.Classifier;
-            result.MatchedClassifiers.Add(classifier.Name);
+            result.AddMatchedClassifier(classifier.Name);
 
             // Evaluate Policies
             if (policyMap.TryGetValue(classifier.Id, out var policies))
@@ -563,7 +644,7 @@ public class FileScanner : IScanner
                 {
                     if (ruleStats != null) ruleStats.AddOrUpdate(classifier.Name, 1, (_, c) => c + 1);
 
-                    issues.Add(new ScanFinding
+                    (issues ??= new List<ScanFinding>()).Add(new ScanFinding
                     {
                         Id = Guid.NewGuid(),
                         RuleName = policy.Name,
@@ -592,70 +673,133 @@ public class FileScanner : IScanner
             var subOpt = optimizer.GetSubOptimizer(classifier);
             if (subOpt != null)
             {
-                subOptimizers.Add(subOpt);
+                (subOptimizers ??= new List<ClassifierOptimizer>()).Add(subOpt);
             }
         }
+        }
 
-        var encoding = DetectEncoding(stream);
-        using var reader = new StreamReader(stream, encoding, true, BufferSize, leaveOpen: true);
+        var encoding = preparedEncoding;
+        Decoder? decoder = null;
+        var bytePool = ArrayPool<byte>.Shared;
+        var charPool = ArrayPool<char>.Shared;
+        var usefulBytes = BufferSize - OverlapSize;
+        if (stream.CanSeek)
+        {
+            usefulBytes = (int)Math.Min(usefulBytes, Math.Max(1, stream.Length - stream.Position));
+        }
+        if (limitBytes.HasValue)
+        {
+            usefulBytes = (int)Math.Min(usefulBytes, Math.Max(1, limitBytes.Value));
+        }
 
-        var pool = ArrayPool<char>.Shared;
-        char[] buffer = pool.Rent(BufferSize);
+        byte[] byteBuffer = bytePool.Rent(usefulBytes);
+        char[]? buffer = null;
+        var usefulChars = 0;
         var chunkClassifiers = new HashSet<Classifier>();
 
         try
         {
-            int charsRead;
             int bufferOffset = 0;
-            long totalRead = 0;
+            long totalBytesRead = 0;
+            long totalCharsDecoded = 0;
+            var firstRead = true;
+            var stop = false;
 
-            while ((charsRead = await reader.ReadBlockAsync(buffer, bufferOffset, BufferSize - bufferOffset)) > 0)
+            while (!stop)
             {
-                if (cancellationToken.IsCancellationRequested) break;
-
-                int validLength = bufferOffset + charsRead;
-                var span = buffer.AsSpan(0, validLength);
-
-                // Check limits
-                if (limitBytes.HasValue && totalRead > limitBytes.Value) break;
-
-                chunkClassifiers.Clear();
-                optimizer.PopulateClassifiersForContent(span, chunkClassifiers, ext);
-
-                if (subOptimizers.Count > 0)
+                cancellationToken.ThrowIfCancellationRequested();
+                var requestedBytes = byteBuffer.Length;
+                if (limitBytes.HasValue)
                 {
-                    foreach (var subOpt in subOptimizers)
+                    var remainingBytes = limitBytes.Value - totalBytesRead;
+                    if (remainingBytes <= 0) break;
+                    requestedBytes = (int)Math.Min(requestedBytes, remainingBytes);
+                }
+
+                var bytesRead = await stream.ReadAsync(
+                    byteBuffer.AsMemory(0, requestedBytes),
+                    cancellationToken);
+                var flushDecoder = bytesRead <= 0;
+                if (flushDecoder && firstRead) break;
+                totalBytesRead += bytesRead;
+
+                var bytes = byteBuffer.AsSpan(0, bytesRead);
+                if (firstRead)
+                {
+                    firstRead = false;
+                    if (rejectBinary && SiftEvidence.LooksBinary(bytes))
                     {
-                        subOpt.PopulateClassifiersForContent(span, chunkClassifiers, ext);
+                        diagnostics?.RecordFileSkipped();
+                        return result;
+                    }
+
+                    encoding ??= DetectEncoding(bytes);
+                    decoder = encoding.GetDecoder();
+                    usefulChars = Math.Min(
+                        BufferSize,
+                        Math.Max(OverlapSize + 1, encoding.GetMaxCharCount(usefulBytes) + OverlapSize));
+                    buffer = charPool.Rent(usefulChars);
+                    var preamble = encoding.Preamble;
+                    if (!preamble.IsEmpty && bytes.StartsWith(preamble))
+                    {
+                        bytes = bytes[preamble.Length..];
                     }
                 }
 
-                if (chunkClassifiers.Count > 0)
+                while (!bytes.IsEmpty || flushDecoder)
                 {
-                    foreach (var c in chunkClassifiers) result.MatchedClassifiers.Add(c.Name);
+                    decoder!.Convert(
+                        bytes,
+                        buffer!.AsSpan(bufferOffset, usefulChars - bufferOffset),
+                        flush: flushDecoder,
+                        out var bytesUsed,
+                        out var charsUsed,
+                        out var completed);
+                    bytes = bytes[bytesUsed..];
 
-                    bool stop = ScanChunk(span, chunkClassifiers, policyMap, fileName, ext, name, exposure, owner, aclEntries, optimizer, totalRead, issues, subOptimizers, ruleStats, bufferOffset);
+                    if (charsUsed == 0)
+                    {
+                        if (completed || bytesUsed == 0) break;
+                        continue;
+                    }
+
+                    var validLength = bufferOffset + charsUsed;
+                    var span = buffer.AsSpan(0, validLength);
+                    var ruleEvaluationStarted = Stopwatch.GetTimestamp();
+                    chunkClassifiers.Clear();
+                    optimizer.PopulateClassifiersForContent(span, chunkClassifiers, ext);
+
+                    if (subOptimizers is { Count: > 0 })
+                    {
+                        foreach (var subOpt in subOptimizers)
+                        {
+                            subOpt.PopulateClassifiersForContent(span, chunkClassifiers, ext);
+                        }
+                    }
+
+                    if (chunkClassifiers.Count > 0)
+                    {
+                        foreach (var c in chunkClassifiers) result.AddMatchedClassifier(c.Name);
+
+                        stop = ScanChunk(span, chunkClassifiers, policyMap, fileName, ext, name, exposure, owner, aclEntries, optimizer, totalCharsDecoded, ref issues, subOptimizers, ruleStats, bufferOffset);
+                    }
+                    diagnostics?.RecordRuleEvaluation(Stopwatch.GetTimestamp() - ruleEvaluationStarted);
                     if (stop) break;
+
+                    totalCharsDecoded += charsUsed;
+
+                    bufferOffset = Math.Min(validLength, OverlapSize);
+                    span[^bufferOffset..].CopyTo(buffer);
+                    if (flushDecoder && completed) break;
                 }
 
-                totalRead += charsRead;
-
-                if (validLength > OverlapSize)
-                {
-                    span = buffer.AsSpan(0, validLength);
-                    var tail = span.Slice(validLength - OverlapSize, OverlapSize);
-                    tail.CopyTo(buffer.AsSpan(0, OverlapSize));
-                    bufferOffset = OverlapSize;
-                }
-                else
-                {
-                    if (charsRead < BufferSize - bufferOffset) break;
-                }
+                if (flushDecoder) break;
             }
         }
         finally
         {
-            pool.Return(buffer);
+            bytePool.Return(byteBuffer);
+            if (buffer != null) charPool.Return(buffer);
         }
 
         result.Issues = AggregateIssues(issues, policyLookup);
@@ -675,17 +819,17 @@ public class FileScanner : IScanner
             }
         }
 
-        foreach (var c in classifiers) result.MatchedClassifiers.Add(c.Name);
+        foreach (var c in classifiers) result.AddMatchedClassifier(c.Name);
 
         if (classifiers.Count == 0) return result;
 
-        var issues = new List<ScanFinding>();
-        ScanChunk(content, classifiers, policyMap, filePath, ext, name, exposure, owner, aclEntries, optimizer, 0, issues, subOptimizers, ruleStats);
+        List<ScanFinding>? issues = null;
+        ScanChunk(content, classifiers, policyMap, filePath, ext, name, exposure, owner, aclEntries, optimizer, 0, ref issues, subOptimizers, ruleStats);
         result.Issues = AggregateIssues(issues, policyLookup);
         return result;
     }
 
-    private bool ScanChunk(ReadOnlySpan<char> chunk, IEnumerable<Classifier> classifiers, Dictionary<Guid, List<Policy>> policyMap, string filePath, string ext, string name, string exposure, string owner, List<AclEntry> aclEntries, ClassifierOptimizer optimizer, long offset, List<ScanFinding> issues, List<ClassifierOptimizer>? subOptimizers = null, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null, int overlapLength = 0)
+    private bool ScanChunk(ReadOnlySpan<char> chunk, IEnumerable<Classifier> classifiers, Dictionary<Guid, List<Policy>> policyMap, string filePath, string ext, string name, string exposure, string owner, List<AclEntry> aclEntries, ClassifierOptimizer optimizer, long offset, ref List<ScanFinding>? issues, List<ClassifierOptimizer>? subOptimizers = null, System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null, int overlapLength = 0)
     {
         foreach (var classifier in classifiers)
         {
@@ -715,55 +859,61 @@ public class FileScanner : IScanner
                 bool stop = false;
                 if (policyMap.TryGetValue(classifier.Id, out var policies))
                 {
-                    foreach (var policy in policies)
+                    // Validation is classifier-owned, so evaluate it once per match rather than
+                    // repeating the same context allocation and validator call for every policy.
+                    double confidence = match.Confidence;
+                    var secret = match.Value;
+                    var enableLlmValidation = classifier.EnableLlmValidation;
+                    var needsValidationContext = enableLlmValidation || !string.IsNullOrEmpty(classifier.Validator);
+                    var validationContext = needsValidationContext
+                        ? BuildValidationContext(chunk, match.Index, match.Length)
+                        : string.Empty;
+                    if (!string.IsNullOrEmpty(classifier.Validator))
                     {
-                        double confidence = match.Confidence;
-                        var secret = match.Value;
-                        var validationContext = BuildValidationContext(chunk, match.Index, match.Length);
-                        if (!string.IsNullOrEmpty(classifier.Validator))
+                        var validator = _validatorFactory.GetValidator(classifier.Validator);
+                        if (validator == null)
                         {
-                            var validator = _validatorFactory.GetValidator(classifier.Validator);
-                            if (validator == null)
-                            {
-                                _logger.LogWarning(
-                                    "Skipping match for classifier {ClassifierName} in {Path} because validator {ValidatorName} is not registered.",
-                                    classifier.Name,
-                                    filePath,
-                                    classifier.Validator);
-                                continue;
-                            }
-
-                            var contextStart = Math.Max(0, match.Index - 100);
-                            var validation = validator.Validate(new ValidationContext
-                            {
-                                Candidate = secret,
-                                FilePath = filePath,
-                                FullFileContent = validationContext,
-                                Index = match.Index - contextStart
-                            });
-                            if (!validation.IsValid)
-                            {
-                                continue;
-                            }
-
-                            confidence = validation.Confidence;
+                            _logger.LogWarning(
+                                "Skipping match for classifier {ClassifierName} in {Path} because validator {ValidatorName} is not registered.",
+                                classifier.Name,
+                                filePath,
+                                classifier.Validator);
+                            continue;
                         }
 
-                        if (ruleStats != null) ruleStats.AddOrUpdate(classifier.Name, 1, (_, c) => c + 1);
-                        var enableLlmValidation = classifier.EnableLlmValidation;
-
-                        issues.Add(new ScanFinding
+                        var contextStart = Math.Max(0, match.Index - ValidationContextRadius);
+                        var validation = validator.Validate(new ValidationContext
                         {
-                            Id = Guid.NewGuid(),
+                            Candidate = secret,
+                            FilePath = filePath,
+                            FullFileContent = validationContext,
+                            Index = match.Index - contextStart
+                        });
+                        if (!validation.IsValid)
+                        {
+                            continue;
+                        }
+
+                        confidence = validation.Confidence;
+                    }
+
+                    var valueHash = HashSecret(secret);
+                    var snippet = BuildSnippet(chunk, match.Index, match.Length);
+                    var detectedAt = DateTime.UtcNow;
+                    foreach (var policy in policies)
+                    {
+                        if (ruleStats != null) ruleStats.AddOrUpdate(classifier.Name, 1, (_, c) => c + 1);
+                        (issues ??= new List<ScanFinding>()).Add(new ScanFinding
+                        {
                             RuleName = policy.Name,
                             PolicyName = policy.Name,
                             ClassifierName = classifier.Name,
                             ResourcePath = filePath,
                             Severity = policy.Severity,
                             RedactedValue = secret,
-                            ValueHash = HashSecret(secret),
-                            DetectedAt = DateTime.UtcNow,
-                            Snippet = BuildSnippet(chunk, match.Index, match.Length),
+                            ValueHash = valueHash,
+                            DetectedAt = detectedAt,
+                            Snippet = snippet,
                             Exposure = exposure,
                             Owner = owner,
                             AclEntries = aclEntries,
@@ -799,37 +949,6 @@ public class FileScanner : IScanner
             left.TrimEnd('\\', '/'),
             right.TrimEnd('\\', '/'),
             StringComparison.OrdinalIgnoreCase);
-    }
-
-    private bool IsLikelyBinary(Stream stream)
-    {
-        if (!stream.CanSeek)
-        {
-            return false;
-        }
-
-        var originalPosition = stream.Position;
-        try
-        {
-            var sampleSize = (int)Math.Min(stream.Length, 512);
-            if (sampleSize <= 0)
-            {
-                return false;
-            }
-
-            byte[] buffer = new byte[sampleSize];
-            int read = stream.Read(buffer, 0, buffer.Length);
-            if (read <= 0)
-            {
-                return false;
-            }
-
-            return SiftEvidence.LooksBinary(buffer.AsSpan(0, read));
-        }
-        finally
-        {
-            stream.Position = originalPosition;
-        }
     }
 
     protected virtual Stream? OpenStream(string filePath)
@@ -911,7 +1030,7 @@ public class FileScanner : IScanner
         => SiftEvidence.BuildSurroundingContext(chunk, matchIndex, matchLength, 50);
 
     private static string BuildValidationContext(ReadOnlySpan<char> chunk, int matchIndex, int matchLength)
-        => SiftEvidence.BuildSurroundingContext(chunk, matchIndex, matchLength, 100);
+        => SiftEvidence.BuildSurroundingContext(chunk, matchIndex, matchLength, ValidationContextRadius);
 
     public static double CalculateShannonEntropy(string input)
     {
@@ -921,32 +1040,25 @@ public class FileScanner : IScanner
     public static double CalculateShannonEntropy(ReadOnlySpan<char> input)
         => SiftEvidence.CalculateShannonEntropy(input);
 
-    private Encoding DetectEncoding(Stream stream)
+    private static Encoding DetectEncoding(ReadOnlySpan<byte> buffer)
     {
-        if (!stream.CanSeek || stream.Length < 2) return Encoding.Default;
-
-        long originalPos = stream.Position;
-        byte[] buffer = new byte[(int)Math.Min(stream.Length, 512)];
-        int read = stream.Read(buffer, 0, buffer.Length);
-        stream.Position = originalPos;
-
-        if (read < 2) return Encoding.Default;
+        if (buffer.Length < 2) return Encoding.Default;
 
         // Check for BOMs
         if (buffer[0] == 0xFF && buffer[1] == 0xFE) return Encoding.Unicode;
         if (buffer[0] == 0xFE && buffer[1] == 0xFF) return Encoding.BigEndianUnicode;
-        if (read >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF) return Encoding.UTF8;
+        if (buffer.Length >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF) return Encoding.UTF8;
 
         // Heuristic for BOM-less UTF-16
         int nulls = 0;
-        for (int i = 0; i < read; i++) if (buffer[i] == 0) nulls++;
+        for (int i = 0; i < buffer.Length; i++) if (buffer[i] == 0) nulls++;
 
-        double ratio = (double)nulls / read;
+        double ratio = (double)nulls / buffer.Length;
         if (ratio >= 0.3)
         {
             int oddNulls = 0;
             int evenNulls = 0;
-            for (int i = 0; i < read; i++)
+            for (int i = 0; i < buffer.Length; i++)
             {
                 if (buffer[i] == 0)
                 {
@@ -955,37 +1067,76 @@ public class FileScanner : IScanner
                 }
             }
 
-            if (oddNulls > evenNulls && oddNulls > read * 0.3) return Encoding.Unicode;
-            if (evenNulls > oddNulls && evenNulls > read * 0.3) return Encoding.BigEndianUnicode;
+            if (oddNulls > evenNulls && oddNulls > buffer.Length * 0.3) return Encoding.Unicode;
+            if (evenNulls > oddNulls && evenNulls > buffer.Length * 0.3) return Encoding.BigEndianUnicode;
         }
 
         return Encoding.Default;
     }
 
-    private List<ScanFinding> AggregateIssues(IEnumerable<ScanFinding> rawIssues, Dictionary<string, Policy>? policyLookup)
+    private static IReadOnlyList<ScanFinding> AggregateIssues(List<ScanFinding>? rawIssues, Dictionary<string, Policy>? policyLookup)
     {
-        var aggregated = new List<ScanFinding>();
-        if (rawIssues == null) return aggregated;
+        if (rawIssues is not { Count: > 0 }) return [];
 
-        var groups = rawIssues.GroupBy(i => new { i.RuleName, i.ClassifierName, i.ResourcePath });
-
-        foreach (var group in groups)
+        if (rawIssues.Count == 1)
         {
-            var matchCount = group.Sum(i => i.InstanceCount);
-
-            // Check Minimum Match Count
-            if (policyLookup != null && policyLookup.TryGetValue(group.Key.RuleName, out var policy))
+            var only = rawIssues[0];
+            if (policyLookup != null
+                && policyLookup.TryGetValue(only.RuleName, out var onlyPolicy)
+                && only.InstanceCount < (onlyPolicy.Configuration?.MinMatchCount ?? 1))
             {
-                int threshold = policy.Configuration?.MinMatchCount ?? 1;
-                if (matchCount < threshold) continue;
+                return [];
             }
 
-            var primary = group.First();
-            primary.InstanceCount = matchCount;
-            aggregated.Add(primary);
+            return rawIssues;
         }
 
-        return aggregated;
+        var uniqueCount = 0;
+        for (var readIndex = 0; readIndex < rawIssues.Count; readIndex++)
+        {
+            var candidate = rawIssues[readIndex];
+            var existingIndex = -1;
+            for (var index = 0; index < uniqueCount; index++)
+            {
+                var existing = rawIssues[index];
+                if (existing.RuleName == candidate.RuleName
+                    && existing.ClassifierName == candidate.ClassifierName
+                    && existing.ResourcePath == candidate.ResourcePath)
+                {
+                    existingIndex = index;
+                    break;
+                }
+            }
+
+            if (existingIndex >= 0)
+            {
+                rawIssues[existingIndex].InstanceCount += candidate.InstanceCount;
+            }
+            else
+            {
+                rawIssues[uniqueCount++] = candidate;
+            }
+        }
+
+        if (uniqueCount < rawIssues.Count)
+        {
+            rawIssues.RemoveRange(uniqueCount, rawIssues.Count - uniqueCount);
+        }
+
+        if (policyLookup != null)
+        {
+            for (var index = rawIssues.Count - 1; index >= 0; index--)
+            {
+                var finding = rawIssues[index];
+                if (policyLookup.TryGetValue(finding.RuleName, out var policy)
+                    && finding.InstanceCount < (policy.Configuration?.MinMatchCount ?? 1))
+                {
+                    rawIssues.RemoveAt(index);
+                }
+            }
+        }
+
+        return rawIssues;
     }
 }
 

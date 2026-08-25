@@ -9,24 +9,34 @@ public sealed class IbanValidator : BaseValidator
 
     public override ValidationResult Validate(ValidationContext context)
     {
-        var iban = new string(context.Candidate.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
-        if (iban.Length is < 15 or > 34 || !char.IsAsciiLetterUpper(iban[0]) || !char.IsAsciiLetterUpper(iban[1])
-            || !char.IsAsciiDigit(iban[2]) || !char.IsAsciiDigit(iban[3]))
+        Span<char> iban = stackalloc char[34];
+        var length = 0;
+        foreach (var character in context.Candidate)
+        {
+            if (!char.IsLetterOrDigit(character)) continue;
+            if (length == iban.Length) return Invalid("IBAN structure is invalid");
+            iban[length++] = char.ToUpperInvariant(character);
+        }
+
+        var value = iban[..length];
+        if (value.Length is < 15 or > 34 || !char.IsAsciiLetterUpper(value[0]) || !char.IsAsciiLetterUpper(value[1])
+            || !char.IsAsciiDigit(value[2]) || !char.IsAsciiDigit(value[3]))
         {
             return Invalid("IBAN structure is invalid");
         }
 
         var remainder = 0;
-        foreach (var character in iban[4..].Concat(iban[..4]))
+        for (var index = 0; index < value.Length; index++)
         {
+            var character = value[(index + 4) % value.Length];
             if (char.IsAsciiDigit(character))
             {
                 remainder = ((remainder * 10) + (character - '0')) % 97;
             }
             else if (char.IsAsciiLetterUpper(character))
             {
-                var value = character - 'A' + 10;
-                remainder = ((remainder * 100) + value) % 97;
+                var numericValue = character - 'A' + 10;
+                remainder = ((remainder * 100) + numericValue) % 97;
             }
             else
             {
@@ -50,13 +60,18 @@ public sealed class AustralianTfnValidator : BaseValidator
 
     public override ValidationResult Validate(ValidationContext context)
     {
-        var digits = new string(context.Candidate.Where(char.IsAsciiDigit).ToArray());
-        if (digits.Length != 9)
+        Span<char> digits = stackalloc char[9];
+        var length = PersonalDataValidation.CopyAsciiDigits(context.Candidate, digits);
+        if (length != digits.Length)
         {
             return new ValidationResult { IsValid = false, Reason = "TFN must contain nine digits" };
         }
 
-        var sum = digits.Select((digit, index) => (digit - '0') * Weights[index]).Sum();
+        var sum = 0;
+        for (var index = 0; index < digits.Length; index++)
+        {
+            sum += (digits[index] - '0') * Weights[index];
+        }
         return sum % 11 == 0
             ? CheckCommonContextClues(context) ?? new ValidationResult { IsValid = true, Confidence = 1.0 }
             : new ValidationResult { IsValid = false, Reason = "TFN checksum failed" };
@@ -71,16 +86,38 @@ public sealed class AustralianMedicareValidator : BaseValidator
 
     public override ValidationResult Validate(ValidationContext context)
     {
-        var digits = new string(context.Candidate.Where(char.IsAsciiDigit).ToArray());
-        if (digits.Length is < 10 or > 11 || digits[0] is < '2' or > '6')
+        Span<char> digits = stackalloc char[11];
+        var length = PersonalDataValidation.CopyAsciiDigits(context.Candidate, digits);
+        if (length is < 10 or > 11 || digits[0] is < '2' or > '6')
         {
             return new ValidationResult { IsValid = false, Reason = "Medicare number structure is invalid" };
         }
 
-        var checksum = digits.Take(8).Select((digit, index) => (digit - '0') * Weights[index]).Sum() % 10;
+        var checksumTotal = 0;
+        for (var index = 0; index < 8; index++)
+        {
+            checksumTotal += (digits[index] - '0') * Weights[index];
+        }
+        var checksum = checksumTotal % 10;
         return checksum == digits[8] - '0'
             ? CheckCommonContextClues(context) ?? new ValidationResult { IsValid = true, Confidence = 1.0 }
             : new ValidationResult { IsValid = false, Reason = "Medicare checksum failed" };
+    }
+}
+
+file static class PersonalDataValidation
+{
+    public static int CopyAsciiDigits(string candidate, Span<char> destination)
+    {
+        var length = 0;
+        foreach (var character in candidate)
+        {
+            if (!char.IsAsciiDigit(character)) continue;
+            if (length == destination.Length) return destination.Length + 1;
+            destination[length++] = character;
+        }
+
+        return length;
     }
 }
 

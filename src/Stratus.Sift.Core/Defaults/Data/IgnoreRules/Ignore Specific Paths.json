@@ -23,7 +23,6 @@
   { "Pattern": "*\\Microsoft\\.NET\\Framework*", "MatchTarget": "DirectoryPath", "Description": ".NET Framework", "IsEnabled": true },
   { "Pattern": "*\\windows\\immersivecontrolpanel*", "MatchTarget": "DirectoryPath", "Description": "Control Panel", "IsEnabled": true },
   { "Pattern": "*\\windows\\diagnostics*", "MatchTarget": "DirectoryPath", "Description": "Diagnostics", "IsEnabled": true },
-  { "Pattern": "*\\windows\\debug*", "MatchTarget": "DirectoryPath", "Description": "Debug", "IsEnabled": true },
   { "Pattern": "*\\locale*", "MatchTarget": "DirectoryPath", "Description": "Locales", "IsEnabled": true },
   { "Pattern": "*\\chocolatey\\helpers*", "MatchTarget": "DirectoryPath", "Description": "Chocolatey", "IsEnabled": true },
   { "Pattern": "*\\sources\\sxs*", "MatchTarget": "DirectoryPath", "Description": "Install sources", "IsEnabled": true },

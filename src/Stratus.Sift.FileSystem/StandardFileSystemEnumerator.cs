@@ -1,6 +1,7 @@
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Runtime.Versioning;
+using System.IO.Enumeration;
 using Microsoft.Extensions.Logging;
 using Stratus.Sift.Core.Models;
 
@@ -29,6 +30,88 @@ public sealed class StandardFileSystemEnumerator
     public IEnumerable<FileSystemEntryInfo> EnumeratePath(string path, bool includeAcls = true)
         => EnumeratePath(path, directoryFilter: null, includeAcls);
 
+    /// <summary>
+    /// Enumerates only the metadata consumed by the high-throughput scan pipeline.
+    /// </summary>
+    public IEnumerable<FileScanCandidate> EnumerateScanCandidates(
+        string path,
+        PathFilter? directoryFilter = null)
+    {
+        if (directoryFilter?.Invoke(path.AsSpan()) == true)
+        {
+            yield break;
+        }
+
+        FileScanCandidate? root = null;
+        try
+        {
+            var rootDirectory = new DirectoryInfo(path);
+            root = new FileScanCandidate(
+                rootDirectory.FullName,
+                rootDirectory.Name,
+                IsDirectory: true,
+                Size: 0,
+                rootDirectory.LastWriteTimeUtc);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogDebug(exception, "Could not inspect {Path}", path);
+        }
+
+        if (root.HasValue)
+        {
+            yield return root.Value;
+        }
+
+        FileSystemEnumerable<FileScanCandidate?> enumerable;
+        try
+        {
+            enumerable = new FileSystemEnumerable<FileScanCandidate?>(
+                path,
+                static (ref FileSystemEntry entry) => GetScanCandidate(ref entry),
+                new EnumerationOptions
+                {
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.System | FileAttributes.ReparsePoint,
+                    RecurseSubdirectories = true,
+                    ReturnSpecialDirectories = false,
+                });
+            if (directoryFilter != null)
+            {
+                enumerable.ShouldRecursePredicate = (ref FileSystemEntry entry) =>
+                    !directoryFilter(entry.ToFullPath().AsSpan());
+                enumerable.ShouldIncludePredicate = (ref FileSystemEntry entry) =>
+                    !entry.IsDirectory || !directoryFilter(entry.ToFullPath().AsSpan());
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogDebug(exception, "Could not enumerate {Path}", path);
+            yield break;
+        }
+
+        using var enumerator = enumerable.GetEnumerator();
+        while (true)
+        {
+            FileScanCandidate? candidate;
+            try
+            {
+                if (!enumerator.MoveNext()) yield break;
+                candidate = enumerator.Current;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(exception, "Could not continue enumerating {Path}", path);
+                yield break;
+            }
+
+            if (candidate.HasValue)
+            {
+                yield return candidate.Value;
+            }
+        }
+    }
+
     public FileSystemEntryInfo? GetSingleEntry(string path, bool includeAcls = true)
     {
         if (File.Exists(path))
@@ -51,6 +134,16 @@ public sealed class StandardFileSystemEnumerator
     {
         if (directoryFilter?.Invoke(path.AsSpan()) == true)
         {
+            yield break;
+        }
+
+        if (!includeAcls)
+        {
+            foreach (var entry in EnumeratePathWithoutAcls(path, directoryFilter))
+            {
+                yield return entry;
+            }
+
             yield break;
         }
 
@@ -100,6 +193,107 @@ public sealed class StandardFileSystemEnumerator
                     yield return fileEntry.Value;
                 }
             }
+        }
+    }
+
+    private IEnumerable<FileSystemEntryInfo> EnumeratePathWithoutAcls(
+        string path,
+        PathFilter? directoryFilter)
+    {
+        var root = GetEntryInfo(new DirectoryInfo(path), includeAcls: false);
+        if (root.HasValue)
+        {
+            yield return root.Value;
+        }
+
+        FileSystemEnumerable<FileSystemEntryInfo?> enumerable;
+        try
+        {
+            enumerable = new FileSystemEnumerable<FileSystemEntryInfo?>(
+                path,
+                static (ref FileSystemEntry entry) => GetEntryInfo(ref entry),
+                new EnumerationOptions
+                {
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.System | FileAttributes.ReparsePoint,
+                    RecurseSubdirectories = true,
+                    ReturnSpecialDirectories = false,
+                });
+            if (directoryFilter != null)
+            {
+                enumerable.ShouldRecursePredicate = (ref FileSystemEntry entry) =>
+                    !directoryFilter(entry.ToFullPath().AsSpan());
+                enumerable.ShouldIncludePredicate = (ref FileSystemEntry entry) =>
+                    !entry.IsDirectory || !directoryFilter(entry.ToFullPath().AsSpan());
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogDebug(exception, "Could not enumerate {Path}", path);
+            yield break;
+        }
+
+        using var enumerator = enumerable.GetEnumerator();
+        while (true)
+        {
+            FileSystemEntryInfo? entry;
+            try
+            {
+                if (!enumerator.MoveNext()) yield break;
+                entry = enumerator.Current;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(exception, "Could not continue enumerating {Path}", path);
+                yield break;
+            }
+
+            if (entry.HasValue)
+            {
+                yield return entry.Value;
+            }
+        }
+    }
+
+    private static FileSystemEntryInfo? GetEntryInfo(ref FileSystemEntry entry)
+    {
+        try
+        {
+            var fullPath = entry.ToFullPath();
+            return new FileSystemEntryInfo(
+                fullPath,
+                entry.FileName.ToString(),
+                Path.GetDirectoryName(fullPath) ?? string.Empty,
+                entry.IsDirectory,
+                entry.IsDirectory ? 0 : entry.Length,
+                entry.CreationTimeUtc.UtcDateTime,
+                entry.LastWriteTimeUtc.UtcDateTime,
+                entry.LastAccessTimeUtc.UtcDateTime,
+                entry.Attributes,
+                null,
+                "Unknown",
+                "Unknown");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static FileScanCandidate? GetScanCandidate(ref FileSystemEntry entry)
+    {
+        try
+        {
+            return new FileScanCandidate(
+                entry.ToFullPath(),
+                entry.FileName.ToString(),
+                entry.IsDirectory,
+                entry.IsDirectory ? 0 : entry.Length,
+                entry.LastWriteTimeUtc.UtcDateTime);
+        }
+        catch
+        {
+            return null;
         }
     }
 

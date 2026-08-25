@@ -27,10 +27,19 @@ public sealed class EnvironmentSecretAssignmentValidator : BaseValidator
             return Invalid("Secret assignment is malformed");
         }
 
-        var value = context.Candidate[(delimiter + 1)..].Trim().Trim('"', '\'', '`');
+        var assignmentName = context.Candidate[..delimiter].Trim().Trim('"', '\'', '`');
+        var value = context.Candidate[(delimiter + 1)..]
+            .Trim()
+            .TrimEnd(';', ',')
+            .Trim('"', '\'', '`');
         if (value.Length is < 12 or > 4096)
         {
             return Invalid("Assigned value length is not credible");
+        }
+
+        if (value.Equals(assignmentName, StringComparison.OrdinalIgnoreCase))
+        {
+            return Invalid("Assigned value is a same-name symbol reference");
         }
 
         if (ReferencePrefixes.Any(prefix => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
