@@ -30,7 +30,7 @@ Sift was made with performance and extensibility in mind, to name a few great im
 - Fingerprints: Full coverage validated against the Snaffler rules library with much more and some refined. Code-defined validators are also supported to do more advanced checks and reduce false positives 📔
 - DNS: Custom DNS servers for those times when you want to use computer names from a non-corp, wowee!
 - Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
-- ZIP archives: Entries are streamed directly from the archive and reported as `archive.zip!/path/file`. One nested ZIP layer is inspected by default. Library callers can allow up to three levels. Shared expansion, entry-count, central-directory, temporary-storage and compression-ratio limits protect the whole archive tree.
+- ZIPin': Archives are enumerated and reported as `archive.zip!/path/file`. Terms and conditions may apply* (so we don't trigger a zip bomb)
 
 ## This is confusing, how do I just find the features I want?
 The good ol' help flag will show the available commands:
@@ -43,8 +43,8 @@ Usage:
 
 Commands:
   local      Scan a local folder
-  domain     Crawl the current Active Directory domain by auto-discovering accessible SMB shares. Kerberos is preferred, with per-host NTLM fallback
-  network    Crawl SMB targets on a subnet or a single device. Kerberos is preferred, with per-host NTLM fallback
+  domain     Crawl the current Active Directory domain by auto-discovering accessible SMB shares.
+  network    Crawl SMB targets on a subnet or a single device.
   m365       Scan Microsoft 365 content, including SharePoint, OneDrive, and Teams channel files
   slack      Scan accessible Slack channel messages and attachments
   atlassian  Scan accessible Jira projects and Confluence pages, blog posts, comments, and attachments
