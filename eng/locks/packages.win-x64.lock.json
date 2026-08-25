@@ -70,6 +70,12 @@
         "resolved": "2.0.5",
         "contentHash": "2XtWAPk1G6arpe3OCFNrYYuf6iIboznxs2elJSGgd8e0euou7LfGYFon6hBEfDWNtOLr0M3+oUVgy1a5EGa41A=="
       },
+      "System.DirectoryServices.Protocols": {
+        "type": "Direct",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "VQdfESaky3eXlvEuvtBndmZjOt65g+Ah6/0j39MPgPJ3gkbGuURlTFDRq0Y2uX64z5qVEVe1Ln6B4a06+vIzTQ=="
+      },
       "Azure.Core": {
         "type": "Transitive",
         "resolved": "1.51.1",
@@ -580,7 +586,7 @@
           "Azure.Identity": "[1.19.0, )",
           "Microsoft.Graph": "[5.105.0, )",
           "Microsoft.Kiota.Abstractions": "[1.22.2, )",
-          "Stratus.Sift.Core": "[0.1.0, )"
+          "Stratus.Sift.Core": "[0.3.0, )"
         }
       },
       "stratus.sift.contracts": {
@@ -593,7 +599,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "PdfPig": "[0.1.13, )",
-          "Stratus.Sift.Contracts": "[0.1.0, )",
+          "Stratus.Sift.Contracts": "[0.3.0, )",
           "System.IO.FileSystem.AccessControl": "[5.0.0, )"
         }
       },
@@ -601,7 +607,7 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
-          "Stratus.Sift.Core": "[0.1.0, )"
+          "Stratus.Sift.Core": "[0.3.0, )"
         }
       }
     },
@@ -614,6 +620,12 @@
         "dependencies": {
           "runtime.win-x64.Microsoft.DotNet.ILCompiler": "10.0.11"
         }
+      },
+      "System.DirectoryServices.Protocols": {
+        "type": "Direct",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "VQdfESaky3eXlvEuvtBndmZjOt65g+Ah6/0j39MPgPJ3gkbGuURlTFDRq0Y2uX64z5qVEVe1Ln6B4a06+vIzTQ=="
       },
       "runtime.win-x64.Microsoft.DotNet.ILCompiler": {
         "type": "Transitive",

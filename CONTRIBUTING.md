@@ -1,6 +1,7 @@
 # Contributing
 
-Bug reports and focused pull requests are welcome. Open an issue before starting a large change so the approach can be agreed first.
+Bug reports and focused pull requests are welcome. Open an issue before starting a large change so the approach can be agreed first if it's not clear.
+PLEASE check your work if it was done by an AI.
 
 Keep changes limited to Sift, include tests where practical and run the following commands before opening a pull request:
 

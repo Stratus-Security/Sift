@@ -122,7 +122,10 @@ function Test-PublicContent(
 
     if ($CheckEmail) {
         foreach ($match in $emailPattern.Matches($Content)) {
-            if (-not $match.Value.EndsWith('@stratus.security', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $isProjectAddress =
+                $match.Value.EndsWith('@stratussecurity.com', [System.StringComparison]::OrdinalIgnoreCase) -or
+                $match.Value.EndsWith('@stratus.security', [System.StringComparison]::OrdinalIgnoreCase)
+            if (-not $isProjectAddress) {
                 $violations.Add("$Location contains a non-project email address.")
             }
         }

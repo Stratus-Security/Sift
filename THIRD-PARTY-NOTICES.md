@@ -12,6 +12,6 @@ Stratus Sift uses the following third-party packages. Copyright and licence term
 | PdfPig | Apache-2.0 |
 | SMBLibrary | LGPL-3.0 |
 | System.CommandLine | MIT |
-| System.DirectoryServices and System.IO.FileSystem.AccessControl | MIT |
+| System.DirectoryServices.Protocols and System.IO.FileSystem.AccessControl | MIT |
 
 Test projects also use Microsoft.NET.Test.Sdk, xUnit, xunit.runner.visualstudio, and coverlet.collector under their respective licences. The dependency versions used for each release are recorded in the repository lock files and release SBOM.
