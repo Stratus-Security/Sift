@@ -1,16 +1,21 @@
 using System.Net.NetworkInformation;
+using System.Net;
 
 namespace Stratus.Sift.Cli;
 
 internal sealed record CliWindowsCredential(string UserName, string Password, string? Domain, bool IsLocalMachineAccount)
 {
-    internal string DirectoryEntryUserName => string.IsNullOrWhiteSpace(Domain)
+    internal string QualifiedUserName => string.IsNullOrWhiteSpace(Domain)
         ? UserName
         : $@"{Domain}\{UserName}";
 
     internal string DisplayName => string.IsNullOrWhiteSpace(Domain)
         ? UserName
         : $@"{Domain}\{UserName}";
+
+    internal NetworkCredential ToNetworkCredential() => string.IsNullOrWhiteSpace(Domain)
+        ? new NetworkCredential(UserName, Password)
+        : new NetworkCredential(UserName, Password, Domain);
 
     internal static CliWindowsCredential? Create(
         string? userName,

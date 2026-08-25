@@ -600,10 +600,10 @@
         "resolved": "10.0.10",
         "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
       },
-      "System.DirectoryServices": {
+      "System.DirectoryServices.Protocols": {
         "type": "Transitive",
         "resolved": "10.0.10",
-        "contentHash": "wedXPKcfkebHfYnK0uY01SRTsK5bB+uh1CxZFf7R9zlD/tLwnjnRHWwllEXo2W+a6iFBs6JK9uh6ewzA16sEQg=="
+        "contentHash": "VQdfESaky3eXlvEuvtBndmZjOt65g+Ah6/0j39MPgPJ3gkbGuURlTFDRq0Y2uX64z5qVEVe1Ln6B4a06+vIzTQ=="
       },
       "System.IdentityModel.Tokens.Jwt": {
         "type": "Transitive",
@@ -681,12 +681,12 @@
           "Microsoft.Extensions.Http": "[10.0.10, )",
           "Microsoft.Playwright": "[1.61.0, )",
           "SMBLibrary": "[1.5.7.1, )",
-          "Stratus.Sift.Connectors": "[0.1.0, )",
-          "Stratus.Sift.Contracts": "[0.1.0, )",
-          "Stratus.Sift.Core": "[0.1.0, )",
-          "Stratus.Sift.FileSystem": "[0.1.0, )",
+          "Stratus.Sift.Connectors": "[0.3.0, )",
+          "Stratus.Sift.Contracts": "[0.3.0, )",
+          "Stratus.Sift.Core": "[0.3.0, )",
+          "Stratus.Sift.FileSystem": "[0.3.0, )",
           "System.CommandLine": "[2.0.5, )",
-          "System.DirectoryServices": "[10.0.10, )"
+          "System.DirectoryServices.Protocols": "[10.0.10, )"
         }
       },
       "stratus.sift.connectors": {
@@ -695,7 +695,7 @@
           "Azure.Identity": "[1.19.0, )",
           "Microsoft.Graph": "[5.105.0, )",
           "Microsoft.Kiota.Abstractions": "[1.22.2, )",
-          "Stratus.Sift.Core": "[0.1.0, )"
+          "Stratus.Sift.Core": "[0.3.0, )"
         }
       },
       "stratus.sift.contracts": {
@@ -708,7 +708,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "PdfPig": "[0.1.13, )",
-          "Stratus.Sift.Contracts": "[0.1.0, )",
+          "Stratus.Sift.Contracts": "[0.3.0, )",
           "System.IO.FileSystem.AccessControl": "[5.0.0, )"
         }
       },
@@ -716,7 +716,7 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
-          "Stratus.Sift.Core": "[0.1.0, )"
+          "Stratus.Sift.Core": "[0.3.0, )"
         }
       }
     }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Stratus.Sift.Core.Models;
 using Stratus.Sift.Scanner.Services;
+using Stratus.Sift.Scanner.Models;
 
 namespace Stratus.Sift.Cli;
 
@@ -12,18 +13,23 @@ internal sealed class CliScannerSession : IAsyncDisposable
         IHost host,
         ClassifierOptimizer optimizer,
         Dictionary<Guid, List<Policy>> policyMap,
-        List<IgnoreRule> ignoreRules)
+        List<IgnoreRule> ignoreRules,
+        string ruleFingerprint)
     {
         Host = host;
         Optimizer = optimizer;
         PolicyMap = policyMap;
         IgnoreRules = ignoreRules;
+        Plan = ScannerExecutionPlan.Create(optimizer, policyMap, ignoreRules);
+        RuleFingerprint = ruleFingerprint;
     }
 
     public IHost Host { get; }
     public ClassifierOptimizer Optimizer { get; }
     public Dictionary<Guid, List<Policy>> PolicyMap { get; }
     public List<IgnoreRule> IgnoreRules { get; }
+    public ScannerExecutionPlan Plan { get; }
+    public string RuleFingerprint { get; }
 
     public async ValueTask DisposeAsync()
     {
@@ -57,7 +63,12 @@ internal static class CliScannerBootstrap
             var optimizer = new ClassifierOptimizer();
             optimizer.LoadClassifiers(classifiers);
 
-            return new CliScannerSession(host, optimizer, BuildPolicyMap(policies), ignoreRules);
+            return new CliScannerSession(
+                host,
+                optimizer,
+                BuildPolicyMap(policies),
+                ignoreRules,
+                CliResumeIdentity.CreateRuleFingerprint(rulesPath));
         }
         catch
         {

@@ -5,7 +5,11 @@ using Stratus.Sift.FileSystem;
 using Stratus.Sift.Core;
 using Stratus.Sift.Core.Models;
 using Stratus.Sift.Scanner.Services;
+using Stratus.Sift.Scanner.Models;
+using System.Diagnostics;
+using System.Net;
 using System.Runtime.Versioning;
+using System.Threading.Channels;
 
 namespace Stratus.Sift.Cli;
 
@@ -30,12 +34,12 @@ internal static class CliScanRunner
         await using var session = await CliScannerBootstrap.InitializeScannerAsync(rulesPath, Program.CreateHost, cancellationToken);
         var throttleNotifications = session.Host.Services.GetRequiredService<ThrottleNotificationHub>();
         var checkpointStore = session.Host.Services.GetRequiredService<CliCheckpointStore>();
+        var resumeStore = session.Host.Services.GetRequiredService<CliResumeStore>();
         display.AttachThrottleMonitor(throttleNotifications);
 
         var connectors = session.Host.Services.GetServices<IConnector>();
-        var normalizedProviderName = CliConnectorConfiguration.NormalizeProviderName(providerName);
         var connector = connectorOverride
-            ?? connectors.FirstOrDefault(c => c.ProviderName.Equals(normalizedProviderName, StringComparison.OrdinalIgnoreCase));
+            ?? connectors.FirstOrDefault(c => c.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase));
 
         if (connector == null)
         {
@@ -108,6 +112,17 @@ internal static class CliScanRunner
             return CliExitCodes.Success;
         }
 
+        // Discovery normally performs the first authenticated request. Resolve the
+        // account-bound checkpoint scope afterwards so interactive connectors can
+        // identify the principal without starting authentication during setup.
+        var connectorScope = CliResumeIdentity.CreateConnectorScope(
+            providerName,
+            config,
+            connector is IConnectorCheckpointScopeProvider scopeProvider ? scopeProvider.CheckpointScope : string.Empty,
+            session.RuleFingerprint,
+            includeBinary,
+            llmOptions);
+
         var llmValidator = await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
         var remoteDriveScanner = session.Host.Services.GetRequiredService<RemoteDriveScanner>();
         display.SetTotalDrives(drives.Count);
@@ -116,21 +131,21 @@ internal static class CliScanRunner
 
         if (fullScan)
         {
-            display.WriteEvent("Full scan: saved incremental checkpoints will be ignored for this run.", ConsoleColor.Cyan);
+            display.WriteEvent("Full scan: saved resume checkpoints will be ignored for this run.", ConsoleColor.Cyan);
         }
         else
         {
-            var resumedDrives = drives.Count(drive => !string.IsNullOrWhiteSpace(GetDeltaToken(checkpointStore, drive)));
+            var resumedDrives = drives.Count(drive => !string.IsNullOrWhiteSpace(GetDeltaToken(checkpointStore, connectorScope, drive)));
             if (resumedDrives > 0)
             {
                 display.WriteEvent(
-                    $"Incremental {connector.ProviderName} scan: resuming {resumedDrives:N0} of {drives.Count:N0} drive(s) from saved checkpoints. Drives without a completed checkpoint will restart from the beginning.",
+                    $"Resumed {connector.ProviderName} scan: continuing {resumedDrives:N0} of {drives.Count:N0} drive(s) from saved checkpoints. Drives without a completed checkpoint will restart from the beginning.",
                     ConsoleColor.Cyan);
             }
             else
             {
                 display.WriteEvent(
-                    $"Incremental {connector.ProviderName} scan: no saved checkpoints were found, so all {drives.Count:N0} drive(s) will start from the beginning.",
+                    $"Resumed {connector.ProviderName} scan: no matching checkpoints were found, so all {drives.Count:N0} drive(s) will start from the beginning.",
                     ConsoleColor.Cyan);
             }
         }
@@ -143,8 +158,28 @@ internal static class CliScanRunner
 
             try
             {
-                var deltaToken = fullScan ? null : GetDeltaToken(checkpointStore, drive);
-                await ScanRemoteDriveAsync(drive, deltaToken, remoteDriveScanner, checkpointStore, session, scanOptions, display, llmValidator, llmOptions, cancellationToken);
+                var checkpointKey = GetRemoteCheckpointKey(connectorScope, drive);
+                if (fullScan)
+                {
+                    checkpointStore.ClearRemoteDriveToken(checkpointKey);
+                }
+                var deltaToken = fullScan ? null : checkpointStore.GetRemoteDriveToken(checkpointKey);
+                await using var resumeSession = resumeStore.OpenSession($"remote:{checkpointKey}", resume: !fullScan);
+                await ScanRemoteDriveAsync(
+                    drive,
+                    deltaToken,
+                    remoteDriveScanner,
+                    checkpointStore,
+                    checkpointKey,
+                    resumeSession,
+                    session,
+                    scanOptions,
+                    display,
+                    llmValidator,
+                    llmOptions,
+                    diagnostics: null,
+                    enumerateOnly: false,
+                    cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -177,17 +212,30 @@ internal static class CliScanRunner
         CliWindowsCredential? credential = null,
         CliLlmOptions? llmOptions = null,
         CliOutputOptions? outputOptions = null,
+        CliFilesystemPerformanceOptions? performanceOptions = null,
         bool kerberos = false,
+        IPAddress? dnsServer = null,
+        bool fullScan = DefaultFullScan,
         CancellationToken cancellationToken = default)
     {
+        var effectiveOutputOptions = ResolveOutputOptions(outputOptions, fullScan);
+        performanceOptions ??= new CliFilesystemPerformanceOptions();
+        var workerCount = performanceOptions.ResolveWorkerCount();
+        var queueCapacity = Math.Clamp(workerCount * 32, 512, 4096);
+        await using var diagnostics = new CliScanDiagnostics(
+            workerCount,
+            queueCapacity,
+            performanceOptions.MaxReadBytesPerSecond,
+            performanceOptions.DiagnosticsOutputPath);
         await using var display = new CliProgressDisplay(target.Mode == FileSystemScanMode.Folder
             ? $"Local scan of {target.Value}"
-            : $"{target.DisplayName} crawl", outputOptions);
+            : $"{target.DisplayName} crawl", effectiveOutputOptions);
 
         await using var session = await CliScannerBootstrap.InitializeScannerAsync(rulesPath, Program.CreateHost, cancellationToken);
         var fileScanner = session.Host.Services.GetRequiredService<FileScanner>();
         var standardEnumerator = session.Host.Services.GetRequiredService<StandardFileSystemEnumerator>();
-        var scanOptions = CreateScanOptions(includeBinary, llmOptions);
+        var resumeStore = session.Host.Services.GetRequiredService<CliResumeStore>();
+        var scanOptions = CreateScanOptions(includeBinary, llmOptions, performanceOptions.MaxReadBytesPerSecond, diagnostics.Scanner);
         Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator = null;
 
         if (target.Mode == FileSystemScanMode.Folder)
@@ -202,27 +250,39 @@ internal static class CliScanRunner
 
             var localRootInfo = GetRootDisplayInfo(target.Value, standardEnumerator);
             display.WriteDiscoveryRoot("root", target.Value, localRootInfo.Exposure, localRootInfo.Access);
-            if (enumerateOnly)
+            if (!enumerateOnly)
             {
-                display.Complete("Local enumeration complete");
-                return CliExitCodes.Success;
+                llmValidator = await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
             }
-
-            llmValidator = await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
-            display.SetPhase("Scanning local filesystem");
+            display.SetPhase(enumerateOnly ? "Enumerating local filesystem" : "Scanning local filesystem");
+            await using var resumeSession = enumerateOnly
+                ? null
+                : OpenFilesystemResumeSession(
+                    resumeStore,
+                    target,
+                    target.Value,
+                    session,
+                    includeBinary,
+                    llmOptions,
+                    credential,
+                    kerberos,
+                    dnsServer,
+                    fullScan,
+                    display);
             await ScanFileSystemRootAsync(
                 target.Value,
                 standardEnumerator,
                 fileScanner,
-                session.Optimizer,
-                session.PolicyMap,
-                session.IgnoreRules,
+                session.Plan,
                 scanOptions,
                 display,
                 llmValidator,
                 llmOptions,
+                diagnostics,
+                enumerateOnly,
+                resumeSession,
                 cancellationToken);
-            display.Complete("Local scan complete");
+            display.Complete(enumerateOnly ? "Local enumeration complete" : "Local scan complete");
             return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
 
@@ -246,6 +306,9 @@ internal static class CliScanRunner
                 llmValidator,
                 llmOptions,
                 allowNtlmFallback: !kerberos,
+                dnsServer,
+                fullScan,
+                diagnostics,
                 cancellationToken);
         }
 
@@ -257,7 +320,7 @@ internal static class CliScanRunner
             return CliExitCodes.Failed;
         }
 
-        return await RunWindowsDiscoveryScanAsync(target, credential, enumerateOnly, session, display, scanOptions, fileScanner, standardEnumerator, llmValidator, llmOptions, cancellationToken);
+        return await RunWindowsDiscoveryScanAsync(target, credential, enumerateOnly, session, display, scanOptions, fileScanner, standardEnumerator, llmValidator, llmOptions, resumeStore, includeBinary, kerberos, dnsServer, fullScan, diagnostics, cancellationToken);
     }
 
     internal static bool ShouldUseKerberosPreferredAuthentication(CliWindowsCredential? credential) =>
@@ -274,6 +337,9 @@ internal static class CliScanRunner
         Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator,
         CliLlmOptions? llmOptions,
         bool allowNtlmFallback,
+        IPAddress? dnsServer,
+        bool fullScan,
+        CliScanDiagnostics diagnostics,
         CancellationToken cancellationToken)
     {
         var kerberosService = session.Host.Services.GetRequiredService<SmbKerberosService>();
@@ -283,6 +349,10 @@ internal static class CliScanRunner
                 ? "Authentication mode: Kerberos preferred; NTLM is attempted only per host when Kerberos is unavailable."
                 : "Authentication mode: strict Kerberos (cifs SPN); NTLM fallback is disabled.",
             ConsoleColor.Cyan);
+        if (dnsServer != null)
+        {
+            display.WriteEvent($"DNS mode: direct queries to {dnsServer}; local DNS and local fallback are disabled.", ConsoleColor.Cyan);
+        }
 
         SmbKerberosDiscoveryResult discovery;
         try
@@ -291,6 +361,7 @@ internal static class CliScanRunner
                 target,
                 credential,
                 allowNtlmFallback,
+                dnsServer,
                 path => IgnoreRuleEvaluator.ShouldPruneDirectory(path, session.IgnoreRules),
                 display.SetCurrentPath,
                 cancellationToken);
@@ -336,17 +407,15 @@ internal static class CliScanRunner
             display.WriteDiscoveryRoot("share", drive.WebUrl, "R", authentication);
         }
 
-        if (enumerateOnly)
+        if (!enumerateOnly)
         {
-            display.Complete("Network enumeration complete");
-            return CliExitCodes.Success;
+            llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
         }
-
-        llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
         var remoteDriveScanner = session.Host.Services.GetRequiredService<RemoteDriveScanner>();
         var checkpointStore = session.Host.Services.GetRequiredService<CliCheckpointStore>();
+        var resumeStore = session.Host.Services.GetRequiredService<CliResumeStore>();
         display.SetTotalDrives(discovery.Drives.Count);
-        display.SetPhase("Scanning SMB shares");
+        display.SetPhase(enumerateOnly ? "Enumerating SMB shares" : "Scanning SMB shares");
 
         foreach (var drive in discovery.Drives)
         {
@@ -355,16 +424,36 @@ internal static class CliScanRunner
             display.ClearCurrentPath();
             try
             {
+                var filesystemScope = CliResumeIdentity.CreateFilesystemScope(
+                    target,
+                    drive.WebUrl,
+                    session.RuleFingerprint,
+                    scanOptions.EnableBinaryDocuments,
+                    llmOptions,
+                    credential,
+                    strictKerberos: !allowNtlmFallback,
+                    dnsServer);
+                var checkpointKey = $"filesystem-smb:{filesystemScope}:{drive.ConnectionId}";
+                if (fullScan)
+                {
+                    checkpointStore.ClearRemoteDriveToken(checkpointKey);
+                }
+                var deltaToken = fullScan ? null : checkpointStore.GetRemoteDriveToken(checkpointKey);
+                await using var resumeSession = resumeStore.OpenSession(checkpointKey, resume: !fullScan);
                 await ScanRemoteDriveAsync(
                     drive,
-                    deltaToken: null,
+                    deltaToken,
                     remoteDriveScanner,
                     checkpointStore,
+                    checkpointKey,
+                    resumeSession,
                     session,
                     scanOptions,
                     display,
                     llmValidator,
                     llmOptions,
+                    diagnostics,
+                    enumerateOnly,
                     cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -379,7 +468,7 @@ internal static class CliScanRunner
             }
         }
 
-        display.Complete("Network crawl complete");
+        display.Complete(enumerateOnly ? "Network enumeration complete" : "Network crawl complete");
         return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
     }
 
@@ -395,6 +484,12 @@ internal static class CliScanRunner
         StandardFileSystemEnumerator standardEnumerator,
         Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator,
         CliLlmOptions? llmOptions,
+        CliResumeStore resumeStore,
+        bool includeBinary,
+        bool strictKerberos,
+        IPAddress? dnsServer,
+        bool fullScan,
+        CliScanDiagnostics diagnostics,
         CancellationToken cancellationToken)
     {
         var smbDiscovery = session.Host.Services.GetRequiredService<SmbDiscoveryService>();
@@ -414,13 +509,17 @@ internal static class CliScanRunner
         using (impersonationSession)
         {
             display.SetPhase($"Discovering {target.DisplayName.ToLowerInvariant()} SMB shares");
+            if (dnsServer != null)
+            {
+                display.WriteEvent($"DNS mode: direct queries to {dnsServer}; local DNS and local fallback are disabled.", ConsoleColor.Cyan);
+            }
 
             IReadOnlyList<string> roots;
             try
             {
                 roots = target.Mode == FileSystemScanMode.Domain && credential?.IsLocalMachineAccount == true
-                    ? await DiscoverDomainRootsWithLocalCredentialAsync(smbDiscovery, impersonationSession, display, cancellationToken)
-                    : await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsAsync(target, credential, cancellationToken));
+                    ? await DiscoverDomainRootsWithLocalCredentialAsync(smbDiscovery, impersonationSession, display, dnsServer, cancellationToken)
+                    : await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsAsync(target, credential, dnsServer, cancellationToken));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -444,15 +543,12 @@ internal static class CliScanRunner
                 display.WriteDiscoveryRoot("share", root, rootInfo.Exposure, rootInfo.Access);
             }
 
-            if (enumerateOnly)
+            if (!enumerateOnly)
             {
-                display.Complete("Network enumeration complete");
-                return CliExitCodes.Success;
+                llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
             }
-
-            llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
             display.SetTotalDrives(roots.Count);
-            display.SetPhase("Scanning SMB shares");
+            display.SetPhase(enumerateOnly ? "Enumerating SMB shares" : "Scanning SMB shares");
 
             foreach (var root in roots)
             {
@@ -462,17 +558,32 @@ internal static class CliScanRunner
 
                 try
                 {
+                    await using var resumeSession = enumerateOnly
+                        ? null
+                        : OpenFilesystemResumeSession(
+                            resumeStore,
+                            target,
+                            root,
+                            session,
+                            includeBinary,
+                            llmOptions,
+                            credential,
+                            strictKerberos,
+                            dnsServer,
+                            fullScan,
+                            display);
                     await impersonationSession.RunAsync(() => ScanFileSystemRootAsync(
                         root,
                         standardEnumerator,
                         fileScanner,
-                        session.Optimizer,
-                        session.PolicyMap,
-                        session.IgnoreRules,
+                        session.Plan,
                         scanOptions,
                         display,
                         llmValidator,
                         llmOptions,
+                        diagnostics,
+                        enumerateOnly,
+                        resumeSession,
                         cancellationToken));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -486,7 +597,7 @@ internal static class CliScanRunner
                 }
             }
 
-            display.Complete("Network crawl complete");
+            display.Complete(enumerateOnly ? "Network enumeration complete" : "Network crawl complete");
             return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
     }
@@ -496,11 +607,16 @@ internal static class CliScanRunner
         SmbDiscoveryService smbDiscovery,
         WindowsImpersonationSession impersonationSession,
         CliProgressDisplay display,
+        IPAddress? dnsServer,
         CancellationToken cancellationToken)
     {
         display.WriteEvent("Info: using the current Windows identity for AD computer discovery and the supplied local credentials for SMB access.", ConsoleColor.Cyan);
-        var hosts = smbDiscovery.EnumerateDomainHostsForScan(null);
-        return await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsForHostsAsync(hosts, cancellationToken));
+        var hosts = await smbDiscovery.EnumerateDomainHostsForScanAsync(
+            credential: null,
+            strictKerberos: false,
+            dnsServer,
+            cancellationToken).ConfigureAwait(false);
+        return await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsForHostsAsync(hosts, dnsServer, cancellationToken));
     }
 
     private static async Task ScanRemoteDriveAsync(
@@ -508,13 +624,20 @@ internal static class CliScanRunner
         string? deltaToken,
         RemoteDriveScanner remoteDriveScanner,
         CliCheckpointStore checkpointStore,
+        string checkpointKey,
+        CliResumeSession resumeSession,
         CliScannerSession session,
         Stratus.Sift.Scanner.Models.ScanOptions scanOptions,
         CliProgressDisplay display,
         Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator,
         CliLlmOptions? llmOptions,
+        CliScanDiagnostics? diagnostics,
+        bool enumerateOnly,
         CancellationToken cancellationToken)
     {
+        var scanCompleted = true;
+        var finalTokenWritten = false;
+        var sourceCheckpointAge = Stopwatch.StartNew();
         await remoteDriveScanner.ScanDriveChangesAsync(
             drive,
             deltaToken,
@@ -533,104 +656,306 @@ internal static class CliScanRunner
                 display.AddFindings(1);
                 display.WriteFinding(validatedIssue, string.IsNullOrWhiteSpace(validatedIssue.ResourcePath) ? drive.WebUrl : validatedIssue.ResourcePath);
             },
-            onCheckpointToken: token =>
+            onCheckpointToken: async token =>
             {
-                SetDeltaToken(checkpointStore, drive, token);
-                return Task.CompletedTask;
+                if (enumerateOnly || sourceCheckpointAge.Elapsed < TimeSpan.FromSeconds(30)) return;
+                await display.FlushOutputCheckpointAsync(cancellationToken);
+                SetDeltaToken(checkpointStore, checkpointKey, token);
+                await resumeSession.ClearAsync(cancellationToken);
+                sourceCheckpointAge.Restart();
             },
-            onNewDeltaToken: token =>
+            onNewDeltaToken: async token =>
             {
-                SetDeltaToken(checkpointStore, drive, token);
-                return Task.CompletedTask;
+                if (enumerateOnly) return;
+                await display.FlushOutputCheckpointAsync(cancellationToken);
+                SetDeltaToken(checkpointStore, checkpointKey, token);
+                finalTokenWritten = !string.IsNullOrWhiteSpace(token);
+                await resumeSession.ClearAsync(cancellationToken);
+                sourceCheckpointAge.Restart();
             },
-            onFilesDiscovered: display.AddFilesDiscovered,
-            onFilesScanned: display.AddFilesScanned,
-            onQueueDepth: null,
+            onFilesDiscovered: count =>
+            {
+                display.AddFilesDiscovered(count);
+                if (diagnostics != null)
+                {
+                    for (var index = 0; index < count; index++) diagnostics.RecordCandidate(directory: false);
+                }
+            },
+            onFilesScanned: enumerateOnly ? null : display.AddFilesScanned,
+            onQueueDepth: diagnostics is null ? null : depth => diagnostics.ObserveQueueDepth(depth),
             onCurrentPath: display.SetCurrentPath,
             ensureScanActive: null,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken,
+            executionOptions: diagnostics is null
+                ? null
+                : new RemoteDriveScanExecutionOptions(
+                    diagnostics.Workers,
+                    diagnostics.QueueCapacity,
+                    enumerateOnly),
+            shouldSkipItem: enumerateOnly
+                ? null
+                : item => resumeSession.ContainsRemote(drive.ConnectionId, item.Id, item.Path, item.Size),
+            onItemProcessed: enumerateOnly
+                ? null
+                : (item, token) => resumeSession.MarkRemoteCompletedAsync(
+                    drive.ConnectionId,
+                    item.Id,
+                    item.Path,
+                    item.Size,
+                    display.FlushOutputCheckpointAsync,
+                    token),
+            onScanIncomplete: () => scanCompleted = false);
+
+        if (!enumerateOnly)
+        {
+            await resumeSession.CommitAsync(display.FlushOutputCheckpointAsync, cancellationToken);
+            if (scanCompleted)
+            {
+                if (finalTokenWritten)
+                {
+                    await resumeSession.ClearAsync(cancellationToken);
+                }
+                else
+                {
+                    // Sources without an authoritative final delta token (for example SMB)
+                    // retain their item journal so a later --resume can skip unchanged content.
+                    checkpointStore.ClearRemoteDriveToken(checkpointKey);
+                }
+            }
+        }
     }
 
-    private static string? GetDeltaToken(CliCheckpointStore checkpointStore, IRemoteDrive drive)
+    private static string? GetDeltaToken(CliCheckpointStore checkpointStore, string connectorScope, IRemoteDrive drive)
     {
-        return checkpointStore.GetRemoteDriveToken(drive.ConnectionId)
-            ?? checkpointStore.GetRemoteDriveToken(drive.Id);
+        return checkpointStore.GetRemoteDriveToken(GetRemoteCheckpointKey(connectorScope, drive));
     }
 
-    private static void SetDeltaToken(CliCheckpointStore checkpointStore, IRemoteDrive drive, string token)
+    private static string GetRemoteCheckpointKey(string connectorScope, IRemoteDrive drive)
+        => $"{connectorScope}:{drive.ConnectionId}";
+
+    private static void SetDeltaToken(CliCheckpointStore checkpointStore, string checkpointKey, string token)
     {
         if (!string.IsNullOrWhiteSpace(token))
         {
-            checkpointStore.SetRemoteDriveToken(drive.ConnectionId, token);
+            checkpointStore.SetRemoteDriveToken(checkpointKey, token);
         }
+    }
+
+    private static CliResumeSession OpenFilesystemResumeSession(
+        CliResumeStore resumeStore,
+        FileSystemScanTarget target,
+        string rootPath,
+        CliScannerSession session,
+        bool includeBinary,
+        CliLlmOptions? llmOptions,
+        CliWindowsCredential? credential,
+        bool strictKerberos,
+        IPAddress? dnsServer,
+        bool fullScan,
+        CliProgressDisplay display)
+    {
+        var scope = CliResumeIdentity.CreateFilesystemScope(
+            target,
+            rootPath,
+            session.RuleFingerprint,
+            includeBinary,
+            llmOptions,
+            credential,
+            strictKerberos,
+            dnsServer);
+        var resumeSession = resumeStore.OpenSession(scope, resume: !fullScan);
+        if (!fullScan && resumeSession.CompletedCount > 0)
+        {
+            display.WriteEvent(
+                $"Resume: {resumeSession.CompletedCount:N0} unchanged item(s) already have durable results and will be skipped.",
+                ConsoleColor.Cyan);
+        }
+
+        return resumeSession;
     }
 
     private static async Task ScanFileSystemRootAsync(
         string rootPath,
         StandardFileSystemEnumerator standardEnumerator,
         FileScanner fileScanner,
-        ClassifierOptimizer optimizer,
-        Dictionary<Guid, List<Policy>> policyMap,
-        List<IgnoreRule> ignoreRules,
+        ScannerExecutionPlan plan,
         Stratus.Sift.Scanner.Models.ScanOptions scanOptions,
         CliProgressDisplay display,
         Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator,
         CliLlmOptions? llmOptions,
+        CliScanDiagnostics diagnostics,
+        bool enumerateOnly,
+        CliResumeSession? resumeSession,
         CancellationToken cancellationToken)
     {
-        PathFilter? directoryFilter = ignoreRules.Count == 0
+        PathFilter? directoryFilter = plan.IgnoreRules.Count == 0
             ? null
-            : path => IgnoreRuleEvaluator.ShouldPruneDirectory(path.ToString(), ignoreRules);
+            : path => IgnoreRuleEvaluator.ShouldPruneDirectory(path.ToString(), plan.IgnoreRules);
 
-        var entries = standardEnumerator.EnumeratePath(rootPath, directoryFilter, includeAcls: false);
-        var parallelOptions = new ParallelOptions
+        var channel = Channel.CreateBounded<FileScanCandidate>(new BoundedChannelOptions(diagnostics.QueueCapacity)
         {
-            MaxDegreeOfParallelism = Environment.ProcessorCount,
-            CancellationToken = cancellationToken
-        };
+            SingleWriter = true,
+            SingleReader = false,
+            FullMode = BoundedChannelFullMode.Wait,
+            AllowSynchronousContinuations = false
+        });
 
-        await Parallel.ForEachAsync(entries, parallelOptions, async (entry, itemCancellationToken) =>
+        var producer = Task.Run(async () =>
         {
+            var enumerationStarted = diagnostics.BeginEnumeration();
+            Exception? failure = null;
             try
             {
-                var scanPath = entry.IsDirectory ? EnsureDirectoryMetadataPath(entry.Path) : entry.Path;
-                if (IgnoreRuleEvaluator.ShouldIgnoreDespiteMetadata(IgnoreRuleEvaluator.GetMatchedRules(scanPath, ignoreRules), []))
+                var pendingFiles = 0;
+                var pendingDirectories = 0;
+                var pendingQueueSamples = 0;
+                foreach (var entry in standardEnumerator.EnumerateScanCandidates(rootPath, directoryFilter))
                 {
-                    return;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!enumerateOnly && resumeSession?.Contains(entry) == true)
+                    {
+                        continue;
+                    }
+                    if (entry.IsDirectory) pendingDirectories++;
+                    else pendingFiles++;
+                    await channel.Writer.WriteAsync(entry, cancellationToken);
+                    if (++pendingQueueSamples >= 128)
+                    {
+                        diagnostics.RecordCandidates(pendingFiles, pendingDirectories);
+                        diagnostics.ObserveQueueDepth(channel.Reader.Count);
+                        pendingFiles = 0;
+                        pendingDirectories = 0;
+                        pendingQueueSamples = 0;
+                    }
                 }
 
-                if (!entry.IsDirectory)
-                {
-                    display.AddFilesDiscovered(1);
-                    display.IncrementFiles();
-                }
-
-                var findings = fileScanner.ScanFile(
-                        scanPath,
-                        optimizer,
-                        policyMap,
-                        scanOptions,
-                        exposure: entry.Exposure,
-                        owner: entry.Owner,
-                        aclEntries: entry.AclEntries,
-                        fileSize: entry.Size,
-                        ext: Path.GetExtension(entry.Path),
-                        name: entry.Name,
-                        ignoreRules: ignoreRules)
-                    .ToList();
-
-                var validatedFindings = await ValidateFindingsAsync(findings, llmValidator, llmOptions, itemCancellationToken);
-                ReportFindings(display, validatedFindings, entry);
+                diagnostics.RecordCandidates(pendingFiles, pendingDirectories);
+                diagnostics.ObserveQueueDepth(channel.Reader.Count);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception exception)
             {
-                display.IncrementErrors();
-                display.WriteEvent($"Warning: failed to scan {entry.Path}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                failure = exception;
+                throw;
             }
-        });
+            finally
+            {
+                diagnostics.CompleteEnumeration(enumerationStarted);
+                channel.Writer.TryComplete(failure);
+            }
+        }, cancellationToken);
+
+        var consumers = Enumerable.Range(0, diagnostics.Workers)
+            .Select(_ => ConsumeFileSystemCandidatesAsync(
+                channel.Reader,
+                fileScanner,
+                plan,
+                scanOptions,
+                display,
+                llmValidator,
+                llmOptions,
+                enumerateOnly,
+                resumeSession,
+                display.FlushOutputCheckpointAsync,
+                cancellationToken))
+            .ToArray();
+
+        await Task.WhenAll(consumers.Prepend(producer));
     }
 
-    private static void ReportFindings(CliProgressDisplay display, IReadOnlyCollection<ScanFinding> findings, FileSystemEntryInfo entry)
+    private static async Task ConsumeFileSystemCandidatesAsync(
+        ChannelReader<FileScanCandidate> reader,
+        FileScanner fileScanner,
+        ScannerExecutionPlan plan,
+        Stratus.Sift.Scanner.Models.ScanOptions scanOptions,
+        CliProgressDisplay display,
+        Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator,
+        CliLlmOptions? llmOptions,
+        bool enumerateOnly,
+        CliResumeSession? resumeSession,
+        Func<CancellationToken, Task> beforeCheckpoint,
+        CancellationToken cancellationToken)
+    {
+        var pendingDiscovered = 0;
+        var pendingScanned = 0;
+        var lastProgressFlush = Environment.TickCount64;
+
+        try
+        {
+            await foreach (var entry in reader.ReadAllAsync(cancellationToken))
+            {
+                if (!entry.IsDirectory)
+                {
+                    pendingDiscovered++;
+                }
+
+                if (!enumerateOnly)
+                {
+                    var completed = false;
+                    try
+                    {
+                        var scanPath = entry.IsDirectory ? EnsureDirectoryMetadataPath(entry.Path) : entry.Path;
+                        var result = await fileScanner.ScanFileWithResultAsync(
+                            scanPath,
+                            plan,
+                            scanOptions,
+                            exposure: "Unknown",
+                            owner: "Unknown",
+                            aclEntries: null,
+                            fileSize: entry.Size,
+                            ext: Path.GetExtension(entry.Path),
+                            name: entry.Name,
+                            cancellationToken: cancellationToken);
+
+                        var findings = result.Issues as List<ScanFinding> ?? result.Issues.ToList();
+                        var validatedFindings = await ValidateFindingsAsync(findings, llmValidator, llmOptions, cancellationToken);
+                        ReportFindings(display, validatedFindings, entry);
+                        completed = true;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        display.IncrementErrors();
+                        display.WriteEvent($"Warning: failed to scan {entry.Path}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                    }
+
+                    if (completed && resumeSession != null)
+                    {
+                        await resumeSession.MarkCompletedAsync(entry, beforeCheckpoint, cancellationToken);
+                    }
+                }
+
+                if (!entry.IsDirectory && !enumerateOnly)
+                {
+                    pendingScanned++;
+                }
+
+                var now = Environment.TickCount64;
+                if (pendingDiscovered >= 128 || now - lastProgressFlush >= 250)
+                {
+                    FlushProgress(display, ref pendingDiscovered, ref pendingScanned);
+                    lastProgressFlush = now;
+                }
+            }
+        }
+        finally
+        {
+            FlushProgress(display, ref pendingDiscovered, ref pendingScanned);
+        }
+
+        if (!enumerateOnly && resumeSession != null)
+        {
+            await resumeSession.CommitAsync(beforeCheckpoint, cancellationToken);
+        }
+    }
+
+    private static void FlushProgress(CliProgressDisplay display, ref int discovered, ref int scanned)
+    {
+        if (discovered > 0) display.AddFilesDiscovered(discovered);
+        if (scanned > 0) display.AddFilesScanned(scanned);
+        discovered = 0;
+        scanned = 0;
+    }
+
+    private static void ReportFindings(CliProgressDisplay display, IReadOnlyCollection<ScanFinding> findings, FileScanCandidate entry)
     {
         if (findings.Count == 0)
         {
@@ -648,9 +973,7 @@ internal static class CliScanRunner
             entry.IsDirectory ? null : entry.Size,
             entry.Modified,
             "R",
-            string.IsNullOrWhiteSpace(entry.Exposure) || string.Equals(entry.Exposure, "Unknown", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : entry.Exposure);
+            Comment: null);
 
         foreach (var finding in findings)
         {
@@ -658,7 +981,11 @@ internal static class CliScanRunner
         }
     }
 
-    private static Stratus.Sift.Scanner.Models.ScanOptions CreateScanOptions(bool includeBinary, CliLlmOptions? llmOptions)
+    private static Stratus.Sift.Scanner.Models.ScanOptions CreateScanOptions(
+        bool includeBinary,
+        CliLlmOptions? llmOptions,
+        long maxReadBytesPerSecond = 0,
+        ScanDiagnostics? diagnostics = null)
     {
         return new Stratus.Sift.Scanner.Models.ScanOptions
         {
@@ -666,7 +993,9 @@ internal static class CliScanRunner
             EnableLlmValidation = llmOptions?.Enabled == true,
             OllamaUrl = llmOptions?.OllamaUrl ?? "http://localhost:11434",
             OllamaModel = llmOptions?.OllamaModel ?? string.Empty,
-            LlmTimeoutSeconds = llmOptions?.TimeoutSeconds ?? 20
+            LlmTimeoutSeconds = llmOptions?.TimeoutSeconds ?? 20,
+            MaxDiskReadBytesPerSecond = maxReadBytesPerSecond,
+            Diagnostics = diagnostics
         };
     }
 

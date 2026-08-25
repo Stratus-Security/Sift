@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>sift</AssemblyName>
     <RootNamespace>Stratus.Sift.Cli</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <IsPackable>false</IsPackable>
     <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
     <PublishAot Condition="'$(RuntimeIdentifier)' != ''">true</PublishAot>
@@ -26,7 +26,7 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
     <PackageReference Include="Microsoft.Playwright" Version="1.61.0" Condition="'$(PublishAot)' != 'true'" />
     <PackageReference Include="SMBLibrary" Version="1.5.7.1" />
-    <PackageReference Include="System.DirectoryServices" Version="10.0.10" Condition="'$(PublishAot)' != 'true'" />
+    <PackageReference Include="System.DirectoryServices.Protocols" Version="10.0.10" />
     <PackageReference Include="System.CommandLine" Version="2.0.5" />
   </ItemGroup>
   <PropertyGroup>
@@ -38,7 +38,6 @@
   </PropertyGroup>
   <ItemGroup Condition="'$(PublishAot)' == 'true'">
     <Compile Remove="SlackBrowserConnector.cs" />
-    <Compile Remove="SlackBrowserFileDownloader.cs" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Stratus.Sift.Cli.Tests" />

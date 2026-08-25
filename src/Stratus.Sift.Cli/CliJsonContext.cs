@@ -15,6 +15,7 @@ namespace Stratus.Sift.Cli;
 [JsonSerializable(typeof(CliOutputEventRecord))]
 [JsonSerializable(typeof(CliOutputFindingRecord))]
 [JsonSerializable(typeof(CliCheckpointState))]
+[JsonSerializable(typeof(CliScanDiagnosticsDocument))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(long))]
 [JsonSerializable(typeof(DateTimeOffset))]

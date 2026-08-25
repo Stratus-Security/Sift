@@ -119,6 +119,58 @@ public class CliOutputCaptureTests
     }
 
     [Fact]
+    public async Task JsonOutput_CheckpointIsACompleteReadableDocument()
+    {
+        var path = CreateTemporaryPath("json");
+        try
+        {
+            var capture = new CliOutputCapture(path, CliOutputFormat.Json, CliOutputStyle.Default, "Long scan");
+            capture.RecordEvent("progress", "first durable batch");
+
+            await capture.FlushCheckpointAsync(Summary(filesScanned: 128));
+
+            var checkpoint = JsonSerializer.Deserialize<CliJsonOutputDocument>(await File.ReadAllTextAsync(path));
+            Assert.NotNull(checkpoint);
+            Assert.Equal(128, checkpoint.FilesScanned);
+            Assert.Contains(checkpoint.Events, entry => entry.Message == "first durable batch");
+
+            capture.RecordEvent("progress", "second durable batch");
+            await capture.WriteAsync(Summary(filesScanned: 129));
+
+            var completed = JsonSerializer.Deserialize<CliJsonOutputDocument>(await File.ReadAllTextAsync(path));
+            Assert.NotNull(completed);
+            Assert.Equal(129, completed.FilesScanned);
+            Assert.Contains(completed.Events, entry => entry.Message == "second durable batch");
+        }
+        finally
+        {
+            DeleteOutputFiles(path);
+        }
+    }
+
+    [Fact]
+    public async Task CheckpointFlush_PropagatesWriterFailureWithoutHanging()
+    {
+        var path = CreateTemporaryPath("json");
+        const string invalidJson = "{not valid json";
+        try
+        {
+            await File.WriteAllTextAsync(path, invalidJson);
+            var capture = new CliOutputCapture(path, CliOutputFormat.Json, CliOutputStyle.Default, "Resumed scan", append: true);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => capture.FlushCheckpointAsync(Summary()).WaitAsync(TimeSpan.FromSeconds(5)));
+
+            Assert.Contains("file was left unchanged", exception.Message);
+            Assert.Equal(invalidJson, await File.ReadAllTextAsync(path));
+        }
+        finally
+        {
+            DeleteOutputFiles(path);
+        }
+    }
+
+    [Fact]
     public async Task LocalScan_MissingPathReturnsOperationalFailure()
     {
         var missingPath = Path.Combine(Path.GetTempPath(), $"missing-content-scan-{Guid.NewGuid():N}");

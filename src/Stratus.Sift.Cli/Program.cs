@@ -42,12 +42,15 @@ public class Program
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         builder.Services.AddSingleton<CliCheckpointStore>();
+        builder.Services.AddSingleton<CliResumeStore>();
         builder.Services.AddSingleton<StandardFileSystemEnumerator>();
         builder.Services.AddSingleton<FileScanner>();
         builder.Services.AddSingleton<IScanner>(sp => sp.GetRequiredService<FileScanner>());
         builder.Services.AddTransient<ContentExtractor>();
         builder.Services.AddSingleton<RemoteDriveScanner>();
         builder.Services.AddSingleton<ThrottleNotificationHub>();
+        builder.Services.AddSingleton<CliDnsResolver>();
+        builder.Services.AddSingleton<ActiveDirectoryLdapDiscovery>();
         builder.Services.AddSingleton<SmbDiscoveryService>();
         builder.Services.AddSingleton<SmbKerberosService>();
         builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.LuhnValidator>();

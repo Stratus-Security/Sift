@@ -8,6 +8,8 @@ using Stratus.Sift.Connectors.Atlassian;
 using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.Connectors.Slack;
 using SMBLibrary;
+using System.DirectoryServices.Protocols;
+using System.Runtime.Versioning;
 using System.Text.Json;
 
 namespace Stratus.Sift.Cli.Tests;
@@ -175,6 +177,33 @@ public class CliNetworkScanTests
     }
 
     [Fact]
+    public void BuildRootCommand_FilesystemCommandsAcceptPerformanceOptions()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var local = rootCommand.Parse([
+            "local", "--path", @"C:\Data", "--threads", "12",
+            "--max-read-mib-per-second", "64", "--diagnostics-output", "scan-diagnostics.json"]);
+        var network = rootCommand.Parse([
+            "network", "--device", "server", "--threads", "24",
+            "--max-read-mib-per-second", "0"]);
+
+        Assert.Empty(local.Errors);
+        Assert.Empty(network.Errors);
+    }
+
+    [Theory]
+    [InlineData("--threads", "-1")]
+    [InlineData("--threads", "257")]
+    [InlineData("--max-read-mib-per-second", "-1")]
+    public void BuildRootCommand_LocalRejectsInvalidPerformanceOptions(string option, string value)
+    {
+        var parseResult = Program.BuildRootCommand().Parse(["local", "--path", @"C:\Data", option, value]);
+
+        Assert.NotEmpty(parseResult.Errors);
+    }
+
+    [Fact]
     public void BuildRootCommand_NetworkAcceptsEnumOnly()
     {
         var rootCommand = Program.BuildRootCommand();
@@ -296,13 +325,65 @@ public class CliNetworkScanTests
     }
 
     [Theory]
-    [InlineData(null, "RootDSE", "LDAP://RootDSE")]
-    [InlineData("dc01.contoso.com", "RootDSE", "LDAP://dc01.contoso.com/RootDSE")]
-    [InlineData("10.0.0.10", "DC=contoso,DC=com", "LDAP://10.0.0.10/DC=contoso,DC=com")]
-    [InlineData("2001:db8::10", "RootDSE", "LDAP://[2001:db8::10]/RootDSE")]
-    public void BuildLdapPath_UsesSpecifiedDomainController(string? domainController, string relativePath, string expected)
+    [InlineData(false, AuthType.Negotiate)]
+    [InlineData(true, AuthType.Kerberos)]
+    public void ActiveDirectoryDiscovery_UsesExpectedAuthentication(bool strictKerberos, AuthType expected)
     {
-        Assert.Equal(expected, SmbDiscoveryService.BuildLdapPath(domainController, relativePath));
+        Assert.Equal(expected, ActiveDirectoryLdapDiscovery.GetAuthenticationType(strictKerberos));
+    }
+
+    [Theory]
+    [InlineData("10.0.0.10")]
+    [InlineData("2001:db8::10")]
+    public void ActiveDirectoryDiscovery_StrictKerberosRejectsIpController(string domainController)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ActiveDirectoryLdapDiscovery.ValidateAuthenticationTarget(domainController, strictKerberos: true));
+
+        Assert.Contains("resolvable domain-controller hostname", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("10.0.0.10", false)]
+    [InlineData("dc01.contoso.com", false)]
+    [InlineData("dc01.contoso.com", true)]
+    public void ActiveDirectoryDiscovery_AcceptsSupportedControllerAuthentication(string domainController, bool strictKerberos)
+    {
+        ActiveDirectoryLdapDiscovery.ValidateAuthenticationTarget(domainController, strictKerberos);
+    }
+
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task ActiveDirectoryDiscovery_PreCancelledRequestDoesNotStartNetworkAccess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var discovery = new ActiveDirectoryLdapDiscovery(new CliDnsResolver());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            discovery.EnumerateComputersAsync(
+                "127.0.0.1",
+                credential: null,
+                strictKerberos: false,
+                dnsServer: null,
+                cancellation.Token));
+    }
+
+    [Fact]
+    public void WindowsCredential_CreatesLdapNetworkCredentialWithoutChangingIdentity()
+    {
+        var credential = CliWindowsCredential.Create("alice", "secret", "CONTOSO", preferDomainAccount: true)!;
+
+        var networkCredential = credential.ToNetworkCredential();
+
+        Assert.Equal("alice", networkCredential.UserName);
+        Assert.Equal("secret", networkCredential.Password);
+        Assert.Equal("CONTOSO", networkCredential.Domain);
     }
 
     [Fact]
@@ -316,21 +397,21 @@ public class CliNetworkScanTests
     }
 
     [Fact]
-    public void BuildRootCommand_SharePointAcceptsEnumOnly()
+    public void BuildRootCommand_Microsoft365AcceptsEnumOnly()
     {
         var rootCommand = Program.BuildRootCommand();
 
-        var parseResult = rootCommand.Parse(["sharepoint", "--enum-only"]);
+        var parseResult = rootCommand.Parse(["m365", "--enum-only"]);
 
         Assert.Empty(parseResult.Errors);
     }
 
     [Fact]
-    public void BuildRootCommand_SharePointAcceptsShortAliases()
+    public void BuildRootCommand_Microsoft365AcceptsShortOptions()
     {
         var rootCommand = Program.BuildRootCommand();
 
-        var parseResult = rootCommand.Parse(["sharepoint", "-s", "https://contoso.sharepoint.com/sites/Finance", "-i", "-e", "-o", "scan.json", "-f", "json"]);
+        var parseResult = rootCommand.Parse(["m365", "-s", "https://contoso.sharepoint.com/sites/Finance", "-i", "-e", "-o", "scan.json", "-f", "json"]);
 
         Assert.Empty(parseResult.Errors);
     }
@@ -368,7 +449,6 @@ public class CliNetworkScanTests
     [Theory]
     [InlineData("--full-scan")]
     [InlineData("--resume")]
-    [InlineData("--incremental")]
     public void BuildRootCommand_AtlassianAcceptsScanModeOptions(string option)
     {
         var rootCommand = Program.BuildRootCommand();
@@ -376,6 +456,58 @@ public class CliNetworkScanTests
         var parseResult = rootCommand.Parse(["atlassian", "--url", "https://example.atlassian.net", option]);
 
         Assert.Empty(parseResult.Errors);
+    }
+
+    [Fact]
+    public void BuildRootCommand_RejectsRemovedIncrementalAlias()
+    {
+        var parseResult = Program.BuildRootCommand().Parse(["local", "--path", @"C:\Data", "--incremental"]);
+
+        Assert.NotEmpty(parseResult.Errors);
+    }
+
+    [Theory]
+    [InlineData("local", "--path", @"C:\Data")]
+    [InlineData("domain", null, null)]
+    [InlineData("network", "--device", "server.example.test")]
+    [InlineData("m365", null, null)]
+    [InlineData("slack", "--token", "xoxb-test")]
+    [InlineData("atlassian", "--url", "https://example.atlassian.net")]
+    public void BuildRootCommand_AllScanTypesAcceptResume(string commandName, string? requiredOption, string? requiredValue)
+    {
+        var arguments = new List<string> { commandName };
+        if (requiredOption != null)
+        {
+            arguments.Add(requiredOption);
+            arguments.Add(requiredValue!);
+        }
+        arguments.Add("--resume");
+
+        var parseResult = Program.BuildRootCommand().Parse(arguments.ToArray());
+
+        Assert.Empty(parseResult.Errors);
+    }
+
+    [Theory]
+    [InlineData("local", "--path", @"C:\Data")]
+    [InlineData("domain", null, null)]
+    [InlineData("network", "--device", "server.example.test")]
+    [InlineData("m365", null, null)]
+    [InlineData("slack", "--token", "xoxb-test")]
+    [InlineData("atlassian", "--url", "https://example.atlassian.net")]
+    public void BuildRootCommand_ResumeRejectsEnumerationOnly(string commandName, string? requiredOption, string? requiredValue)
+    {
+        var arguments = new List<string> { commandName };
+        if (requiredOption != null)
+        {
+            arguments.Add(requiredOption);
+            arguments.Add(requiredValue!);
+        }
+        arguments.AddRange(["--resume", "--enum-only"]);
+
+        var parseResult = Program.BuildRootCommand().Parse(arguments.ToArray());
+
+        Assert.Contains(parseResult.Errors, error => error.Message.Contains("cannot be combined", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -443,6 +575,37 @@ public class CliNetworkScanTests
         Assert.Equal(
             ["message-100-000001.txt", "message-200-000001.txt", "message-150-000001.txt"],
             result.Changes.Select(file => file.Name));
+    }
+
+    [Fact]
+    public void SlackCheckpoint_RoundTripsHistoryAndReplyProgress()
+    {
+        var token = SlackDrive.CreateCheckpoint(
+            "100.000001",
+            "next-page",
+            "300.000001",
+            repliesPhase: true,
+            ["110.000001", "120.000001"]);
+
+        var resumed = SlackDrive.ParseCheckpoint(token);
+
+        Assert.Equal("100.000001", resumed.Boundary);
+        Assert.Equal("next-page", resumed.Cursor);
+        Assert.Equal("300.000001", resumed.Newest);
+        Assert.True(resumed.RepliesPhase);
+        Assert.Equal(["110.000001", "120.000001"], resumed.ThreadParents);
+    }
+
+    [Fact]
+    public void SmbCheckpoint_RoundTripsPendingDirectoryStack()
+    {
+        var pending = new Stack<string>();
+        pending.Push(@"Finance\2025");
+        pending.Push(@"Engineering\Builds");
+
+        var resumed = SmbKerberosDrive.ParseCheckpoint(SmbKerberosDrive.CreateCheckpoint(pending));
+
+        Assert.Equal(pending.ToArray(), resumed.ToArray());
     }
 
     [Fact]
@@ -535,44 +698,18 @@ public class CliNetworkScanTests
         Assert.Equal("200.000001", repliesCall.Parameters.GetValueOrDefault("oldest"));
     }
 
-    [Fact]
-    public void BuildRootCommand_SlackExportAcceptsOfflineAndBrowserOptions()
+    [Theory]
+    [InlineData("sharepoint")]
+    [InlineData("office365")]
+    [InlineData("jira")]
+    [InlineData("slack-export")]
+    public void BuildRootCommand_RejectsRemovedSourceCommands(string commandName)
     {
-        var input = Directory.CreateTempSubdirectory("stratus-slack-export-");
-        try
-        {
-            var rootCommand = Program.BuildRootCommand();
+        var rootCommand = Program.BuildRootCommand();
 
-            var offline = rootCommand.Parse(["slack-export", "-i", input.FullName, "--files-root", input.FullName, "-b"]);
-            var browser = rootCommand.Parse(["slack-export", "--input", input.FullName, "--browser-files", "--browser-channel", "msedge"]);
+        var parseResult = rootCommand.Parse([commandName]);
 
-            Assert.Empty(offline.Errors);
-            Assert.Empty(browser.Errors);
-        }
-        finally
-        {
-            input.Delete(recursive: true);
-        }
-    }
-
-    [Fact]
-    public void BuildRootCommand_SlackExportRejectsConflictingFileSourcesAndEnumOnlyBrowserMode()
-    {
-        var input = Directory.CreateTempSubdirectory("stratus-slack-export-");
-        try
-        {
-            var rootCommand = Program.BuildRootCommand();
-
-            var conflicting = rootCommand.Parse(["slack-export", "-i", input.FullName, "--files-root", input.FullName, "--browser-files"]);
-            var enumOnly = rootCommand.Parse(["slack-export", "-i", input.FullName, "--browser-files", "--enum-only"]);
-
-            Assert.NotEmpty(conflicting.Errors);
-            Assert.NotEmpty(enumOnly.Errors);
-        }
-        finally
-        {
-            input.Delete(recursive: true);
-        }
+        Assert.NotEmpty(parseResult.Errors);
     }
 
     [Fact]
@@ -586,7 +723,7 @@ public class CliNetworkScanTests
     }
 
     [Fact]
-    public void CreateHost_ResolvesSlackAtlassianAndSlackExportConnectors()
+    public void CreateHost_ResolvesCanonicalCloudConnectors()
     {
         using var host = Program.CreateHost();
 
@@ -594,7 +731,7 @@ public class CliNetworkScanTests
 
         Assert.Contains("Slack", providers);
         Assert.Contains("Atlassian", providers);
-        Assert.Contains("Slack Export", providers);
+        Assert.Contains("Microsoft 365", providers);
     }
 
     [Fact]
@@ -974,10 +1111,10 @@ public class CliNetworkScanTests
     public void RemoteDriveScanner_FindingResourcePathPrefersBrowserUrlAndFallsBackToInternalPath()
     {
         var linked = new SimpleRemoteFile("1", "issue.txt", "atlassian://example/jira/SEC/SEC-1.txt", "https://example.atlassian.net/browse/SEC-1", "secret");
-        var offline = new SimpleRemoteFile("2", "message.txt", "slack-export://export/channel/message.txt", string.Empty, "secret");
+        var offline = new SimpleRemoteFile("2", "message.txt", "internal://source/message.txt", string.Empty, "secret");
 
         Assert.Equal("https://example.atlassian.net/browse/SEC-1", RemoteDriveScanner.GetFindingResourcePath(linked));
-        Assert.Equal("slack-export://export/channel/message.txt", RemoteDriveScanner.GetFindingResourcePath(offline));
+        Assert.Equal("internal://source/message.txt", RemoteDriveScanner.GetFindingResourcePath(offline));
     }
 
     private sealed class FakeSlackBrowserSession(params string[] responses) : ISlackBrowserSession

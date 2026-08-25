@@ -115,6 +115,19 @@ internal sealed class CliOutputCapture
         await _writerTask.WaitAsync(cancellationToken);
     }
 
+    internal async Task FlushCheckpointAsync(CliOutputSummary summary, CancellationToken cancellationToken = default)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await _channel.Writer.WriteAsync(new FlushMessage(summary, completion), cancellationToken);
+        var finished = await Task.WhenAny(completion.Task, _writerTask).WaitAsync(cancellationToken);
+        if (finished == _writerTask)
+        {
+            await _writerTask.WaitAsync(cancellationToken);
+        }
+
+        await completion.Task.WaitAsync(cancellationToken);
+    }
+
     private void WriteMessage(OutputCaptureMessage message)
     {
         while (!_channel.Writer.TryWrite(message))
@@ -196,6 +209,33 @@ internal sealed class CliOutputCapture
                     case FindingMessage findingMessage when findingSpool != null:
                         await findingSpool.WriteLineAsync(JsonSerializer.Serialize(findingMessage.Finding, CliJsonContext.Default.CliOutputFindingRecord));
                         newFindingCount++;
+                        break;
+
+                    case FlushMessage flushMessage:
+                        try
+                        {
+                            if (cliStream != null)
+                            {
+                                await FlushCliLinesAsync(cliStream, cliLineBuffer);
+                                await cliStream.FlushAsync();
+                            }
+                            else if (eventSpool != null && findingSpool != null)
+                            {
+                                await eventSpool.FlushAsync();
+                                await findingSpool.FlushAsync();
+                                await WriteJsonDocumentAsync(
+                                    flushMessage.Summary,
+                                    existingJsonDocument,
+                                    newFindingCount);
+                            }
+
+                            flushMessage.Completion.SetResult();
+                        }
+                        catch (Exception exception)
+                        {
+                            flushMessage.Completion.SetException(exception);
+                            throw;
+                        }
                         break;
 
                     case CompleteMessage completeMessage:
@@ -384,6 +424,7 @@ internal sealed class CliOutputCapture
     private sealed record CliLinesMessage(IReadOnlyList<string> Lines) : OutputCaptureMessage;
     private sealed record EventMessage(CliOutputEventRecord Event) : OutputCaptureMessage;
     private sealed record FindingMessage(CliOutputFindingRecord Finding) : OutputCaptureMessage;
+    private sealed record FlushMessage(CliOutputSummary Summary, TaskCompletionSource Completion) : OutputCaptureMessage;
     private sealed record CompleteMessage(CliOutputSummary Summary) : OutputCaptureMessage;
 }
 

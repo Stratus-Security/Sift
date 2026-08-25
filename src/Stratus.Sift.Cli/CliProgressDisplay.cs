@@ -173,6 +173,12 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
 
     public long ErrorCount => Interlocked.Read(ref _errors);
 
+    public Task FlushOutputCheckpointAsync(CancellationToken cancellationToken = default)
+    {
+        return _outputCapture?.FlushCheckpointAsync(CreateOutputSummary(), cancellationToken)
+            ?? Task.CompletedTask;
+    }
+
     public void WriteDiscoveryRoot(string noun, string path, string? exposure, string access = "R")
     {
         if (_style == CliOutputStyle.Snaffler)
@@ -376,15 +382,17 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
 
         if (_outputCapture != null)
         {
-            await _outputCapture.WriteAsync(new CliOutputCapture.CliOutputSummary(
-                _summaryTitle,
-                _stopwatch.Elapsed,
-                Interlocked.Read(ref _filesDiscovered),
-                Interlocked.Read(ref _filesScanned),
-                Interlocked.Read(ref _findings),
-                Interlocked.Read(ref _errors)));
+            await _outputCapture.WriteAsync(CreateOutputSummary());
         }
     }
+
+    private CliOutputCapture.CliOutputSummary CreateOutputSummary() => new(
+        _summaryTitle,
+        _stopwatch.Elapsed,
+        Interlocked.Read(ref _filesDiscovered),
+        Interlocked.Read(ref _filesScanned),
+        Interlocked.Read(ref _findings),
+        Interlocked.Read(ref _errors));
 
     private void WriteHeader()
     {

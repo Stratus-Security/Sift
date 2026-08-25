@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Runtime.Versioning;
 using System.Text;
@@ -6,12 +7,13 @@ using SMBLibrary;
 using SMBLibrary.Client;
 using SMBLibrary.Client.Authentication;
 using Stratus.Sift.Connectors.Interfaces;
+using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.Core.Enums;
 using FileAttributes = SMBLibrary.FileAttributes;
 
 namespace Stratus.Sift.Cli;
 
-internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
+internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, CliDnsResolver dnsResolver)
 {
     private const int HostParallelism = 16;
     internal const int ConnectionTimeoutMs = 5_000;
@@ -21,6 +23,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
         FileSystemScanTarget target,
         CliWindowsCredential? credential,
         bool allowNtlmFallback,
+        IPAddress? dnsServer,
         Func<string, bool>? shouldPruneDirectory,
         Action<string>? onCurrentPath,
         CancellationToken cancellationToken)
@@ -31,7 +34,12 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
                 "Kerberos requires an Active Directory identity. Qualify the username with --domain <ad-dns-domain> or use user@domain.");
         }
 
-        var hostTargets = GetHostTargets(target, credential);
+        var hostTargets = await GetHostTargetsAsync(
+            target,
+            credential,
+            strictKerberos: !allowNtlmFallback,
+            dnsServer,
+            cancellationToken).ConfigureAwait(false);
         var drives = new ConcurrentBag<IRemoteDrive>();
         var warnings = new ConcurrentBag<string>();
         var ntlmFallbackHosts = 0;
@@ -47,7 +55,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
             {
                 try
                 {
-                    var connection = await ResolveConnectionAsync(hostTarget.Host, credential, token);
+                    var connection = await ResolveConnectionAsync(hostTarget.Host, credential, dnsServer, token);
                     try
                     {
                         if (!connection.IsKerberosReady)
@@ -145,18 +153,30 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
     }
 
     [SupportedOSPlatform("windows")]
-    private IReadOnlyList<SmbHostTarget> GetHostTargets(FileSystemScanTarget target, CliWindowsCredential? credential)
+    private async Task<IReadOnlyList<SmbHostTarget>> GetHostTargetsAsync(
+        FileSystemScanTarget target,
+        CliWindowsCredential? credential,
+        bool strictKerberos,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken)
     {
+        if (target.Mode == FileSystemScanMode.Domain)
+        {
+            var hosts = await discoveryService.EnumerateDomainHostsForScanAsync(
+                target.Value.Equals("current domain", StringComparison.OrdinalIgnoreCase) ? null : target.Value,
+                credential,
+                strictKerberos,
+                dnsServer,
+                cancellationToken).ConfigureAwait(false);
+            return hosts
+                .Select(host => new SmbHostTarget(host, null))
+                .ToArray();
+        }
+
         return target.Mode switch
         {
             FileSystemScanMode.Device => [ParseDeviceTarget(target.Value)],
             FileSystemScanMode.Subnet => SmbDiscoveryService.EnumerateSubnetHosts(target.Value)
-                .Select(host => new SmbHostTarget(host, null))
-                .ToArray(),
-            FileSystemScanMode.Domain => discoveryService
-                .EnumerateDomainHostsForScan(
-                    target.Value.Equals("current domain", StringComparison.OrdinalIgnoreCase) ? null : target.Value,
-                    credential)
                 .Select(host => new SmbHostTarget(host, null))
                 .ToArray(),
             _ => throw new ArgumentException($"Kerberos SMB discovery does not support target mode '{target.Mode}'.")
@@ -177,21 +197,28 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
             : new SmbHostTarget(parts[0], null);
     }
 
-    internal static async Task<SmbKerberosConnection> ResolveConnectionAsync(
+    internal async Task<SmbKerberosConnection> ResolveConnectionAsync(
         string host,
         CliWindowsCredential? credential,
+        IPAddress? dnsServer,
         CancellationToken cancellationToken)
     {
         var normalizedHost = host.Trim().TrimStart('\\').TrimEnd('.');
-        var addresses = await Dns.GetHostAddressesAsync(normalizedHost, cancellationToken);
+        var realm = GetCredentialRealm(credential);
+        var resolutionHost = !IPAddress.TryParse(normalizedHost, out _) &&
+                             !normalizedHost.Contains('.') &&
+                             !string.IsNullOrWhiteSpace(realm) &&
+                             realm.Contains('.')
+            ? $"{normalizedHost}.{realm}"
+            : normalizedHost;
+        var addresses = await dnsResolver.ResolveHostAddressesAsync(resolutionHost, dnsServer, cancellationToken).ConfigureAwait(false);
         var address = addresses.FirstOrDefault(candidate => candidate.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
             ?? addresses.FirstOrDefault()
             ?? throw new InvalidOperationException("DNS did not return an address.");
 
-        var realm = GetCredentialRealm(credential);
         var kerberosHostName = !IPAddress.TryParse(normalizedHost, out _)
-            ? normalizedHost
-            : await TryReverseLookupAsync(address, cancellationToken) ?? string.Empty;
+            ? resolutionHost
+            : await dnsResolver.ResolveHostNameAsync(address, dnsServer, cancellationToken).ConfigureAwait(false) ?? string.Empty;
 
         SmbTargetNameProbeResult? probeResult = null;
 
@@ -221,19 +248,6 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
             credential,
             SmbAuthenticationProtocol.Kerberos,
             kerberosReady);
-    }
-
-    private static async Task<string?> TryReverseLookupAsync(IPAddress address, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var entry = await Dns.GetHostEntryAsync(address).WaitAsync(cancellationToken);
-            return string.IsNullOrWhiteSpace(entry.HostName) ? null : entry.HostName.TrimEnd('.');
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static SmbTargetNameProbeResult? TryProbeSmbTarget(IPAddress address)
@@ -286,6 +300,20 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService)
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
     internal static string FormatStatus(NTStatus status) => $"{status} (0x{(uint)status:X8})";
+
+    internal static Exception CreateFileOpenException(string path, NTStatus status)
+    {
+        var message = $"Could not open remote file '{path}': {FormatStatus(status)}.";
+        return status switch
+        {
+            NTStatus.STATUS_ACCESS_DENIED => new UnauthorizedAccessException(message),
+            NTStatus.STATUS_SHARING_VIOLATION => new RemoteContentUnavailableException(
+                message,
+                shouldRetry: false,
+                isExpected: true),
+            _ => new IOException(message)
+        };
+    }
 
     private sealed record SmbHostTarget(string Host, string? Share);
 }
@@ -348,14 +376,27 @@ internal sealed class SmbKerberosDrive(
     {
         using var session = SmbKerberosSession.Connect(connection);
         using var store = session.ConnectShare(shareName);
-        var pending = new Queue<string>();
+        var pending = ParseCheckpoint(deltaToken);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { string.Empty };
-        pending.Enqueue(string.Empty);
+        if (pending.Count == 0)
+        {
+            pending.Push(string.Empty);
+        }
+        else
+        {
+            foreach (var directory in pending)
+            {
+                visited.Add(directory);
+            }
+        }
+
+        var directoriesSinceCheckpoint = 0;
+        var lastCheckpointAt = Stopwatch.StartNew();
 
         while (pending.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var directory = pending.Dequeue();
+            var directory = pending.Pop();
             var directoryPath = string.IsNullOrEmpty(directory)
                 ? $@"\\{connection.DisplayHost}\{shareName}"
                 : $@"\\{connection.DisplayHost}\{shareName}\{directory}";
@@ -382,12 +423,62 @@ internal sealed class SmbKerberosDrive(
                     && !(shouldPruneDirectory?.Invoke(item.Path) ?? false)
                     && visited.Add(relativePath))
                 {
-                    pending.Enqueue(relativePath);
+                    pending.Push(relativePath);
                 }
+            }
+
+            directoriesSinceCheckpoint++;
+            if (pending.Count > 0
+                && onCheckpoint != null
+                && (directoriesSinceCheckpoint >= 64 || lastCheckpointAt.Elapsed >= TimeSpan.FromSeconds(30)))
+            {
+                await onCheckpoint(CreateCheckpoint(pending));
+                directoriesSinceCheckpoint = 0;
+                lastCheckpointAt.Restart();
             }
         }
 
         return string.Empty;
+    }
+
+    internal static string CreateCheckpoint(Stack<string> pending)
+        => "sift-smb-v2:" + string.Join('.', pending.Select(Encode));
+
+    internal static Stack<string> ParseCheckpoint(string? token)
+    {
+        const string prefix = "sift-smb-v2:";
+        if (string.IsNullOrWhiteSpace(token) || !token.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return new Stack<string>();
+        }
+
+        var topFirst = token[prefix.Length..]
+            .Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Decode)
+            .Where(value => value != null)
+            .Cast<string>()
+            .ToArray();
+        return new Stack<string>(topFirst.Reverse());
+    }
+
+    private static string Encode(string value)
+        => Convert.ToBase64String(Encoding.UTF8.GetBytes(value))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    private static string? Decode(string value)
+    {
+        try
+        {
+            var normalized = value.Replace('-', '+').Replace('_', '/');
+            normalized = normalized.PadRight(normalized.Length + ((4 - normalized.Length % 4) % 4), '=');
+            return Encoding.UTF8.GetString(Convert.FromBase64String(normalized));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 }
 
@@ -685,7 +776,7 @@ internal sealed class SmbKerberosReadStream : Stream
                 null);
             if (status != NTStatus.STATUS_SUCCESS || handle == null)
             {
-                throw new IOException($"Could not open remote file '{path}': {SmbKerberosService.FormatStatus(status)}.");
+                throw SmbKerberosService.CreateFileOpenException(path, status);
             }
 
             return new SmbKerberosReadStream(session, store, handle, start, length);

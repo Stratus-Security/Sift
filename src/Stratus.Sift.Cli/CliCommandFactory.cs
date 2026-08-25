@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.CommandLine.Parsing;
+using System.Net;
 using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Cli;
@@ -8,14 +9,13 @@ internal static class CliCommandFactory
 {
     internal static RootCommand BuildRootCommand()
     {
-        var rootCommand = new RootCommand("Stratus Sift CLI - Scan local folders, SMB targets, Microsoft 365, Slack, Slack exports, and Atlassian");
+        var rootCommand = new RootCommand("Stratus Sift CLI - Scan local folders, SMB targets, Microsoft 365, Slack, and Atlassian");
         rootCommand.Add(CreateLocalCommand());
         rootCommand.Add(CreateDomainCommand());
         rootCommand.Add(CreateNetworkCommand());
-        rootCommand.Add(CreateSharePointCommand());
+        rootCommand.Add(CreateMicrosoft365Command());
         rootCommand.Add(CreateSlackCommand());
-        rootCommand.Add(CreateSlackExportCommand());
-        rootCommand.Add(CreateJiraCommand());
+        rootCommand.Add(CreateAtlassianCommand());
         rootCommand.Add(CreateAnalyzeCommand());
         return rootCommand;
     }
@@ -125,6 +125,7 @@ internal static class CliCommandFactory
         pathOption.Required = true;
 
         var commonOptions = CreateCommonScanOptions();
+        var performanceOptions = CreateFilesystemPerformanceOptions();
         var command = new Command("local", "Scan a local folder")
         {
             pathOption,
@@ -138,8 +139,14 @@ internal static class CliCommandFactory
             commonOptions.SnafflerMode,
             commonOptions.Rules,
             commonOptions.Output,
-            commonOptions.OutputFormat
+            commonOptions.OutputFormat,
+            commonOptions.Resume,
+            performanceOptions.Threads,
+            performanceOptions.MaxReadMiBPerSecond,
+            performanceOptions.DiagnosticsOutput
         };
+
+        AddResumeValidator(command, commonOptions.Resume, commonOptions.EnumOnly);
 
         command.SetAction(async (result, cancellationToken) =>
         {
@@ -154,6 +161,8 @@ internal static class CliCommandFactory
                 enumerateOnly: enumOnly,
                 llmOptions: BuildLlmOptions(result, commonOptions),
                 outputOptions: BuildOutputOptions(result, commonOptions),
+                performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions),
+                fullScan: !result.GetValue(commonOptions.Resume),
                 cancellationToken: cancellationToken), cancellationToken);
         });
 
@@ -163,8 +172,10 @@ internal static class CliCommandFactory
     private static Command CreateDomainCommand()
     {
         var commonOptions = CreateCommonScanOptions();
+        var performanceOptions = CreateFilesystemPerformanceOptions();
         var credentialOptions = CreateWindowsCredentialOptions("-d");
         var kerberosOption = CreateKerberosOption();
+        var dnsServerOption = CreateDnsServerOption();
         var domainControllerOption = new Option<string>("--domain-controller")
         {
             Description = "Domain controller hostname or IP address to use for LDAP discovery. If omitted, Windows auto-discovers a domain controller."
@@ -192,15 +203,29 @@ internal static class CliCommandFactory
             commonOptions.Rules,
             commonOptions.Output,
             commonOptions.OutputFormat,
+            commonOptions.Resume,
             credentialOptions.UserName,
             credentialOptions.Password,
             credentialOptions.Domain,
             credentialOptions.Local,
             kerberosOption,
-            domainControllerOption
+            dnsServerOption,
+            domainControllerOption,
+            performanceOptions.Threads,
+            performanceOptions.MaxReadMiBPerSecond,
+            performanceOptions.DiagnosticsOutput
         };
         AddCredentialValidators(command, credentialOptions);
         AddKerberosValidators(command, credentialOptions, kerberosOption);
+        AddResumeValidator(command, commonOptions.Resume, commonOptions.EnumOnly);
+        command.Validators.Add(result =>
+        {
+            if (!string.IsNullOrWhiteSpace(result.GetValue(dnsServerOption)) &&
+                string.IsNullOrWhiteSpace(result.GetValue(domainControllerOption)))
+            {
+                result.AddError("--dns-server requires --domain-controller for domain scans so Windows auto-discovery cannot consult local DNS.");
+            }
+        });
 
         command.SetAction(async (result, cancellationToken) =>
         {
@@ -226,7 +251,10 @@ internal static class CliCommandFactory
                 credential,
                 BuildLlmOptions(result, commonOptions),
                 BuildOutputOptions(result, commonOptions),
+                performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions),
                 kerberos: result.GetValue(kerberosOption),
+                dnsServer: ParseDnsServer(result, dnsServerOption),
+                fullScan: !result.GetValue(commonOptions.Resume),
                 cancellationToken: cancellationToken), cancellationToken);
         });
 
@@ -248,8 +276,10 @@ internal static class CliCommandFactory
         deviceOption.Aliases.Add("-d");
 
         var commonOptions = CreateCommonScanOptions();
+        var performanceOptions = CreateFilesystemPerformanceOptions();
         var credentialOptions = CreateWindowsCredentialOptions("-a");
         var kerberosOption = CreateKerberosOption();
+        var dnsServerOption = CreateDnsServerOption();
         var command = new Command("network", "Crawl SMB targets on a subnet or a single device. Kerberos is preferred, with per-host NTLM fallback unless --kerberos is specified")
         {
             subnetOption,
@@ -265,14 +295,20 @@ internal static class CliCommandFactory
             commonOptions.Rules,
             commonOptions.Output,
             commonOptions.OutputFormat,
+            commonOptions.Resume,
             credentialOptions.UserName,
             credentialOptions.Password,
             credentialOptions.Domain,
             credentialOptions.Local,
-            kerberosOption
+            kerberosOption,
+            dnsServerOption,
+            performanceOptions.Threads,
+            performanceOptions.MaxReadMiBPerSecond,
+            performanceOptions.DiagnosticsOutput
         };
         AddCredentialValidators(command, credentialOptions);
         AddKerberosValidators(command, credentialOptions, kerberosOption);
+        AddResumeValidator(command, commonOptions.Resume, commonOptions.EnumOnly);
 
         command.Validators.Add(result =>
         {
@@ -315,17 +351,20 @@ internal static class CliCommandFactory
                 credential,
                 BuildLlmOptions(result, commonOptions),
                 BuildOutputOptions(result, commonOptions),
+                performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions),
                 kerberos: result.GetValue(kerberosOption),
+                dnsServer: ParseDnsServer(result, dnsServerOption),
+                fullScan: !result.GetValue(commonOptions.Resume),
                 cancellationToken: cancellationToken), cancellationToken);
         });
 
         return command;
     }
 
-    private static Command CreateSharePointCommand()
+    private static Command CreateMicrosoft365Command()
     {
-        var options = CreateSharePointOptions();
-        var command = new Command("sharepoint", "Scan Microsoft 365 content, including SharePoint, OneDrive, and Teams channel files")
+        var options = CreateMicrosoft365Options();
+        var command = new Command("m365", "Scan Microsoft 365 content, including SharePoint, OneDrive, and Teams channel files")
         {
             options.Config,
             options.TenantId,
@@ -346,11 +385,11 @@ internal static class CliCommandFactory
             options.SnafflerMode,
             options.Rules,
             options.Output,
-            options.OutputFormat
+            options.OutputFormat,
+            options.Resume
         };
+        AddResumeValidator(command, options.Resume, options.EnumOnly);
 
-        command.Aliases.Add("m365");
-        command.Aliases.Add("office365");
         command.SetAction(async (result, cancellationToken) =>
         {
             var connectorConfig = CliConnectorConfiguration.BuildConnectorConfig(
@@ -373,6 +412,7 @@ internal static class CliCommandFactory
                 result.GetValue(options.Rules),
                 BuildLlmOptions(result, options.LlmValidate, options.LlmSensitiveOnly, options.OllamaUrl, options.OllamaModel, options.LlmTimeoutSeconds),
                 BuildOutputOptions(result, options.Output, options.OutputFormat, options.SnafflerMode),
+                fullScan: !result.GetValue(options.Resume),
                 cancellationToken: cancellationToken), cancellationToken);
         });
 
@@ -441,11 +481,12 @@ internal static class CliCommandFactory
         var common = CreateCommonScanOptions();
         var command = new Command("slack", "Scan accessible Slack channel messages and attachments")
         {
-            tokenOption, browserOption, workspaceUrlOption, browserChannelOption, channelOption, fullScanOption, configOption,
+            tokenOption, browserOption, workspaceUrlOption, browserChannelOption, channelOption, fullScanOption, configOption, common.Resume,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
             common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode,
             common.Rules, common.Output, common.OutputFormat
         };
+        AddResumeValidator(command, common.Resume, common.EnumOnly);
         command.Validators.Add(result =>
         {
 #if SIFT_NATIVE_AOT
@@ -490,7 +531,7 @@ internal static class CliCommandFactory
                         BuildLlmOptions(result, common),
                         BuildOutputOptions(result, common),
                         connectorOverride: browserConnector,
-                        fullScan: result.GetValue(fullScanOption),
+                        fullScan: result.GetValue(fullScanOption) && !result.GetValue(common.Resume),
                         cancellationToken: cancellationToken);
 #endif
                 }
@@ -504,7 +545,7 @@ internal static class CliCommandFactory
                     result.GetValue(common.Rules),
                     BuildLlmOptions(result, common),
                     BuildOutputOptions(result, common),
-                    fullScan: result.GetValue(fullScanOption),
+                    fullScan: result.GetValue(fullScanOption) && !result.GetValue(common.Resume),
                     cancellationToken: cancellationToken);
             }, cancellationToken);
         });
@@ -512,133 +553,7 @@ internal static class CliCommandFactory
         return command;
     }
 
-    private static Command CreateSlackExportCommand()
-    {
-        var inputOption = new Option<string>("--input")
-        {
-            Description = "Path to an official Slack export ZIP file or extracted export directory.",
-            Required = true
-        };
-        inputOption.Aliases.Add("-i");
-        inputOption.Validators.Add(result =>
-        {
-            var value = result.GetValue(inputOption);
-            if (!string.IsNullOrWhiteSpace(value) && !File.Exists(value) && !Directory.Exists(value))
-            {
-                result.AddError($"Slack export input '{value}' was not found.");
-            }
-        });
-
-        var filesRootOption = new Option<string>("--files-root")
-        {
-            Description = "Optional directory containing files supplied with or downloaded for the export."
-        };
-        filesRootOption.Validators.Add(result =>
-        {
-            var value = result.GetValue(filesRootOption);
-            if (!string.IsNullOrWhiteSpace(value) && !Directory.Exists(value))
-            {
-                result.AddError($"Slack files directory '{value}' was not found.");
-            }
-        });
-
-        var browserFilesOption = new Option<bool>("--download-files-with-browser")
-        {
-            Description = "Open an isolated browser for interactive Slack login, download file links from the export, scan them, and delete the temporary browser data."
-        };
-        browserFilesOption.Aliases.Add("--browser-files");
-
-        var browserChannelOption = new Option<string>("--browser-channel")
-        {
-            Description = "Installed Chromium browser channel used for interactive downloads: msedge or chrome.",
-            DefaultValueFactory = _ => OperatingSystem.IsWindows() ? "msedge" : "chrome"
-        };
-        browserChannelOption.Validators.Add(result =>
-        {
-            var value = result.GetValue(browserChannelOption);
-            if (value is not null && !value.Equals("msedge", StringComparison.OrdinalIgnoreCase) && !value.Equals("chrome", StringComparison.OrdinalIgnoreCase))
-            {
-                result.AddError("The --browser-channel value must be 'msedge' or 'chrome'.");
-            }
-        });
-
-        var common = CreateCommonScanOptions();
-        var command = new Command("slack-export", "Scan an official Slack workspace export without installing an app")
-        {
-            inputOption, filesRootOption, browserFilesOption, browserChannelOption,
-            common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
-            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode,
-            common.Rules, common.Output, common.OutputFormat
-        };
-        command.Validators.Add(result =>
-        {
-#if SIFT_NATIVE_AOT
-            if (result.GetValue(browserFilesOption))
-            {
-                result.AddError("Interactive browser downloads are not included in Native AOT builds. Supply --files-root instead.");
-                return;
-            }
-#endif
-            if (result.GetValue(browserFilesOption) && !string.IsNullOrWhiteSpace(result.GetValue(filesRootOption)))
-            {
-                result.AddError("Specify either --files-root or --download-files-with-browser, not both.");
-            }
-
-            if (result.GetValue(browserFilesOption) && result.GetValue(common.EnumOnly))
-            {
-                result.AddError("--download-files-with-browser cannot be combined with --enum-only.");
-            }
-        });
-
-        command.SetAction(async (result, cancellationToken) =>
-        {
-            return await ExecuteAsync(async () =>
-            {
-                var input = result.GetValue(inputOption)!;
-#if !SIFT_NATIVE_AOT
-                SlackBrowserDownloadSession? browserSession = null;
-#endif
-                try
-                {
-                    var filesRoot = result.GetValue(filesRootOption);
-                    if (result.GetValue(browserFilesOption))
-                    {
-#if SIFT_NATIVE_AOT
-                        throw new PlatformNotSupportedException("Interactive browser downloads are not included in Native AOT builds. Supply --files-root instead.");
-#else
-                        browserSession = await SlackBrowserFileDownloader.DownloadAsync(
-                            input,
-                            result.GetValue(browserChannelOption) ?? "msedge",
-                            cancellationToken);
-                        filesRoot = browserSession.DownloadDirectory;
-#endif
-                    }
-
-                    var config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Input"] = input };
-                    SetConnectorValue(config, "FilesRoot", filesRoot);
-                    return await CliScanRunner.RunConnectorScanAsync(
-                        CommonConstants.ConnectorProviders.SlackExport,
-                        config,
-                        result.GetValue(common.Binary),
-                        result.GetValue(common.EnumOnly),
-                        result.GetValue(common.Rules),
-                        BuildLlmOptions(result, common),
-                        BuildOutputOptions(result, common),
-                        cancellationToken: cancellationToken);
-                }
-                finally
-                {
-#if !SIFT_NATIVE_AOT
-                    if (browserSession != null) await browserSession.DisposeAsync();
-#endif
-                }
-            }, cancellationToken);
-        });
-
-        return command;
-    }
-
-    private static Command CreateJiraCommand()
+    private static Command CreateAtlassianCommand()
     {
         var urlOption = new Option<string>("--url")
         {
@@ -678,11 +593,6 @@ internal static class CliCommandFactory
             Description = "Ignore saved Atlassian checkpoints and rescan all accessible Jira and Confluence content. This is the default.",
             DefaultValueFactory = _ => CliScanRunner.DefaultFullScan
         };
-        var resumeOption = new Option<bool>("--resume")
-        {
-            Description = "Resume from saved per-project and per-space checkpoints. The interrupted project or space restarts if it did not finish."
-        };
-        resumeOption.Aliases.Add("--incremental");
         var configOption = new Option<string[]>("--config")
         {
             Description = "Additional connector configuration as Key=Value entries.",
@@ -692,13 +602,12 @@ internal static class CliCommandFactory
         var command = new Command("atlassian", "Scan accessible Jira projects and Confluence pages, blog posts, comments, and attachments")
         {
             urlOption, emailOption, cloudIdOption, tokenOption, projectOption, spaceOption, jqlOption,
-            fullScanOption, resumeOption, configOption,
+            fullScanOption, common.Resume, configOption,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
             common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode,
             common.Rules, common.Output, common.OutputFormat
         };
-        command.Aliases.Add("jira");
-
+        AddResumeValidator(command, common.Resume, common.EnumOnly);
         command.SetAction(async (result, cancellationToken) =>
         {
             var config = CliConnectorConfiguration.ParseConnectorConfig(result.GetValue(configOption));
@@ -717,7 +626,7 @@ internal static class CliCommandFactory
                 result.GetValue(common.Rules),
                 BuildLlmOptions(result, common),
                 BuildOutputOptions(result, common),
-                fullScan: result.GetValue(fullScanOption) && !result.GetValue(resumeOption),
+                fullScan: result.GetValue(fullScanOption) && !result.GetValue(common.Resume),
                 cancellationToken: cancellationToken), cancellationToken);
         });
 
@@ -843,9 +752,11 @@ internal static class CliCommandFactory
 
         var outputOption = new Option<string>("--output")
         {
-            Description = "Write scan output to a file. Resume/incremental scans append to an existing file; full scans replace it."
+            Description = "Write scan output to a file. Resumed scans append; new scans replace it."
         };
         outputOption.Aliases.Add("-o");
+
+        var resumeOption = CreateResumeOption();
 
         return new CommonScanOptions(
             binaryOption,
@@ -858,7 +769,8 @@ internal static class CliCommandFactory
             snafflerModeOption,
             rulesOption,
             outputOption,
-            outputFormatOption);
+            outputFormatOption,
+            resumeOption);
     }
 
     private static WindowsCredentialOptions CreateWindowsCredentialOptions(string domainShortAlias)
@@ -894,14 +806,117 @@ internal static class CliCommandFactory
             localOption);
     }
 
+    private static FilesystemPerformanceOptions CreateFilesystemPerformanceOptions()
+    {
+        var threads = new Option<int>("--threads")
+        {
+            Description = "Filesystem scan workers. Use 0 to select automatically.",
+            DefaultValueFactory = _ => 0
+        };
+        threads.Validators.Add(result =>
+        {
+            var value = result.GetValue(threads);
+            if (value is < 0 or > 256)
+            {
+                result.AddError("The --threads value must be between 0 and 256.");
+            }
+        });
+
+        var maxReadMiBPerSecond = new Option<long>("--max-read-mib-per-second")
+        {
+            Description = "Maximum aggregate filesystem read rate in MiB/s. Use 0 for unlimited.",
+            DefaultValueFactory = _ => 0
+        };
+        maxReadMiBPerSecond.Validators.Add(result =>
+        {
+            if (result.GetValue(maxReadMiBPerSecond) < 0)
+            {
+                result.AddError("The --max-read-mib-per-second value cannot be negative.");
+            }
+        });
+
+        var diagnosticsOutput = new Option<string>("--diagnostics-output")
+        {
+            Description = "Write scan performance diagnostics to a JSON file."
+        };
+
+        return new FilesystemPerformanceOptions(threads, maxReadMiBPerSecond, diagnosticsOutput);
+    }
+
+    private static CliFilesystemPerformanceOptions BuildFilesystemPerformanceOptions(
+        ParseResult result,
+        FilesystemPerformanceOptions options)
+    {
+        var readMiB = result.GetValue(options.MaxReadMiBPerSecond);
+        long readBytes;
+        try
+        {
+            readBytes = checked(readMiB * 1024L * 1024L);
+        }
+        catch (OverflowException)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "The filesystem read-rate limit is too large.");
+        }
+
+        return new CliFilesystemPerformanceOptions(
+            result.GetValue(options.Threads),
+            readBytes,
+            result.GetValue(options.DiagnosticsOutput));
+    }
+
     private static Option<bool> CreateKerberosOption()
     {
         var option = new Option<bool>("--kerberos")
         {
-            Description = "Require Kerberos for SMB authentication and reject the default per-host NTLM fallback. IP targets are resolved to the DNS hostname required by the cifs service principal."
+            Description = "Require Kerberos for LDAP and SMB authentication and reject the default per-host NTLM fallback. DNS hostnames are retained for service principals even when --dns-server supplies the connection address."
         };
         option.Aliases.Add("-k");
         return option;
+    }
+
+    private static Option<string> CreateDnsServerOption()
+    {
+        var option = new Option<string>("--dns-server")
+        {
+            Description = "DNS server IPv4 or IPv6 address for direct A, AAAA, and PTR queries. When supplied, local DNS is not consulted or used as fallback."
+        };
+        option.Validators.Add(result =>
+        {
+            var value = result.GetValue(option);
+            if (!string.IsNullOrWhiteSpace(value) && !CliDnsResolver.IsValidServer(value))
+            {
+                result.AddError("The --dns-server value must be an IPv4 or IPv6 address without a hostname, scheme, port, or path.");
+            }
+        });
+        return option;
+    }
+
+    private static IPAddress? ParseDnsServer(ParseResult result, Option<string> option)
+    {
+        var value = result.GetValue(option);
+        return string.IsNullOrWhiteSpace(value) ? null : IPAddress.Parse(value.Trim());
+    }
+
+    private static Option<bool> CreateResumeOption()
+    {
+        var option = new Option<bool>("--resume")
+        {
+            Description = "Continue from durable checkpoints saved by an earlier scan with the same target, credentials, rules, and scan settings."
+        };
+        return option;
+    }
+
+    private static void AddResumeValidator(Command command, Option<bool> resumeOption, Option<bool> enumerateOnlyOption)
+    {
+        command.Validators.Add(result =>
+        {
+            if (result.GetValue(resumeOption) && result.GetValue(enumerateOnlyOption))
+            {
+                result.AddError("--resume cannot be combined with --enum-only because enumeration does not process or checkpoint content.");
+            }
+        });
     }
 
     private static void AddKerberosValidators(
@@ -965,7 +980,7 @@ internal static class CliCommandFactory
         });
     }
 
-    private static SharePointCommandOptions CreateSharePointOptions()
+    private static Microsoft365CommandOptions CreateMicrosoft365Options()
     {
         var outputFormatOption = new Option<string>("--output-format")
         {
@@ -1104,11 +1119,13 @@ internal static class CliCommandFactory
 
         var outputOption = new Option<string>("--output")
         {
-            Description = "Write scan output to a file. Resume/incremental scans append to an existing file; full scans replace it."
+            Description = "Write scan output to a file. Resumed scans append; new scans replace it."
         };
         outputOption.Aliases.Add("-o");
 
-        return new SharePointCommandOptions(
+        var resumeOption = CreateResumeOption();
+
+        return new Microsoft365CommandOptions(
             configOption,
             tenantIdOption,
             clientIdOption,
@@ -1128,7 +1145,8 @@ internal static class CliCommandFactory
             snafflerModeOption,
             rulesOption,
             outputOption,
-            outputFormatOption);
+            outputFormatOption,
+            resumeOption);
     }
 
     private static CliOutputOptions? BuildOutputOptions(ParseResult result, CommonScanOptions options)
@@ -1202,10 +1220,15 @@ internal static class CliCommandFactory
         Option<bool> SnafflerMode,
         Option<string> Rules,
         Option<string> Output,
-        Option<string> OutputFormat);
+        Option<string> OutputFormat,
+        Option<bool> Resume);
+    private sealed record FilesystemPerformanceOptions(
+        Option<int> Threads,
+        Option<long> MaxReadMiBPerSecond,
+        Option<string> DiagnosticsOutput);
     private sealed record WindowsCredentialOptions(Option<string> UserName, Option<string> Password, Option<string> Domain, Option<bool> Local);
 
-    private sealed record SharePointCommandOptions(
+    private sealed record Microsoft365CommandOptions(
         Option<string[]> Config,
         Option<string> TenantId,
         Option<string> ClientId,
@@ -1225,5 +1248,6 @@ internal static class CliCommandFactory
         Option<bool> SnafflerMode,
         Option<string> Rules,
         Option<string> Output,
-        Option<string> OutputFormat);
+        Option<string> OutputFormat,
+        Option<bool> Resume);
 }

@@ -1,7 +1,4 @@
 using System.Collections.Concurrent;
-#if !SIFT_NATIVE_AOT
-using System.DirectoryServices;
-#endif
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -12,6 +9,8 @@ namespace Stratus.Sift.Cli;
 
 internal sealed partial class SmbDiscoveryService
 {
+    private readonly ActiveDirectoryLdapDiscovery _activeDirectory;
+    private readonly CliDnsResolver _dnsResolver;
     private readonly ILogger<SmbDiscoveryService> _logger;
     private const int ShareEnumerationLevel = 1;
     private const int MaxShareBufferLength = -1;
@@ -19,13 +18,22 @@ internal sealed partial class SmbDiscoveryService
     private const int ConnectTimeoutMs = 750;
     private const int HostParallelism = 32;
 
-    public SmbDiscoveryService(ILogger<SmbDiscoveryService> logger)
+    public SmbDiscoveryService(
+        ActiveDirectoryLdapDiscovery activeDirectory,
+        CliDnsResolver dnsResolver,
+        ILogger<SmbDiscoveryService> logger)
     {
+        _activeDirectory = activeDirectory;
+        _dnsResolver = dnsResolver;
         _logger = logger;
     }
 
     [SupportedOSPlatform("windows")]
-    public Task<IReadOnlyList<string>> DiscoverRootsAsync(FileSystemScanTarget target, CliWindowsCredential? credential, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<string>> DiscoverRootsAsync(
+        FileSystemScanTarget target,
+        CliWindowsCredential? credential,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -37,46 +45,62 @@ internal sealed partial class SmbDiscoveryService
             FileSystemScanMode.Domain => DiscoverDomainRootsAsync(
                 target.Value.Equals("current domain", StringComparison.OrdinalIgnoreCase) ? null : target.Value,
                 credential,
+                dnsServer,
                 cancellationToken),
-            FileSystemScanMode.Subnet => DiscoverSubnetRootsAsync(target.Value, cancellationToken),
-            FileSystemScanMode.Device => DiscoverDeviceRootsAsync(target.Value, cancellationToken),
+            FileSystemScanMode.Subnet => DiscoverSubnetRootsAsync(target.Value, dnsServer, cancellationToken),
+            FileSystemScanMode.Device => DiscoverDeviceRootsAsync(target.Value, dnsServer, cancellationToken),
             _ => throw new ArgumentException($"Unsupported discovery mode '{target.Mode}'.", nameof(target))
         };
     }
 
     [SupportedOSPlatform("windows")]
-    private async Task<IReadOnlyList<string>> DiscoverDomainRootsAsync(string? domainController, CliWindowsCredential? credential, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> DiscoverDomainRootsAsync(
+        string? domainController,
+        CliWindowsCredential? credential,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken)
     {
-#if SIFT_NATIVE_AOT
-        await Task.CompletedTask;
-        throw new PlatformNotSupportedException("Active Directory discovery is not included in Native AOT builds. Use the network command with explicit hosts or subnets.");
-#else
-        var hosts = EnumerateDomainHosts(domainController, credential);
-        return await DiscoverSharesForHostsAsync(hosts, cancellationToken);
-#endif
+        var hosts = await EnumerateDomainHostsForScanAsync(
+            domainController,
+            credential,
+            strictKerberos: false,
+            dnsServer,
+            cancellationToken).ConfigureAwait(false);
+        return await DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken);
     }
 
     [SupportedOSPlatform("windows")]
-    private async Task<IReadOnlyList<string>> DiscoverSubnetRootsAsync(string cidr, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> DiscoverSubnetRootsAsync(string cidr, IPAddress? dnsServer, CancellationToken cancellationToken)
     {
         var hosts = EnumerateSubnetHosts(cidr);
-        return await DiscoverSharesForHostsAsync(hosts, cancellationToken);
+        return await DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken);
     }
 
     [SupportedOSPlatform("windows")]
-    private async Task<IReadOnlyList<string>> DiscoverDeviceRootsAsync(string device, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> DiscoverDeviceRootsAsync(string device, IPAddress? dnsServer, CancellationToken cancellationToken)
     {
         if (TryExtractExplicitShareRoot(device, out var explicitRoot))
         {
-            return IsAccessibleDirectory(explicitRoot)
-                ? [explicitRoot]
-                : [];
+            if (dnsServer is null)
+            {
+                return IsAccessibleDirectory(explicitRoot)
+                    ? [explicitRoot]
+                    : [];
+            }
+
+            var resolvedRoots = await ResolveExplicitShareRootsAsync(explicitRoot, dnsServer, cancellationToken).ConfigureAwait(false);
+            return resolvedRoots
+                .Where(IsAccessibleDirectory)
+                .ToArray();
         }
 
-        return await DiscoverSharesForHostsAsync([NormalizeHost(device)], cancellationToken);
+        return await DiscoverSharesForHostsAsync([NormalizeHost(device)], dnsServer, cancellationToken);
     }
 
-    private async Task<IReadOnlyList<string>> DiscoverSharesForHostsAsync(IEnumerable<string> hosts, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> DiscoverSharesForHostsAsync(
+        IEnumerable<string> hosts,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken)
     {
         var discoveredRoots = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var uniqueHosts = hosts
@@ -97,23 +121,38 @@ internal sealed partial class SmbDiscoveryService
             {
                 try
                 {
-                    if (!await IsSmbReachableAsync(host, token))
+                    var connectionHosts = dnsServer is null
+                        ? [(ReachabilityHost: host, UncHost: host)]
+                        : (await _dnsResolver.ResolveHostAddressesAsync(host, dnsServer, token).ConfigureAwait(false))
+                            .Select(address => (ReachabilityHost: address.ToString(), UncHost: FormatUncHost(address)))
+                            .ToArray();
+                    foreach (var connectionHost in connectionHosts)
                     {
-                        return;
-                    }
-
-                    foreach (var share in EnumerateShares(host))
-                    {
-                        var root = $@"\\{host}\{share}";
-                        if (IsAccessibleDirectory(root))
+                        if (!await IsSmbReachableAsync(connectionHost.ReachabilityHost, token))
                         {
-                            discoveredRoots.TryAdd(root, 0);
+                            continue;
+                        }
+
+                        foreach (var share in EnumerateShares(connectionHost.UncHost))
+                        {
+                            var root = $@"\\{connectionHost.UncHost}\{share}";
+                            if (IsAccessibleDirectory(root))
+                            {
+                                discoveredRoots.TryAdd(root, 0);
+                            }
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "Failed to discover SMB shares on host {Host}", host);
+                    if (dnsServer is null)
+                    {
+                        _logger.LogDebug(ex, "Failed to discover SMB shares on host {Host}", host);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(ex, "Failed to resolve or discover SMB shares on host {Host} through explicit DNS server {DnsServer}", host, dnsServer);
+                    }
                 }
             });
 
@@ -160,20 +199,6 @@ internal sealed partial class SmbDiscoveryService
             && !trimmed.Contains('\\')
             && !trimmed.Contains(':')
             && Uri.CheckHostName(trimmed) == UriHostNameType.Dns;
-    }
-
-    internal static string BuildLdapPath(string? domainController, string relativePath)
-    {
-        var server = string.Empty;
-        if (!string.IsNullOrWhiteSpace(domainController))
-        {
-            var value = domainController.Trim();
-            server = IPAddress.TryParse(value, out var address) && address.AddressFamily == AddressFamily.InterNetworkV6
-                ? $"[{value}]/"
-                : $"{value}/";
-        }
-
-        return $"LDAP://{server}{relativePath}";
     }
 
     internal static IReadOnlyList<string> EnumerateSubnetHosts(string cidr)
@@ -242,89 +267,33 @@ internal sealed partial class SmbDiscoveryService
     }
 
     [SupportedOSPlatform("windows")]
-    internal IReadOnlyList<string> EnumerateDomainHostsForScan(CliWindowsCredential? credential)
+    internal Task<IReadOnlyList<string>> EnumerateDomainHostsForScanAsync(
+        CliWindowsCredential? credential,
+        bool strictKerberos,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken)
     {
-#if SIFT_NATIVE_AOT
-        throw new PlatformNotSupportedException("Active Directory discovery is not included in Native AOT builds.");
-#else
-        return EnumerateDomainHosts(null, credential);
-#endif
+        return EnumerateDomainHostsForScanAsync(null, credential, strictKerberos, dnsServer, cancellationToken);
     }
 
     [SupportedOSPlatform("windows")]
-    internal IReadOnlyList<string> EnumerateDomainHostsForScan(string? domainController, CliWindowsCredential? credential)
+    internal Task<IReadOnlyList<string>> EnumerateDomainHostsForScanAsync(
+        string? domainController,
+        CliWindowsCredential? credential,
+        bool strictKerberos,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken)
     {
-#if SIFT_NATIVE_AOT
-        throw new PlatformNotSupportedException("Active Directory discovery is not included in Native AOT builds.");
-#else
-        return EnumerateDomainHosts(domainController, credential);
-#endif
+        return _activeDirectory.EnumerateComputersAsync(domainController, credential, strictKerberos, dnsServer, cancellationToken);
     }
 
-    internal Task<IReadOnlyList<string>> DiscoverRootsForHostsAsync(IEnumerable<string> hosts, CancellationToken cancellationToken)
+    internal Task<IReadOnlyList<string>> DiscoverRootsForHostsAsync(
+        IEnumerable<string> hosts,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken)
     {
-        return DiscoverSharesForHostsAsync(hosts, cancellationToken);
+        return DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken);
     }
-
-#if !SIFT_NATIVE_AOT
-    [SupportedOSPlatform("windows")]
-    private IReadOnlyList<string> EnumerateDomainHosts(string? domainController, CliWindowsCredential? credential)
-    {
-        try
-        {
-            var hosts = new List<string>();
-            using var rootDse = CreateDirectoryEntry(BuildLdapPath(domainController, "RootDSE"), credential);
-            var namingContext = rootDse.Properties["defaultNamingContext"]?.Value?.ToString();
-            if (string.IsNullOrWhiteSpace(namingContext))
-            {
-                throw new InvalidOperationException("Unable to determine the current Active Directory naming context.");
-            }
-
-            using var entry = CreateDirectoryEntry(BuildLdapPath(domainController, namingContext), credential);
-            using var searcher = new DirectorySearcher(entry)
-            {
-                Filter = "(&(objectCategory=computer)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))",
-                PageSize = 500,
-                SearchScope = SearchScope.Subtree
-            };
-
-            searcher.PropertiesToLoad.Add("dNSHostName");
-            searcher.PropertiesToLoad.Add("name");
-
-            using var results = searcher.FindAll();
-            foreach (SearchResult result in results)
-            {
-                var host = result.Properties["dNSHostName"].Count > 0
-                    ? result.Properties["dNSHostName"][0]?.ToString()
-                    : result.Properties["name"].Count > 0
-                        ? result.Properties["name"][0]?.ToString()
-                        : null;
-
-                if (!string.IsNullOrWhiteSpace(host))
-                {
-                    hosts.Add(host);
-                }
-            }
-
-            return hosts;
-        }
-        catch (Exception ex)
-        {
-            var targetDescription = string.IsNullOrWhiteSpace(domainController)
-                ? "the current Active Directory domain"
-                : $"Active Directory through domain controller '{domainController}'";
-            throw new InvalidOperationException($"Unable to enumerate computers from {targetDescription}. Ensure the domain controller is reachable and the supplied user can query LDAP.", ex);
-        }
-    }
-
-    [SupportedOSPlatform("windows")]
-    private static DirectoryEntry CreateDirectoryEntry(string path, CliWindowsCredential? credential)
-    {
-        return credential is null
-            ? new DirectoryEntry(path)
-            : new DirectoryEntry(path, credential.DirectoryEntryUserName, credential.Password, AuthenticationTypes.Secure);
-    }
-#endif
 
     private IEnumerable<string> EnumerateShares(string host)
     {
@@ -392,6 +361,42 @@ internal sealed partial class SmbDiscoveryService
 
         root = $@"\\{segments[0]}\{segments[1]}";
         return true;
+    }
+
+    internal async Task<IReadOnlyList<string>> ResolveExplicitShareRootsAsync(
+        string explicitRoot,
+        IPAddress dnsServer,
+        CancellationToken cancellationToken)
+    {
+        var segments = explicitRoot
+            .TrimStart('\\')
+            .Split('\\', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var addresses = await _dnsResolver.ResolveHostAddressesAsync(segments[0], dnsServer, cancellationToken).ConfigureAwait(false);
+        return CreateExplicitShareRoots(explicitRoot, addresses);
+    }
+
+    internal static IReadOnlyList<string> CreateExplicitShareRoots(
+        string explicitRoot,
+        IEnumerable<IPAddress> addresses)
+    {
+        var segments = explicitRoot
+            .TrimStart('\\')
+            .Split('\\', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return addresses
+            .Select(address => $@"\\{FormatUncHost(address)}\{segments[1]}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    internal static string FormatUncHost(IPAddress address)
+    {
+        if (address.AddressFamily != AddressFamily.InterNetworkV6)
+        {
+            return address.ToString();
+        }
+
+        // Windows maps this reserved form directly to an IPv6 literal without a DNS query.
+        return $"{address.ToString().Replace(':', '-').Replace('%', 's')}.ipv6-literal.net";
     }
 
     private static async Task<bool> IsSmbReachableAsync(string host, CancellationToken cancellationToken)
