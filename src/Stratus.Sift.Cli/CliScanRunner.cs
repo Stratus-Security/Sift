@@ -27,10 +27,14 @@ internal static class CliScanRunner
         CliOutputOptions? outputOptions = null,
         IConnector? connectorOverride = null,
         bool fullScan = DefaultFullScan,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool showBanner = true)
     {
         var effectiveOutputOptions = ResolveOutputOptions(outputOptions, fullScan);
-        await using var display = new CliProgressDisplay($"Remote {providerName} scan", effectiveOutputOptions);
+        await using var display = new CliProgressDisplay(
+            $"Remote {providerName} scan",
+            effectiveOutputOptions,
+            showBanner);
         await using var session = await CliScannerBootstrap.InitializeScannerAsync(rulesPath, Program.CreateHost, cancellationToken);
         var throttleNotifications = session.Host.Services.GetRequiredService<ThrottleNotificationHub>();
         var checkpointStore = session.Host.Services.GetRequiredService<CliCheckpointStore>();
@@ -216,7 +220,8 @@ internal static class CliScanRunner
         bool kerberos = false,
         IPAddress? dnsServer = null,
         bool fullScan = DefaultFullScan,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool showBanner = true)
     {
         var effectiveOutputOptions = ResolveOutputOptions(outputOptions, fullScan);
         performanceOptions ??= new CliFilesystemPerformanceOptions();
@@ -229,7 +234,7 @@ internal static class CliScanRunner
             performanceOptions.DiagnosticsOutputPath);
         await using var display = new CliProgressDisplay(target.Mode == FileSystemScanMode.Folder
             ? $"Local scan of {target.Value}"
-            : $"{target.DisplayName} crawl", effectiveOutputOptions);
+            : $"{target.DisplayName} crawl", effectiveOutputOptions, showBanner);
 
         await using var session = await CliScannerBootstrap.InitializeScannerAsync(rulesPath, Program.CreateHost, cancellationToken);
         var fileScanner = session.Host.Services.GetRequiredService<FileScanner>();

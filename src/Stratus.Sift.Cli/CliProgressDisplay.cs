@@ -15,6 +15,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
     private readonly Task? _renderTask;
     private readonly string _title;
     private readonly CliOutputStyle _style;
+    private readonly bool _showBanner;
     private readonly CliOutputCapture? _outputCapture;
     private readonly CliSnafflerFormatter _snafflerFormatter = new();
     private readonly TimeSpan _statusRefreshInterval = TimeSpan.FromSeconds(1);
@@ -39,10 +40,14 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
     private bool _interactivePromptActive;
     private DateTimeOffset _lastStatusRenderUtc = DateTimeOffset.MinValue;
 
-    public CliProgressDisplay(string title, CliOutputOptions? outputOptions = null)
+    public CliProgressDisplay(
+        string title,
+        CliOutputOptions? outputOptions = null,
+        bool showBanner = false)
     {
         _title = title;
         _style = outputOptions?.Style ?? CliOutputStyle.Default;
+        _showBanner = showBanner;
         if (!string.IsNullOrWhiteSpace(outputOptions?.Path))
         {
             _outputCapture = new CliOutputCapture(
@@ -415,6 +420,15 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
                 return;
             }
 
+            if (_showBanner)
+            {
+                foreach (var bannerLine in CliSiftBanner.Lines)
+                {
+                    WriteStyledLineUnsafe(bannerLine.Text, bannerLine.Color);
+                }
+
+                WritePlainLineUnsafe(string.Empty);
+            }
             WriteStyledLineUnsafe(_title, ConsoleColor.Cyan);
             _outputCapture?.RecordCliLines(_title);
             _outputCapture?.RecordEvent("header", _title);

@@ -137,6 +137,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
             commonOptions.SnafflerMode,
+            commonOptions.NoBanner,
             commonOptions.Rules,
             commonOptions.Output,
             commonOptions.OutputFormat,
@@ -163,7 +164,8 @@ internal static class CliCommandFactory
                 outputOptions: BuildOutputOptions(result, commonOptions),
                 performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions),
                 fullScan: !result.GetValue(commonOptions.Resume),
-                cancellationToken: cancellationToken), cancellationToken);
+                cancellationToken: cancellationToken,
+                showBanner: !result.GetValue(commonOptions.NoBanner)), cancellationToken);
         });
 
         return command;
@@ -200,6 +202,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
             commonOptions.SnafflerMode,
+            commonOptions.NoBanner,
             commonOptions.Rules,
             commonOptions.Output,
             commonOptions.OutputFormat,
@@ -255,7 +258,8 @@ internal static class CliCommandFactory
                 kerberos: result.GetValue(kerberosOption),
                 dnsServer: ParseDnsServer(result, dnsServerOption),
                 fullScan: !result.GetValue(commonOptions.Resume),
-                cancellationToken: cancellationToken), cancellationToken);
+                cancellationToken: cancellationToken,
+                showBanner: !result.GetValue(commonOptions.NoBanner)), cancellationToken);
         });
 
         return command;
@@ -292,6 +296,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
             commonOptions.SnafflerMode,
+            commonOptions.NoBanner,
             commonOptions.Rules,
             commonOptions.Output,
             commonOptions.OutputFormat,
@@ -355,7 +360,8 @@ internal static class CliCommandFactory
                 kerberos: result.GetValue(kerberosOption),
                 dnsServer: ParseDnsServer(result, dnsServerOption),
                 fullScan: !result.GetValue(commonOptions.Resume),
-                cancellationToken: cancellationToken), cancellationToken);
+                cancellationToken: cancellationToken,
+                showBanner: !result.GetValue(commonOptions.NoBanner)), cancellationToken);
         });
 
         return command;
@@ -383,6 +389,7 @@ internal static class CliCommandFactory
             options.OllamaModel,
             options.LlmTimeoutSeconds,
             options.SnafflerMode,
+            options.NoBanner,
             options.Rules,
             options.Output,
             options.OutputFormat,
@@ -413,7 +420,8 @@ internal static class CliCommandFactory
                 BuildLlmOptions(result, options.LlmValidate, options.LlmSensitiveOnly, options.OllamaUrl, options.OllamaModel, options.LlmTimeoutSeconds),
                 BuildOutputOptions(result, options.Output, options.OutputFormat, options.SnafflerMode),
                 fullScan: !result.GetValue(options.Resume),
-                cancellationToken: cancellationToken), cancellationToken);
+                cancellationToken: cancellationToken,
+                showBanner: !result.GetValue(options.NoBanner)), cancellationToken);
         });
 
         return command;
@@ -484,7 +492,7 @@ internal static class CliCommandFactory
             tokenOption, browserOption, workspaceUrlOption, browserChannelOption, channelOption, fullScanOption, configOption, common.Resume,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
             common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode,
-            common.Rules, common.Output, common.OutputFormat
+            common.NoBanner, common.Rules, common.Output, common.OutputFormat
         };
         AddResumeValidator(command, common.Resume, common.EnumOnly);
         command.Validators.Add(result =>
@@ -532,7 +540,8 @@ internal static class CliCommandFactory
                         BuildOutputOptions(result, common),
                         connectorOverride: browserConnector,
                         fullScan: result.GetValue(fullScanOption) && !result.GetValue(common.Resume),
-                        cancellationToken: cancellationToken);
+                        cancellationToken: cancellationToken,
+                        showBanner: !result.GetValue(common.NoBanner));
 #endif
                 }
 
@@ -546,7 +555,8 @@ internal static class CliCommandFactory
                     BuildLlmOptions(result, common),
                     BuildOutputOptions(result, common),
                     fullScan: result.GetValue(fullScanOption) && !result.GetValue(common.Resume),
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken,
+                    showBanner: !result.GetValue(common.NoBanner));
             }, cancellationToken);
         });
 
@@ -605,7 +615,7 @@ internal static class CliCommandFactory
             fullScanOption, common.Resume, configOption,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
             common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode,
-            common.Rules, common.Output, common.OutputFormat
+            common.NoBanner, common.Rules, common.Output, common.OutputFormat
         };
         AddResumeValidator(command, common.Resume, common.EnumOnly);
         command.SetAction(async (result, cancellationToken) =>
@@ -627,7 +637,8 @@ internal static class CliCommandFactory
                 BuildLlmOptions(result, common),
                 BuildOutputOptions(result, common),
                 fullScan: result.GetValue(fullScanOption) && !result.GetValue(common.Resume),
-                cancellationToken: cancellationToken), cancellationToken);
+                cancellationToken: cancellationToken,
+                showBanner: !result.GetValue(common.NoBanner)), cancellationToken);
         });
 
         return command;
@@ -744,6 +755,11 @@ internal static class CliCommandFactory
         };
         snafflerModeOption.Aliases.Add("--snaffler");
 
+        var noBannerOption = new Option<bool>("--no-banner")
+        {
+            Description = "Hide the Sift banner in console output."
+        };
+
         var rulesOption = new Option<string>("--rules")
         {
             Description = "Path to a folder containing sifting rules (JSON). If not provided, bundled defaults are used."
@@ -767,6 +783,7 @@ internal static class CliCommandFactory
             ollamaModelOption,
             llmTimeoutSecondsOption,
             snafflerModeOption,
+            noBannerOption,
             rulesOption,
             outputOption,
             outputFormatOption,
@@ -1111,6 +1128,11 @@ internal static class CliCommandFactory
         };
         snafflerModeOption.Aliases.Add("--snaffler");
 
+        var noBannerOption = new Option<bool>("--no-banner")
+        {
+            Description = "Hide the Sift banner in console output."
+        };
+
         var rulesOption = new Option<string>("--rules")
         {
             Description = "Path to a folder containing sifting rules (JSON). If not provided, bundled defaults are used."
@@ -1143,6 +1165,7 @@ internal static class CliCommandFactory
             ollamaModelOption,
             llmTimeoutSecondsOption,
             snafflerModeOption,
+            noBannerOption,
             rulesOption,
             outputOption,
             outputFormatOption,
@@ -1218,6 +1241,7 @@ internal static class CliCommandFactory
         Option<string> OllamaModel,
         Option<int> LlmTimeoutSeconds,
         Option<bool> SnafflerMode,
+        Option<bool> NoBanner,
         Option<string> Rules,
         Option<string> Output,
         Option<string> OutputFormat,
@@ -1246,6 +1270,7 @@ internal static class CliCommandFactory
         Option<string> OllamaModel,
         Option<int> LlmTimeoutSeconds,
         Option<bool> SnafflerMode,
+        Option<bool> NoBanner,
         Option<string> Rules,
         Option<string> Output,
         Option<string> OutputFormat,

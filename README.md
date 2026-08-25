@@ -1,5 +1,9 @@
 # Stratus Sift
 
+<p align="center">
+  <img src="docs/assets/sift-cli.png" alt="Sift finding sensitive information in a local filesystem scan" width="100%">
+</p>
+
 ## What's this?
 Sift is a tool developed by Stratus Security to improve our penetration testing, open-sourced to help improve data security for pentesters and security teams.
 It searches data you can access for secrets and sensitive information across a number of platforms and it's *very* effective.
