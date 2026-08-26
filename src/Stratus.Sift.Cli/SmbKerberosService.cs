@@ -18,7 +18,6 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
     private const int HostParallelism = 16;
     internal const int ConnectionTimeoutMs = 5_000;
 
-    [SupportedOSPlatform("windows")]
     internal async Task<SmbKerberosDiscoveryResult> DiscoverDrivesAsync(
         FileSystemScanTarget target,
         CliWindowsCredential? credential,
@@ -28,7 +27,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         Action<string>? onCurrentPath,
         CancellationToken cancellationToken)
     {
-        if (credential?.IsLocalMachineAccount == true)
+        if (credential?.IsLocalMachineAccount == true && !credential.UsesNtHash)
         {
             throw new InvalidOperationException(
                 "Kerberos requires an Active Directory identity. Qualify the username with --domain <ad-dns-domain> or use user@domain.");
@@ -43,6 +42,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         var drives = new ConcurrentBag<IRemoteDrive>();
         var warnings = new ConcurrentBag<string>();
         var ntlmFallbackHosts = 0;
+        var authenticationFailures = 0;
 
         await Parallel.ForEachAsync(
             hostTargets,
@@ -56,6 +56,19 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 try
                 {
                     var connection = await ResolveConnectionAsync(hostTarget.Host, credential, dnsServer, token);
+                    if (credential?.UsesNtHash == true)
+                    {
+                        DiscoverHostDrives(
+                            connection with { AuthenticationProtocol = SmbAuthenticationProtocol.Ntlm },
+                            hostTarget,
+                            drives,
+                            warnings,
+                            shouldPruneDirectory,
+                            onCurrentPath,
+                            token);
+                        return;
+                    }
+
                     try
                     {
                         if (!connection.IsKerberosReady)
@@ -85,6 +98,11 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 }
                 catch (Exception ex)
                 {
+                    if (ex is SmbAuthenticationException)
+                    {
+                        Interlocked.Increment(ref authenticationFailures);
+                    }
+
                     warnings.Add($"{hostTarget.Host}: {ex.Message}");
                 }
             });
@@ -92,7 +110,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         return new SmbKerberosDiscoveryResult(
             drives.OrderBy(drive => drive.Name, StringComparer.OrdinalIgnoreCase).ToArray(),
             warnings.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
-            ntlmFallbackHosts);
+            ntlmFallbackHosts,
+            authenticationFailures);
     }
 
     private static void DiscoverHostDrives(
@@ -161,7 +180,6 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             unchecked((int)0x80090311);   // SEC_E_NO_AUTHENTICATING_AUTHORITY
     }
 
-    [SupportedOSPlatform("windows")]
     private async Task<IReadOnlyList<SmbHostTarget>> GetHostTargetsAsync(
         FileSystemScanTarget target,
         CliWindowsCredential? credential,
@@ -171,6 +189,17 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
     {
         if (target.Mode == FileSystemScanMode.Domain)
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                throw new PlatformNotSupportedException("Active Directory LDAP discovery is currently supported only on Windows.");
+            }
+
+            if (credential?.UsesNtHash == true)
+            {
+                throw new InvalidOperationException(
+                    "Pass-the-hash supports targeted host and subnet SMB scans. Domain-wide discovery uses LDAP, which requires a password, Kerberos ticket, or the current Windows identity.");
+            }
+
             var hosts = await discoveryService.EnumerateDomainHostsForScanAsync(
                 target.Value.Equals("current domain", StringComparison.OrdinalIgnoreCase) ? null : target.Value,
                 credential,
@@ -330,7 +359,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
 internal sealed record SmbKerberosDiscoveryResult(
     IReadOnlyList<IRemoteDrive> Drives,
     IReadOnlyList<string> Warnings,
-    int NtlmFallbackHostCount);
+    int NtlmFallbackHostCount,
+    int AuthenticationFailureCount);
 
 internal enum SmbAuthenticationProtocol
 {
@@ -543,10 +573,10 @@ internal sealed class SmbKerberosRemoteFile(
 
 internal sealed class SmbKerberosSession : IDisposable
 {
-    private readonly SspiSmbAuthenticationClient _authentication;
+    private readonly IAuthenticationClient _authentication;
     private bool _disposed;
 
-    private SmbKerberosSession(SMB2Client client, SspiSmbAuthenticationClient authentication)
+    private SmbKerberosSession(SMB2Client client, IAuthenticationClient authentication)
     {
         Client = client;
         _authentication = authentication;
@@ -583,35 +613,55 @@ internal sealed class SmbKerberosSession : IDisposable
             }
         }
 
-        var authentication = credential == null
-            ? new SspiSmbAuthenticationClient(connection.KerberosHostName, securityPackage)
-            : new SspiSmbAuthenticationClient(
-                connection.KerberosHostName,
-                securityPackage,
+        IAuthenticationClient authentication;
+        if (credential?.UsesNtHash == true)
+        {
+            if (connection.AuthenticationProtocol != SmbAuthenticationProtocol.Ntlm)
+            {
+                throw new InvalidOperationException("An NT hash can only be used with explicit NTLM authentication.");
+            }
+
+            authentication = new NtlmHashAuthenticationClient(
                 authenticationDomain,
-                authenticationUserName,
-                credential.Password);
+                authenticationUserName!,
+                credential.NtHash!,
+                $"cifs/{connection.KerberosHostName}",
+                credential.IsLocalMachineAccount);
+        }
+        else
+        {
+            authentication = credential == null
+                ? new SspiSmbAuthenticationClient(connection.KerberosHostName, securityPackage)
+                : new SspiSmbAuthenticationClient(
+                    connection.KerberosHostName,
+                    securityPackage,
+                    authenticationDomain,
+                    authenticationUserName,
+                    credential.Password);
+        }
 
         try
         {
             var status = client.Login(authentication);
-            if (status != NTStatus.STATUS_SUCCESS || !authentication.AuthenticationCompleted)
+            var sspiAuthentication = authentication as SspiSmbAuthenticationClient;
+            if (status != NTStatus.STATUS_SUCCESS || sspiAuthentication?.AuthenticationCompleted == false)
             {
-                var sspiError = string.IsNullOrWhiteSpace(authentication.LastSecurityError)
+                var sspiError = string.IsNullOrWhiteSpace(sspiAuthentication?.LastSecurityError)
                     ? string.Empty
-                    : $" SSPI: {authentication.LastSecurityError}.";
+                    : $" SSPI: {sspiAuthentication.LastSecurityError}.";
+                var targetName = sspiAuthentication?.TargetName ?? $"cifs/{connection.KerberosHostName}";
                 throw new SmbAuthenticationException(
                     securityPackage,
                     status,
-                    authentication.LastSecurityStatus,
-                    $"explicit {securityPackage} SMB authentication to '{authentication.TargetName}' failed with {SmbKerberosService.FormatStatus(status)}.{sspiError}");
+                    sspiAuthentication?.LastSecurityStatus,
+                    $"explicit {securityPackage} SMB authentication to '{targetName}' failed with {SmbKerberosService.FormatStatus(status)}.{sspiError}");
             }
 
             return new SmbKerberosSession(client, authentication);
         }
         catch
         {
-            authentication.Dispose();
+            (authentication as IDisposable)?.Dispose();
             try { client.Disconnect(); } catch { }
             throw;
         }
@@ -664,7 +714,7 @@ internal sealed class SmbKerberosSession : IDisposable
         if (_disposed) return;
         try { Client.Logoff(); } catch { }
         try { Client.Disconnect(); } catch { }
-        _authentication.Dispose();
+        (_authentication as IDisposable)?.Dispose();
         _disposed = true;
     }
 }

@@ -3,7 +3,12 @@ using System.Net;
 
 namespace Stratus.Sift.Cli;
 
-internal sealed record CliWindowsCredential(string UserName, string Password, string? Domain, bool IsLocalMachineAccount)
+internal sealed record CliWindowsCredential(
+    string UserName,
+    string? Password,
+    byte[]? NtHash,
+    string? Domain,
+    bool IsLocalMachineAccount)
 {
     internal string QualifiedUserName => string.IsNullOrWhiteSpace(Domain)
         ? UserName
@@ -13,30 +18,44 @@ internal sealed record CliWindowsCredential(string UserName, string Password, st
         ? UserName
         : $@"{Domain}\{UserName}";
 
-    internal NetworkCredential ToNetworkCredential() => string.IsNullOrWhiteSpace(Domain)
-        ? new NetworkCredential(UserName, Password)
-        : new NetworkCredential(UserName, Password, Domain);
+    internal bool UsesNtHash => NtHash is { Length: 16 };
+
+    internal NetworkCredential ToNetworkCredential()
+    {
+        if (UsesNtHash)
+        {
+            throw new InvalidOperationException("An NT hash cannot be used with Windows password-based authentication.");
+        }
+
+        return string.IsNullOrWhiteSpace(Domain)
+            ? new NetworkCredential(UserName, Password)
+            : new NetworkCredential(UserName, Password, Domain);
+    }
 
     internal static CliWindowsCredential? Create(
         string? userName,
         string? password,
         string? domain,
         bool useLocalMachine = false,
-        bool preferDomainAccount = false)
+        bool preferDomainAccount = false,
+        string? ntHash = null)
     {
         var trimmedUserName = userName?.Trim();
         var trimmedDomain = domain?.Trim();
         var hasPassword = !string.IsNullOrWhiteSpace(password);
+        var hasNtHash = !string.IsNullOrWhiteSpace(ntHash);
 
-        if (string.IsNullOrWhiteSpace(trimmedUserName) && !hasPassword && string.IsNullOrWhiteSpace(trimmedDomain))
+        if (string.IsNullOrWhiteSpace(trimmedUserName) && !hasPassword && !hasNtHash && string.IsNullOrWhiteSpace(trimmedDomain))
         {
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(trimmedUserName) || !hasPassword)
+        if (string.IsNullOrWhiteSpace(trimmedUserName) || hasPassword == hasNtHash)
         {
-            throw new ArgumentException("Both username and password are required when supplying SMB impersonation credentials.");
+            throw new ArgumentException("Supply a username and exactly one of password or NT hash for SMB authentication.");
         }
+
+        var parsedNtHash = hasNtHash ? ParseNtHash(ntHash!) : null;
 
         if (useLocalMachine && !string.IsNullOrWhiteSpace(trimmedDomain))
         {
@@ -68,7 +87,7 @@ internal sealed record CliWindowsCredential(string UserName, string Password, st
 
         if (trimmedUserName.Contains('@', StringComparison.Ordinal))
         {
-            return new CliWindowsCredential(trimmedUserName, password!, null, false);
+            return new CliWindowsCredential(trimmedUserName, password, parsedNtHash, null, false);
         }
 
         if (useLocalMachine)
@@ -82,7 +101,41 @@ internal sealed record CliWindowsCredential(string UserName, string Password, st
             isLocalMachineAccount = string.Equals(trimmedDomain, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
         }
 
-        return new CliWindowsCredential(trimmedUserName, password!, string.IsNullOrWhiteSpace(trimmedDomain) ? null : trimmedDomain, isLocalMachineAccount);
+        return new CliWindowsCredential(
+            trimmedUserName,
+            password,
+            parsedNtHash,
+            string.IsNullOrWhiteSpace(trimmedDomain) ? null : trimmedDomain,
+            isLocalMachineAccount);
+    }
+
+    internal static bool IsValidNtHash(string? value)
+    {
+        if (value is null || value.Length != 32)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static byte[] ParseNtHash(string value)
+    {
+        var trimmed = value.Trim();
+        if (!IsValidNtHash(trimmed))
+        {
+            throw new ArgumentException("The NT hash must be exactly 32 hexadecimal characters.", nameof(value));
+        }
+
+        return Convert.FromHexString(trimmed);
     }
 
     private static bool IsLocalMachineQualifier(string value)

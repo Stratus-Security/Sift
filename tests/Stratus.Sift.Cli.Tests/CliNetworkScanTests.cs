@@ -929,7 +929,7 @@ public class CliNetworkScanTests
 
         var parseResult = rootCommand.Parse(["domain", "--username", "alice"]);
 
-        Assert.Contains(parseResult.Errors, error => error.Message.Contains("Specify both --username and --password", StringComparison.Ordinal));
+        Assert.Contains(parseResult.Errors, error => error.Message.Contains("exactly one of --password or --nt-hash", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -950,6 +950,91 @@ public class CliNetworkScanTests
         var parseResult = rootCommand.Parse(["domain", "--username", "alice", "--password", "secret", "--domain", "contoso", "--local"]);
 
         Assert.Contains(parseResult.Errors, error => error.Message.Contains("Use either --domain or --local", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkAcceptsDomainNtHash()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "alice",
+            "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c", "--domain", "contoso"]);
+
+        Assert.Empty(parseResult.Errors);
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkAcceptsLocalNtHashAlias()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "Administrator",
+            "-H", "8846F7EAEE8FB117AD06BDD830B7586C", "--local"]);
+
+        Assert.Empty(parseResult.Errors);
+    }
+
+    [Theory]
+    [InlineData("not-a-hash")]
+    [InlineData("8846f7eaee8fb117ad06bdd830b7586")]
+    [InlineData("8846f7eaee8fb117ad06bdd830b7586z")]
+    public void BuildRootCommand_NetworkRejectsInvalidNtHash(string ntHash)
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "alice", "--nt-hash", ntHash]);
+
+        Assert.Contains(parseResult.Errors, error => error.Message.Contains("exactly 32 hexadecimal", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkRejectsPasswordAndNtHash()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "alice", "--password", "secret",
+            "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c"]);
+
+        Assert.Contains(parseResult.Errors, error => error.Message.Contains("either --password or --nt-hash", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkRejectsKerberosWithNtHash()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "alice",
+            "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c", "--kerberos"]);
+
+        Assert.Contains(parseResult.Errors, error => error.Message.Contains("pass-the-hash uses NTLMv2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkRejectsUnqualifiedNtHashIdentity()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "alice",
+            "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c"]);
+
+        Assert.Contains(parseResult.Errors, error => error.Message.Contains("identity is unambiguous", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildRootCommand_DomainRejectsNtHash()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "domain", "--username", "alice", "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c"]);
+
+        Assert.Contains(parseResult.Errors, error => error.Message.Contains("Domain-wide discovery uses LDAP", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1030,6 +1115,33 @@ public class CliNetworkScanTests
         Assert.NotNull(credential);
         Assert.Null(credential!.Domain);
         Assert.False(credential.IsLocalMachineAccount);
+    }
+
+    [Fact]
+    public void CliWindowsCredential_Create_ParsesNtHashWithoutRetainingPasswordText()
+    {
+        var credential = CliWindowsCredential.Create(
+            "alice",
+            password: null,
+            domain: "contoso",
+            preferDomainAccount: true,
+            ntHash: "8846f7eaee8fb117ad06bdd830b7586c");
+
+        Assert.NotNull(credential);
+        Assert.True(credential!.UsesNtHash);
+        Assert.Null(credential.Password);
+        Assert.Equal("8846F7EAEE8FB117AD06BDD830B7586C", Convert.ToHexString(credential.NtHash!));
+        Assert.Throws<InvalidOperationException>(credential.ToNetworkCredential);
+    }
+
+    [Fact]
+    public void NtlmHashAuthenticationClient_ComputesKnownNtlmv2ResponseKey()
+    {
+        var ntHash = Convert.FromHexString("8846F7EAEE8FB117AD06BDD830B7586C");
+
+        var responseKey = NtlmHashAuthenticationClient.ComputeResponseKeyNt(ntHash, "User", "Domain");
+
+        Assert.Equal("FD0FB734B3292256B3AAEA9E21F3494E", Convert.ToHexString(responseKey));
     }
 
     [Theory]

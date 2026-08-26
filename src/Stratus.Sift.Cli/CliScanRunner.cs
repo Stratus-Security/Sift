@@ -291,9 +291,11 @@ internal static class CliScanRunner
             return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
 
-        if (!OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows() && (credential?.UsesNtHash != true || target.Mode == FileSystemScanMode.Domain))
         {
-            display.WriteEvent("Error: domain, subnet, and device crawl modes are currently supported only on Windows.", ConsoleColor.Red);
+            display.WriteEvent(
+                "Error: domain discovery and password/Kerberos SMB authentication are currently supported only on Windows. Cross-platform network scans require --nt-hash.",
+                ConsoleColor.Red);
             display.IncrementErrors();
             display.Complete("Network crawl failed");
             return CliExitCodes.Failed;
@@ -325,13 +327,20 @@ internal static class CliScanRunner
             return CliExitCodes.Failed;
         }
 
+        if (!OperatingSystem.IsWindows())
+        {
+            display.WriteEvent("Error: this SMB authentication path requires Windows.", ConsoleColor.Red);
+            display.IncrementErrors();
+            display.Complete("Network crawl failed");
+            return CliExitCodes.Failed;
+        }
+
         return await RunWindowsDiscoveryScanAsync(target, credential, enumerateOnly, session, display, scanOptions, fileScanner, standardEnumerator, llmValidator, llmOptions, resumeStore, includeBinary, kerberos, dnsServer, fullScan, diagnostics, cancellationToken);
     }
 
     internal static bool ShouldUseKerberosPreferredAuthentication(CliWindowsCredential? credential) =>
-        credential?.IsLocalMachineAccount != true;
+        credential?.UsesNtHash == true || credential?.IsLocalMachineAccount != true;
 
-    [SupportedOSPlatform("windows")]
     private static async Task<int> RunKerberosDiscoveryScanAsync(
         FileSystemScanTarget target,
         CliWindowsCredential? credential,
@@ -348,9 +357,12 @@ internal static class CliScanRunner
         CancellationToken cancellationToken)
     {
         var kerberosService = session.Host.Services.GetRequiredService<SmbKerberosService>();
+        var usesNtHash = credential?.UsesNtHash == true;
         display.SetPhase($"Discovering {target.DisplayName.ToLowerInvariant()} SMB shares");
         display.WriteEvent(
-            allowNtlmFallback
+            usesNtHash
+                ? "Authentication mode: explicit NTLMv2 pass-the-hash; Kerberos is disabled."
+                : allowNtlmFallback
                 ? "Authentication mode: Kerberos preferred; NTLM is attempted only per host when Kerberos is unavailable."
                 : "Authentication mode: strict Kerberos (cifs SPN); NTLM fallback is disabled.",
             ConsoleColor.Cyan);
@@ -373,7 +385,7 @@ internal static class CliScanRunner
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            display.WriteEvent($"Error: failed to discover SMB shares with Kerberos: {GetErrorMessage(ex)}", ConsoleColor.Red);
+            display.WriteEvent($"Error: failed to discover SMB shares: {GetErrorMessage(ex)}", ConsoleColor.Red);
             display.IncrementErrors();
             display.Complete("Network crawl failed");
             return CliExitCodes.Failed;
@@ -385,7 +397,7 @@ internal static class CliScanRunner
         }
 
 
-        if (discovery.NtlmFallbackHostCount > 0)
+        if (!usesNtHash && discovery.NtlmFallbackHostCount > 0)
         {
             display.WriteEvent(
                 $"Authentication summary: {discovery.NtlmFallbackHostCount:N0} host(s) required explicit NTLM fallback.",
@@ -395,10 +407,19 @@ internal static class CliScanRunner
         if (discovery.Drives.Count == 0)
         {
             display.WriteEvent(
-                allowNtlmFallback
+                usesNtHash
+                    ? "Warning: no readable SMB shares were discovered with the supplied NT hash."
+                    : allowNtlmFallback
                     ? "Warning: no readable SMB shares were discovered through Kerberos or NTLM fallback."
                     : "Warning: no readable SMB shares were discovered through strict Kerberos authentication.",
                 ConsoleColor.Yellow);
+            if (usesNtHash && discovery.AuthenticationFailureCount > 0)
+            {
+                display.IncrementErrors();
+                display.Complete("Network crawl failed");
+                return CliExitCodes.Failed;
+            }
+
             display.Complete("Network crawl complete");
             return CliExitCodes.Success;
         }

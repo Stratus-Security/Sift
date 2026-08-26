@@ -648,7 +648,9 @@ internal static class CliResumeIdentity
         Append(hash, llmOptions?.SensitiveOnly == true ? "sensitive-only" : "all-findings");
         Append(hash, llmOptions?.OllamaModel ?? string.Empty);
         Append(hash, credential?.QualifiedUserName ?? $"current:{Environment.UserDomainName}\\{Environment.UserName}");
-        Append(hash, credential?.Password ?? string.Empty);
+        Append(hash, credential?.UsesNtHash == true
+            ? Convert.ToHexString(credential.NtHash!)
+            : credential?.Password ?? string.Empty);
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 

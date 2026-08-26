@@ -209,6 +209,7 @@ internal static class CliCommandFactory
             commonOptions.Resume,
             credentialOptions.UserName,
             credentialOptions.Password,
+            credentialOptions.NtHash,
             credentialOptions.Domain,
             credentialOptions.Local,
             kerberosOption,
@@ -221,6 +222,13 @@ internal static class CliCommandFactory
         AddCredentialValidators(command, credentialOptions);
         AddKerberosValidators(command, credentialOptions, kerberosOption);
         AddResumeValidator(command, commonOptions.Resume, commonOptions.EnumOnly);
+        command.Validators.Add(result =>
+        {
+            if (!string.IsNullOrWhiteSpace(result.GetValue(credentialOptions.NtHash)))
+            {
+                result.AddError("--nt-hash is supported by targeted network host and subnet scans. Domain-wide discovery uses LDAP and requires a password, Kerberos ticket, or the current Windows identity.");
+            }
+        });
         command.Validators.Add(result =>
         {
             if (!string.IsNullOrWhiteSpace(result.GetValue(dnsServerOption)) &&
@@ -240,7 +248,8 @@ internal static class CliCommandFactory
                 result.GetValue(credentialOptions.Password),
                 result.GetValue(credentialOptions.Domain),
                 result.GetValue(credentialOptions.Local),
-                preferDomainAccount: !result.GetValue(credentialOptions.Local));
+                preferDomainAccount: !result.GetValue(credentialOptions.Local),
+                ntHash: result.GetValue(credentialOptions.NtHash));
 
             return await ExecuteAsync(() => CliScanRunner.RunScanAsync(
                 new FileSystemScanTarget(
@@ -303,6 +312,7 @@ internal static class CliCommandFactory
             commonOptions.Resume,
             credentialOptions.UserName,
             credentialOptions.Password,
+            credentialOptions.NtHash,
             credentialOptions.Domain,
             credentialOptions.Local,
             kerberosOption,
@@ -346,7 +356,8 @@ internal static class CliCommandFactory
                 result.GetValue(credentialOptions.Password),
                 result.GetValue(credentialOptions.Domain),
                 result.GetValue(credentialOptions.Local),
-                preferDomainAccount: !result.GetValue(credentialOptions.Local));
+                preferDomainAccount: !result.GetValue(credentialOptions.Local),
+                ntHash: result.GetValue(credentialOptions.NtHash));
             var target = FileSystemScanTarget.Parse(null, domain: false, subnet, device);
             return await ExecuteAsync(() => CliScanRunner.RunScanAsync(
                 target,
@@ -804,6 +815,20 @@ internal static class CliCommandFactory
         };
         passwordOption.Aliases.Add("-p");
 
+        var ntHashOption = new Option<string>("--nt-hash")
+        {
+            Description = "32-character NT hash for explicit NTLMv2 SMB authentication. Prefer an environment-safe invocation to avoid shell history."
+        };
+        ntHashOption.Aliases.Add("-H");
+        ntHashOption.Validators.Add(result =>
+        {
+            var value = result.GetValue(ntHashOption);
+            if (!string.IsNullOrWhiteSpace(value) && !CliWindowsCredential.IsValidNtHash(value.Trim()))
+            {
+                result.AddError("The --nt-hash value must be exactly 32 hexadecimal characters.");
+            }
+        });
+
         var domainOption = new Option<string>("--domain")
         {
             Description = "Windows/AD domain for impersonation when --username is not already qualified."
@@ -819,6 +844,7 @@ internal static class CliCommandFactory
         return new WindowsCredentialOptions(
             userNameOption,
             passwordOption,
+            ntHashOption,
             domainOption,
             localOption);
     }
@@ -947,6 +973,11 @@ internal static class CliCommandFactory
             {
                 result.AddError("--kerberos cannot be combined with --local because Kerberos requires an Active Directory account.");
             }
+
+            if (result.GetValue(kerberosOption) && !string.IsNullOrWhiteSpace(result.GetValue(credentialOptions.NtHash)))
+            {
+                result.AddError("--kerberos cannot be combined with --nt-hash because pass-the-hash uses NTLMv2.");
+            }
         });
     }
 
@@ -956,26 +987,34 @@ internal static class CliCommandFactory
         {
             var username = result.GetValue(credentialOptions.UserName);
             var password = result.GetValue(credentialOptions.Password);
+            var ntHash = result.GetValue(credentialOptions.NtHash);
             var domain = result.GetValue(credentialOptions.Domain);
             var useLocal = result.GetValue(credentialOptions.Local);
 
             var hasUsername = !string.IsNullOrWhiteSpace(username);
             var hasPassword = !string.IsNullOrWhiteSpace(password);
+            var hasNtHash = !string.IsNullOrWhiteSpace(ntHash);
             var hasDomain = !string.IsNullOrWhiteSpace(domain);
+            var hasSecret = hasPassword || hasNtHash;
 
-            if (hasUsername != hasPassword)
+            if (hasPassword && hasNtHash)
             {
-                result.AddError("Specify both --username and --password when supplying SMB impersonation credentials.");
+                result.AddError("Use either --password or --nt-hash, not both.");
             }
 
-            if (hasDomain && !hasUsername)
+            if (hasUsername != hasSecret)
             {
-                result.AddError("--domain requires --username and --password.");
+                result.AddError("Specify --username with exactly one of --password or --nt-hash when supplying SMB credentials.");
             }
 
-            if (useLocal && !hasUsername)
+            if (hasDomain && (!hasUsername || !hasSecret))
             {
-                result.AddError("--local requires --username and --password.");
+                result.AddError("--domain requires --username and either --password or --nt-hash.");
+            }
+
+            if (useLocal && (!hasUsername || !hasSecret))
+            {
+                result.AddError("--local requires --username and either --password or --nt-hash.");
             }
 
             if (useLocal && hasDomain)
@@ -993,6 +1032,12 @@ internal static class CliCommandFactory
                 (username!.Contains('\\', StringComparison.Ordinal) || username.Contains('@', StringComparison.Ordinal)))
             {
                 result.AddError("Use either a qualified --username or --local, not both.");
+            }
+
+            if (hasNtHash && CliWindowsCredential.IsValidNtHash(ntHash!.Trim()) && hasUsername && !useLocal && !hasDomain &&
+                !username!.Contains('\\', StringComparison.Ordinal) && !username.Contains('@', StringComparison.Ordinal))
+            {
+                result.AddError("--nt-hash requires --domain, a qualified --username, or --local so the NTLM identity is unambiguous.");
             }
         });
     }
@@ -1250,7 +1295,12 @@ internal static class CliCommandFactory
         Option<int> Threads,
         Option<long> MaxReadMiBPerSecond,
         Option<string> DiagnosticsOutput);
-    private sealed record WindowsCredentialOptions(Option<string> UserName, Option<string> Password, Option<string> Domain, Option<bool> Local);
+    private sealed record WindowsCredentialOptions(
+        Option<string> UserName,
+        Option<string> Password,
+        Option<string> NtHash,
+        Option<string> Domain,
+        Option<bool> Local);
 
     private sealed record Microsoft365CommandOptions(
         Option<string[]> Config,

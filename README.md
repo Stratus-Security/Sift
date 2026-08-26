@@ -28,7 +28,7 @@ Sift was made with performance and extensibility in mind, to name a few great im
 - Resumability: Every scan command can continue from durable checkpoints, so an interrupted scan only repeats a small amount of work.
 - Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
 - Performance: Local and SMB scans use a bounded high-throughput pipeline with compiled rules and reusable scan state. See [Benchmarks](#benchmarks) for the test method and measured results.
-- Explicit authentication: Use the current identity or supply credentials directly. Kerberos is preferred for domain accounts, with controlled NTLM fallback and a strict Kerberos mode.
+- Explicit authentication: Use the current identity, a password, Kerberos, or an NT hash for targeted SMB scans. Kerberos is preferred for domain accounts, with controlled NTLM fallback and a strict Kerberos mode.
 - Safety features: Dodges unsynced OneDrive files instead of filling up a server's drives by accessing them all... hypothetically.
     - If you're worried about coverage, OneDrive is backed by SharePoint, so scanning SharePoint is better than scanning local drives :D
 - File support: You can optionally include binary files such as Word documents. Support isn't perfect yet, but you can't have everything!
@@ -80,6 +80,7 @@ Options:
   --resume                                      Continue from durable checkpoints saved by an earlier scan with the same target, credentials, rules, and scan settings.
   -u, --username <username>                     Windows username for SMB/LDAP impersonation. Accepts user, domain\user, or user@domain.
   -p, --password <password>                     Windows password for SMB/LDAP impersonation.
+  -H, --nt-hash <nt-hash>                       32-character NT hash for explicit NTLMv2 SMB authentication. Targeted network scans only.
   -d, --domain <domain>                         Windows/AD domain for impersonation when --username is not already qualified.
   -l, --local                                   Use the local machine account namespace instead of a domain account.
   -k, --kerberos                                Require Kerberos for LDAP and SMB authentication and reject the default per-host NTLM fallback. Use DNS hostnames for service principals.
@@ -135,6 +136,13 @@ Scan a subnet with a local admin:
 .\sift.exe network --subnet 10.0.0.0/24 --username Administrator --password '<password>' --local --output findings.log
 ```
 
+Scan a host with an NT hash:
+```powershell
+.\sift.exe network --device 10.0.0.25 --username Administrator --nt-hash '<32-character-nt-hash>' --local --output findings.log
+```
+
+Pass-the-hash uses explicit NTLMv2 and works for `network --device` and `network --subnet` scans on every supported platform. The `domain` command discovers computers through LDAP, so it still requires a password, Kerberos ticket, or the current Windows identity.
+
 Scan a local disk and then refine the results on another machine with a local LLM:
 ```powershell
 .\sift.exe local --path C:\ --output findings.json --output-format json
@@ -159,7 +167,7 @@ Sift includes commands for:
 
 - Local files and folders.
 - Mounted filesystems, mapped drives, and Windows UNC shares.
-- Host and subnet-based SMB discovery, with Kerberos and NTLM support.
+- Host and subnet-based SMB discovery, with Kerberos, password-based NTLM, and NTLMv2 pass-the-hash support.
 - Active Directory discovery in regular and Native AOT Windows builds, with paged LDAP queries and signed, sealed authentication.
 - Microsoft 365 content in SharePoint, OneDrive and Teams channel files.
 - Slack messages and attachments.

@@ -26,6 +26,11 @@ internal sealed partial class WindowsImpersonationSession : IDisposable
             return new WindowsImpersonationSession(null);
         }
 
+        if (credential.UsesNtHash)
+        {
+            throw new InvalidOperationException("Windows impersonation does not accept an NT hash. Use the managed SMB authentication path.");
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException("Windows impersonation is only supported on Windows.");
@@ -34,7 +39,7 @@ internal sealed partial class WindowsImpersonationSession : IDisposable
         if (!LogonUser(
                 credential.UserName,
                 credential.Domain,
-                credential.Password,
+                credential.Password!,
                 Logon32LogonNewCredentials,
                 Logon32ProviderWinNt50,
                 out var accessToken))
