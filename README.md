@@ -23,6 +23,7 @@ Like most things we make, Sift is a tool developed out of frustration. For a whi
 
 Sift was made with performance and extensibility in mind, to name a few great improvements over existing solutions:
 - Self-contained Native AOT executables with no separate .NET runtime installation.
+- Fewer false positives: Custom code-based validators and LLM filtering mean far fewer false positives.
 - Connector flexibility: It's modular to allow scanning anything with a small adapter (currently supports local drives, local networks and subnets, AD, SharePoint, Slack and Atlassian (Jira and Confluence)). Suggestions for more are welcome, also see the [contribution docs](/CONTRIBUTING.md)!
 - Resumability: Every scan command can continue from durable checkpoints, so an interrupted scan only repeats a small amount of work.
 - Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
@@ -140,22 +141,17 @@ Scan a local disk and then refine the results on another machine with a local LL
 .\sift.exe analyze --input findings.json --llm-validate --ollama-model gemma4:31b --sensitive-only --output findings.log
 ```
 
-Analyze results in a terminal without rescanning:
+Analyze results in a terminal without rescanning, translating to snafflers output style:
 ```powershell
 .\sift.exe analyze --input findings.json --snaffler
 ```
 
 Continue a previous or incomplete scan:
 ```powershell
-.\sift.exe local --path C:\ --resume --output findings.json --output-format json
-.\sift.exe domain --resume
-.\sift.exe network --subnet 10.0.0.0/24 --resume
-.\sift.exe m365 --resume --output m365-findings.json --output-format json
+.\sift.exe local --path C:\ --resume
+.\sift.exe local --path C:\ --resume
 ```
-
-`--resume` works with local, domain, network, Microsoft 365, Slack, and Atlassian scans. During active processing, Sift stages compact fingerprints in buffered sequential writes and makes them durable about every 30 seconds. It also stores source paging cursors where the provider supports them. The output file is flushed before a checkpoint advances. Use the same command and output path to continue one report; output is optional if you only need results in the terminal.
-
-Checkpoints are selected automatically from the target, account or credentials, rules, and relevant scan settings. They contain opaque fingerprints and continuation state, not findings or credentials. Changed files are scanned again. Journals are capped at 128 MiB each, old journals expire after 30 days, and the checkpoint directory is kept within 512 MiB by default. A normal run starts over and replaces its output; a resumed run skips completed unchanged content and appends to its output. `--resume` cannot be combined with `--enum-only`.
+Note: Use the same command and output path to continue the same scan; output is optional if you only need results in the terminal.
 
 ## Scan sources
 

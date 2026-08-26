@@ -209,17 +209,6 @@ jobs:
             [System.Text.UTF8Encoding]::new($false))
           Remove-Item $partialChecksums.FullName -Force
 
-      - name: Guard public releases
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PUBLIC_RELEASES_ENABLED: ${{ vars.PUBLIC_RELEASES_ENABLED }}
-        run: |
-          $visibility = gh repo view '${{ github.repository }}' --json visibility --jq .visibility
-          if ($visibility -ne 'PRIVATE' -and $env:PUBLIC_RELEASES_ENABLED -ne 'true') {
-            throw 'Set the PUBLIC_RELEASES_ENABLED repository variable to true before publishing from a public repository.'
-          }
-
       - name: Create GitHub release
         shell: pwsh
         env:
