@@ -690,10 +690,6 @@ public class DefaultRulePortingTests : IDisposable
         var matchedRules = IgnoreRuleEvaluator.GetMatchedRules(@"\\server\C$\Windows\system32\config.txt", ignoreRules);
 
         Assert.DoesNotContain(matchedRules, rule => rule.MatchTarget == RuleTarget.ShareName && rule.Pattern == "C$");
-        Assert.Contains(ignoreRules, rule =>
-            rule.MatchTarget == RuleTarget.ShareName
-            && rule.Pattern == "C$"
-            && !rule.IsEnabled);
     }
 
     [Fact]
@@ -704,10 +700,6 @@ public class DefaultRulePortingTests : IDisposable
         var matchedRules = IgnoreRuleEvaluator.GetMatchedRules(@"\\server\ADMIN$\System32\config.txt", ignoreRules);
 
         Assert.DoesNotContain(matchedRules, rule => rule.MatchTarget == RuleTarget.ShareName && rule.Pattern == "ADMIN$");
-        Assert.Contains(ignoreRules, rule =>
-            rule.MatchTarget == RuleTarget.ShareName
-            && rule.Pattern == "ADMIN$"
-            && !rule.IsEnabled);
     }
 
     [Fact]

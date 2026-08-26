@@ -12,6 +12,10 @@
     <IncludeSource>false</IncludeSource>
     <IncludeSymbols>false</IncludeSymbols>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Keep ad hoc RID/AOT restores from rewriting the RID-neutral locks used by CI. -->
+    <LockRuntimeIdentifier Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</LockRuntimeIdentifier>
+    <LockRuntimeIdentifier Condition="'$(LockRuntimeIdentifier)' == '' and '$(RuntimeIdentifiers)' != ''">$(RuntimeIdentifiers)</LockRuntimeIdentifier>
+    <NuGetLockFilePath Condition="'$(LockRuntimeIdentifier)' != '' and '$(NuGetLockFilePath)' == ''">$(MSBuildThisFileDirectory)artifacts/locks/$(MSBuildProjectName).$(LockRuntimeIdentifier).packages.lock.json</NuGetLockFilePath>
     <DebugType Condition="'$(Configuration)' == 'Release'">None</DebugType>
     <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
     <PathMap Condition="'$(ContinuousIntegrationBuild)' == 'true'">$(MSBuildThisFileDirectory)=/_/</PathMap>
