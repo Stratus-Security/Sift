@@ -1,5 +1,6 @@
 using System.Net.NetworkInformation;
 using System.Net;
+using System.Security.Cryptography;
 
 namespace Stratus.Sift.Cli;
 
@@ -8,7 +9,7 @@ internal sealed record CliWindowsCredential(
     string? Password,
     byte[]? NtHash,
     string? Domain,
-    bool IsLocalMachineAccount)
+    bool IsLocalMachineAccount) : IDisposable
 {
     internal string QualifiedUserName => string.IsNullOrWhiteSpace(Domain)
         ? UserName
@@ -160,5 +161,13 @@ internal sealed record CliWindowsCredential(
         }
 
         return Environment.MachineName;
+    }
+
+    public void Dispose()
+    {
+        if (NtHash is { Length: > 0 })
+        {
+            CryptographicOperations.ZeroMemory(NtHash);
+        }
     }
 }

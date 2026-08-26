@@ -81,6 +81,7 @@ Options:
   -u, --username <username>                     Windows username for SMB/LDAP impersonation. Accepts user, domain\user, or user@domain.
   -p, --password <password>                     Windows password for SMB/LDAP impersonation.
   -H, --nt-hash <nt-hash>                       32-character NT hash for explicit NTLMv2 SMB authentication. Targeted network scans only.
+  --nt-hash-env <variable>                      Read the NT hash from an environment variable instead of a command-line value.
   -d, --domain <domain>                         Windows/AD domain for impersonation when --username is not already qualified.
   -l, --local                                   Use the local machine account namespace instead of a domain account.
   -k, --kerberos                                Require Kerberos for LDAP and SMB authentication and reject the default per-host NTLM fallback. Use DNS hostnames for service principals.
@@ -141,7 +142,16 @@ Scan a host with an NT hash:
 .\sift.exe network --device 10.0.0.25 --username Administrator --nt-hash '<32-character-nt-hash>' --local --output findings.log
 ```
 
+Keep the hash out of command history and process arguments:
+```powershell
+$env:SIFT_NT_HASH = Read-Host 'NT hash' -MaskInput
+.\sift.exe network --device 10.0.0.25 --username Administrator --nt-hash-env SIFT_NT_HASH --local --output findings.log
+Remove-Item Env:SIFT_NT_HASH
+```
+
 Pass-the-hash uses explicit NTLMv2 and works for `network --device` and `network --subnet` scans on every supported platform. The `domain` command discovers computers through LDAP, so it still requires a password, Kerberos ticket, or the current Windows identity.
+
+Sift accepts the NT hash only. It does not accept LM hashes, `LM:NT` pairs, NetNTLM challenge responses, or Kerberos keys. Supplying the hash through `--nt-hash` may retain it in shell history or process listings; use `--nt-hash-env` when that matters.
 
 Scan a local disk and then refine the results on another machine with a local LLM:
 ```powershell

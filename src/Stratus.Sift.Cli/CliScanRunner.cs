@@ -391,9 +391,27 @@ internal static class CliScanRunner
             return CliExitCodes.Failed;
         }
 
-        foreach (var warning in discovery.Warnings)
+        const int maximumPthWarnings = 8;
+        var warningsToDisplay = usesNtHash
+            ? discovery.Warnings.Take(maximumPthWarnings)
+            : discovery.Warnings;
+        foreach (var warning in warningsToDisplay)
         {
             display.WriteEvent($"Warning: {warning}", ConsoleColor.Yellow);
+        }
+
+        if (usesNtHash && discovery.Warnings.Count > maximumPthWarnings)
+        {
+            display.WriteEvent(
+                $"Warning: {discovery.Warnings.Count - maximumPthWarnings:N0} additional target error(s) were omitted from the console output.",
+                ConsoleColor.Yellow);
+        }
+
+        if (usesNtHash && discovery.AuthenticationFailureCount > 0)
+        {
+            display.WriteEvent(
+                $"Authentication summary: {discovery.AuthenticationFailureCount:N0} of {discovery.TargetHostCount:N0} target(s) rejected the supplied NT hash; {discovery.AuthenticatedHostCount:N0} authenticated.",
+                ConsoleColor.Yellow);
         }
 
 
@@ -406,22 +424,35 @@ internal static class CliScanRunner
 
         if (discovery.Drives.Count == 0)
         {
-            display.WriteEvent(
-                usesNtHash
-                    ? "Warning: no readable SMB shares were discovered with the supplied NT hash."
-                    : allowNtlmFallback
-                    ? "Warning: no readable SMB shares were discovered through Kerberos or NTLM fallback."
-                    : "Warning: no readable SMB shares were discovered through strict Kerberos authentication.",
-                ConsoleColor.Yellow);
-            if (usesNtHash && discovery.AuthenticationFailureCount > 0)
+            if (usesNtHash && ShouldFailPtHDiscovery(target, discovery))
             {
+                var message = target.Mode == FileSystemScanMode.Device
+                    ? discovery.AuthenticationFailureCount > 0
+                        ? "Error: NTLMv2 authentication failed for the requested device. Check the username, domain or local-account scope, and NT hash."
+                        : discovery.AuthenticatedHostCount > 0
+                            ? "Error: NTLMv2 authentication succeeded, but the requested device exposed no readable SMB shares. Check the share name and permissions."
+                            : "Error: the requested device could not be reached over SMB. Check the target, DNS resolution, and outbound TCP port 445."
+                    : "Error: one or more SMB targets rejected the supplied NT hash and no readable shares were discovered.";
+                display.WriteEvent(message, ConsoleColor.Red);
                 display.IncrementErrors();
                 display.Complete("Network crawl failed");
                 return CliExitCodes.Failed;
             }
 
+            display.WriteEvent(
+                usesNtHash
+                    ? "Warning: no readable SMB shares were discovered with the supplied NT hash across the requested subnet."
+                    : allowNtlmFallback
+                    ? "Warning: no readable SMB shares were discovered through Kerberos or NTLM fallback."
+                    : "Warning: no readable SMB shares were discovered through strict Kerberos authentication.",
+                ConsoleColor.Yellow);
             display.Complete("Network crawl complete");
             return CliExitCodes.Success;
+        }
+
+        if (usesNtHash && ShouldMarkPtHDiscoveryPartial(discovery))
+        {
+            display.IncrementErrors();
         }
 
         display.WriteEvent($"Discovered {discovery.Drives.Count:N0} readable SMB share(s).", ConsoleColor.Cyan);
@@ -497,6 +528,15 @@ internal static class CliScanRunner
         display.Complete(enumerateOnly ? "Network enumeration complete" : "Network crawl complete");
         return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
     }
+
+    internal static bool ShouldFailPtHDiscovery(
+        FileSystemScanTarget target,
+        SmbKerberosDiscoveryResult discovery) =>
+        discovery.Drives.Count == 0 &&
+        (target.Mode == FileSystemScanMode.Device || discovery.AuthenticationFailureCount > 0);
+
+    internal static bool ShouldMarkPtHDiscoveryPartial(SmbKerberosDiscoveryResult discovery) =>
+        discovery.Drives.Count > 0 && discovery.AuthenticationFailureCount > 0;
 
     [SupportedOSPlatform("windows")]
     private static async Task<int> RunWindowsDiscoveryScanAsync(

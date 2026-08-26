@@ -210,6 +210,7 @@ internal static class CliCommandFactory
             credentialOptions.UserName,
             credentialOptions.Password,
             credentialOptions.NtHash,
+            credentialOptions.NtHashEnvironment,
             credentialOptions.Domain,
             credentialOptions.Local,
             kerberosOption,
@@ -219,16 +220,9 @@ internal static class CliCommandFactory
             performanceOptions.MaxReadMiBPerSecond,
             performanceOptions.DiagnosticsOutput
         };
-        AddCredentialValidators(command, credentialOptions);
-        AddKerberosValidators(command, credentialOptions, kerberosOption);
+        AddCredentialValidators(command, credentialOptions, supportsNtHash: false);
+        AddKerberosValidators(command, credentialOptions, kerberosOption, supportsNtHash: false);
         AddResumeValidator(command, commonOptions.Resume, commonOptions.EnumOnly);
-        command.Validators.Add(result =>
-        {
-            if (!string.IsNullOrWhiteSpace(result.GetValue(credentialOptions.NtHash)))
-            {
-                result.AddError("--nt-hash is supported by targeted network host and subnet scans. Domain-wide discovery uses LDAP and requires a password, Kerberos ticket, or the current Windows identity.");
-            }
-        });
         command.Validators.Add(result =>
         {
             if (!string.IsNullOrWhiteSpace(result.GetValue(dnsServerOption)) &&
@@ -243,13 +237,13 @@ internal static class CliCommandFactory
             var binary = result.GetValue(commonOptions.Binary);
             var enumOnly = result.GetValue(commonOptions.EnumOnly);
             var rulesPath = result.GetValue(commonOptions.Rules);
-            var credential = CliWindowsCredential.Create(
+            using var credential = CliWindowsCredential.Create(
                 result.GetValue(credentialOptions.UserName),
                 result.GetValue(credentialOptions.Password),
                 result.GetValue(credentialOptions.Domain),
                 result.GetValue(credentialOptions.Local),
                 preferDomainAccount: !result.GetValue(credentialOptions.Local),
-                ntHash: result.GetValue(credentialOptions.NtHash));
+                ntHash: ResolveNtHash(result, credentialOptions));
 
             return await ExecuteAsync(() => CliScanRunner.RunScanAsync(
                 new FileSystemScanTarget(
@@ -313,6 +307,7 @@ internal static class CliCommandFactory
             credentialOptions.UserName,
             credentialOptions.Password,
             credentialOptions.NtHash,
+            credentialOptions.NtHashEnvironment,
             credentialOptions.Domain,
             credentialOptions.Local,
             kerberosOption,
@@ -321,8 +316,8 @@ internal static class CliCommandFactory
             performanceOptions.MaxReadMiBPerSecond,
             performanceOptions.DiagnosticsOutput
         };
-        AddCredentialValidators(command, credentialOptions);
-        AddKerberosValidators(command, credentialOptions, kerberosOption);
+        AddCredentialValidators(command, credentialOptions, supportsNtHash: true);
+        AddKerberosValidators(command, credentialOptions, kerberosOption, supportsNtHash: true);
         AddResumeValidator(command, commonOptions.Resume, commonOptions.EnumOnly);
 
         command.Validators.Add(result =>
@@ -351,13 +346,13 @@ internal static class CliCommandFactory
             var binary = result.GetValue(commonOptions.Binary);
             var enumOnly = result.GetValue(commonOptions.EnumOnly);
             var rulesPath = result.GetValue(commonOptions.Rules);
-            var credential = CliWindowsCredential.Create(
+            using var credential = CliWindowsCredential.Create(
                 result.GetValue(credentialOptions.UserName),
                 result.GetValue(credentialOptions.Password),
                 result.GetValue(credentialOptions.Domain),
                 result.GetValue(credentialOptions.Local),
                 preferDomainAccount: !result.GetValue(credentialOptions.Local),
-                ntHash: result.GetValue(credentialOptions.NtHash));
+                ntHash: ResolveNtHash(result, credentialOptions));
             var target = FileSystemScanTarget.Parse(null, domain: false, subnet, device);
             return await ExecuteAsync(() => CliScanRunner.RunScanAsync(
                 target,
@@ -817,17 +812,14 @@ internal static class CliCommandFactory
 
         var ntHashOption = new Option<string>("--nt-hash")
         {
-            Description = "32-character NT hash for explicit NTLMv2 SMB authentication. Prefer an environment-safe invocation to avoid shell history."
+            Description = "32-character NT hash for explicit NTLMv2 SMB authentication. Command-line values may be retained in shell history or process listings."
         };
         ntHashOption.Aliases.Add("-H");
-        ntHashOption.Validators.Add(result =>
+
+        var ntHashEnvironmentOption = new Option<string>("--nt-hash-env")
         {
-            var value = result.GetValue(ntHashOption);
-            if (!string.IsNullOrWhiteSpace(value) && !CliWindowsCredential.IsValidNtHash(value.Trim()))
-            {
-                result.AddError("The --nt-hash value must be exactly 32 hexadecimal characters.");
-            }
-        });
+            Description = "Read the NT hash from the named environment variable instead of exposing it as a command-line value."
+        };
 
         var domainOption = new Option<string>("--domain")
         {
@@ -845,6 +837,7 @@ internal static class CliCommandFactory
             userNameOption,
             passwordOption,
             ntHashOption,
+            ntHashEnvironmentOption,
             domainOption,
             localOption);
     }
@@ -965,41 +958,98 @@ internal static class CliCommandFactory
     private static void AddKerberosValidators(
         Command command,
         WindowsCredentialOptions credentialOptions,
-        Option<bool> kerberosOption)
+        Option<bool> kerberosOption,
+        bool supportsNtHash)
     {
         command.Validators.Add(result =>
         {
-            if (result.GetValue(kerberosOption) && result.GetValue(credentialOptions.Local))
+            if (!result.GetValue(kerberosOption))
             {
-                result.AddError("--kerberos cannot be combined with --local because Kerberos requires an Active Directory account.");
+                return;
             }
 
-            if (result.GetValue(kerberosOption) && !string.IsNullOrWhiteSpace(result.GetValue(credentialOptions.NtHash)))
+            var ntHash = result.GetValue(credentialOptions.NtHash);
+            var ntHashEnvironment = result.GetValue(credentialOptions.NtHashEnvironment);
+            if (!string.IsNullOrWhiteSpace(ntHash) || !string.IsNullOrWhiteSpace(ntHashEnvironment))
             {
-                result.AddError("--kerberos cannot be combined with --nt-hash because pass-the-hash uses NTLMv2.");
+                if (!string.IsNullOrWhiteSpace(ntHash) && !string.IsNullOrWhiteSpace(ntHashEnvironment))
+                {
+                    return;
+                }
+
+                var resolvedNtHash = string.IsNullOrWhiteSpace(ntHashEnvironment)
+                    ? ntHash
+                    : Environment.GetEnvironmentVariable(ntHashEnvironment.Trim());
+                if (supportsNtHash &&
+                    CliWindowsCredential.IsValidNtHash(resolvedNtHash?.Trim()) &&
+                    string.IsNullOrWhiteSpace(result.GetValue(credentialOptions.Password)))
+                {
+                    result.AddError("--kerberos cannot be combined with --nt-hash because pass-the-hash uses NTLMv2.");
+                }
+
+                return;
+            }
+
+            if (result.GetValue(credentialOptions.Local))
+            {
+                result.AddError("--kerberos cannot be combined with --local because Kerberos requires an Active Directory account.");
             }
         });
     }
 
-    private static void AddCredentialValidators(Command command, WindowsCredentialOptions credentialOptions)
+    private static void AddCredentialValidators(
+        Command command,
+        WindowsCredentialOptions credentialOptions,
+        bool supportsNtHash)
     {
         command.Validators.Add(result =>
         {
             var username = result.GetValue(credentialOptions.UserName);
             var password = result.GetValue(credentialOptions.Password);
             var ntHash = result.GetValue(credentialOptions.NtHash);
+            var ntHashEnvironment = result.GetValue(credentialOptions.NtHashEnvironment);
             var domain = result.GetValue(credentialOptions.Domain);
             var useLocal = result.GetValue(credentialOptions.Local);
 
             var hasUsername = !string.IsNullOrWhiteSpace(username);
             var hasPassword = !string.IsNullOrWhiteSpace(password);
-            var hasNtHash = !string.IsNullOrWhiteSpace(ntHash);
+            var hasDirectNtHash = !string.IsNullOrWhiteSpace(ntHash);
+            var hasNtHashEnvironment = !string.IsNullOrWhiteSpace(ntHashEnvironment);
+            var hasNtHash = hasDirectNtHash || hasNtHashEnvironment;
             var hasDomain = !string.IsNullOrWhiteSpace(domain);
             var hasSecret = hasPassword || hasNtHash;
+
+            if (hasNtHash && !supportsNtHash)
+            {
+                result.AddError("--nt-hash is supported by targeted network host and subnet scans. Domain-wide discovery uses LDAP and requires a password, Kerberos ticket, or the current Windows identity.");
+                return;
+            }
+
+            if (hasDirectNtHash && hasNtHashEnvironment)
+            {
+                result.AddError("Use either --nt-hash or --nt-hash-env, not both.");
+                return;
+            }
+
+            var resolvedNtHash = hasNtHashEnvironment
+                ? Environment.GetEnvironmentVariable(ntHashEnvironment!.Trim())
+                : ntHash;
+            if (hasNtHashEnvironment && string.IsNullOrWhiteSpace(resolvedNtHash))
+            {
+                result.AddError($"The environment variable '{ntHashEnvironment!.Trim()}' is not set or is empty.");
+                return;
+            }
+
+            if (hasNtHash && !CliWindowsCredential.IsValidNtHash(resolvedNtHash!.Trim()))
+            {
+                result.AddError("The NT hash must be exactly 32 hexadecimal characters.");
+                return;
+            }
 
             if (hasPassword && hasNtHash)
             {
                 result.AddError("Use either --password or --nt-hash, not both.");
+                return;
             }
 
             if (hasUsername != hasSecret)
@@ -1034,12 +1084,20 @@ internal static class CliCommandFactory
                 result.AddError("Use either a qualified --username or --local, not both.");
             }
 
-            if (hasNtHash && CliWindowsCredential.IsValidNtHash(ntHash!.Trim()) && hasUsername && !useLocal && !hasDomain &&
+            if (hasNtHash && hasUsername && !useLocal && !hasDomain &&
                 !username!.Contains('\\', StringComparison.Ordinal) && !username.Contains('@', StringComparison.Ordinal))
             {
                 result.AddError("--nt-hash requires --domain, a qualified --username, or --local so the NTLM identity is unambiguous.");
             }
         });
+    }
+
+    private static string? ResolveNtHash(ParseResult result, WindowsCredentialOptions credentialOptions)
+    {
+        var environmentVariable = result.GetValue(credentialOptions.NtHashEnvironment);
+        return string.IsNullOrWhiteSpace(environmentVariable)
+            ? result.GetValue(credentialOptions.NtHash)
+            : Environment.GetEnvironmentVariable(environmentVariable.Trim());
     }
 
     private static Microsoft365CommandOptions CreateMicrosoft365Options()
@@ -1299,6 +1357,7 @@ internal static class CliCommandFactory
         Option<string> UserName,
         Option<string> Password,
         Option<string> NtHash,
+        Option<string> NtHashEnvironment,
         Option<string> Domain,
         Option<bool> Local);
 

@@ -9,6 +9,7 @@ using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.Connectors.Slack;
 using SMBLibrary;
 using System.DirectoryServices.Protocols;
+using System.Net;
 using System.Runtime.Versioning;
 using System.Text.Json;
 
@@ -976,6 +977,65 @@ public class CliNetworkScanTests
         Assert.Empty(parseResult.Errors);
     }
 
+    [Fact]
+    public void BuildRootCommand_NetworkAcceptsNtHashFromEnvironment()
+    {
+        const string variableName = "SIFT_TEST_NT_HASH";
+        Environment.SetEnvironmentVariable(variableName, "8846f7eaee8fb117ad06bdd830b7586c");
+        try
+        {
+            var rootCommand = Program.BuildRootCommand();
+
+            var parseResult = rootCommand.Parse([
+                "network", "--device", "10.0.0.10", "--username", "alice",
+                "--nt-hash-env", variableName, "--domain", "contoso"]);
+
+            Assert.Empty(parseResult.Errors);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, null);
+        }
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkRejectsDirectAndEnvironmentNtHash()
+    {
+        const string variableName = "SIFT_TEST_NT_HASH";
+        Environment.SetEnvironmentVariable(variableName, "8846f7eaee8fb117ad06bdd830b7586c");
+        try
+        {
+            var rootCommand = Program.BuildRootCommand();
+
+            var parseResult = rootCommand.Parse([
+                "network", "--device", "10.0.0.10", "--username", "alice",
+                "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c",
+                "--nt-hash-env", variableName, "--domain", "contoso", "--kerberos"]);
+
+            var error = Assert.Single(parseResult.Errors);
+            Assert.Contains("either --nt-hash or --nt-hash-env", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, null);
+        }
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkRejectsMissingNtHashEnvironmentVariable()
+    {
+        const string variableName = "SIFT_TEST_MISSING_NT_HASH";
+        Environment.SetEnvironmentVariable(variableName, null);
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "alice",
+            "--nt-hash-env", variableName, "--domain", "contoso"]);
+
+        var error = Assert.Single(parseResult.Errors);
+        Assert.Contains("is not set or is empty", error.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("not-a-hash")]
     [InlineData("8846f7eaee8fb117ad06bdd830b7586")]
@@ -999,7 +1059,8 @@ public class CliNetworkScanTests
             "network", "--device", "10.0.0.10", "--username", "alice", "--password", "secret",
             "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c"]);
 
-        Assert.Contains(parseResult.Errors, error => error.Message.Contains("either --password or --nt-hash", StringComparison.Ordinal));
+        var error = Assert.Single(parseResult.Errors);
+        Assert.Contains("either --password or --nt-hash", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1034,7 +1095,55 @@ public class CliNetworkScanTests
         var parseResult = rootCommand.Parse([
             "domain", "--username", "alice", "--nt-hash", "8846f7eaee8fb117ad06bdd830b7586c"]);
 
-        Assert.Contains(parseResult.Errors, error => error.Message.Contains("Domain-wide discovery uses LDAP", StringComparison.Ordinal));
+        var error = Assert.Single(parseResult.Errors);
+        Assert.Contains("Domain-wide discovery uses LDAP", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildRootCommand_NetworkReportsMalformedNtHashBeforeConflictingAuthenticationMode()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse([
+            "network", "--device", "10.0.0.10", "--username", "alice",
+            "--nt-hash", "not-a-hash", "--kerberos"]);
+
+        var error = Assert.Single(parseResult.Errors);
+        Assert.Contains("exactly 32 hexadecimal", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PtHDiscovery_FailsWhenTargetedDeviceHasNoReadableShares()
+    {
+        var target = new FileSystemScanTarget(FileSystemScanMode.Device, "10.0.0.10");
+        var discovery = new SmbKerberosDiscoveryResult([], [], 0, 0, 1, 1);
+
+        Assert.True(CliScanRunner.ShouldFailPtHDiscovery(target, discovery));
+    }
+
+    [Fact]
+    public void PtHDiscovery_FailsWhenSubnetOnlyContainsAuthenticationFailures()
+    {
+        var target = new FileSystemScanTarget(FileSystemScanMode.Subnet, "10.0.0.0/24");
+        var discovery = new SmbKerberosDiscoveryResult([], [], 0, 3, 254, 0);
+
+        Assert.True(CliScanRunner.ShouldFailPtHDiscovery(target, discovery));
+    }
+
+    [Fact]
+    public void PtHDiscovery_IsPartialWhenSomeTargetsAuthenticateAndOthersRejectTheHash()
+    {
+        var connection = new SmbKerberosConnection(
+            IPAddress.Loopback,
+            "host.contoso.test",
+            "CONTOSO",
+            null,
+            SmbAuthenticationProtocol.Ntlm,
+            IsKerberosReady: true);
+        var drive = new SmbKerberosDrive(connection, "Shared", null, null);
+        var discovery = new SmbKerberosDiscoveryResult([drive], [], 0, 2, 3, 1);
+
+        Assert.True(CliScanRunner.ShouldMarkPtHDiscoveryPartial(discovery));
     }
 
     [Fact]
@@ -1132,6 +1241,22 @@ public class CliNetworkScanTests
         Assert.Null(credential.Password);
         Assert.Equal("8846F7EAEE8FB117AD06BDD830B7586C", Convert.ToHexString(credential.NtHash!));
         Assert.Throws<InvalidOperationException>(credential.ToNetworkCredential);
+    }
+
+    [Fact]
+    public void CliWindowsCredential_DisposeClearsNtHashBytes()
+    {
+        var credential = CliWindowsCredential.Create(
+            "alice",
+            password: null,
+            domain: "contoso",
+            preferDomainAccount: true,
+            ntHash: "8846f7eaee8fb117ad06bdd830b7586c")!;
+        var hashBytes = credential.NtHash!;
+
+        credential.Dispose();
+
+        Assert.All(hashBytes, value => Assert.Equal(0, value));
     }
 
     [Fact]

@@ -43,6 +43,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         var warnings = new ConcurrentBag<string>();
         var ntlmFallbackHosts = 0;
         var authenticationFailures = 0;
+        var authenticatedHosts = 0;
 
         await Parallel.ForEachAsync(
             hostTargets,
@@ -65,7 +66,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                             warnings,
                             shouldPruneDirectory,
                             onCurrentPath,
-                            token);
+                            token,
+                            () => Interlocked.Increment(ref authenticatedHosts));
                         return;
                     }
 
@@ -111,7 +113,9 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             drives.OrderBy(drive => drive.Name, StringComparer.OrdinalIgnoreCase).ToArray(),
             warnings.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
             ntlmFallbackHosts,
-            authenticationFailures);
+            authenticationFailures,
+            hostTargets.Count,
+            authenticatedHosts);
     }
 
     private static void DiscoverHostDrives(
@@ -121,9 +125,11 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         ConcurrentBag<string> warnings,
         Func<string, bool>? shouldPruneDirectory,
         Action<string>? onCurrentPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? onAuthenticated = null)
     {
         using var session = SmbKerberosSession.Connect(connection);
+        onAuthenticated?.Invoke();
         var shareNames = session.Client.ListShares(out var listStatus);
         if (listStatus != NTStatus.STATUS_SUCCESS)
         {
@@ -360,7 +366,9 @@ internal sealed record SmbKerberosDiscoveryResult(
     IReadOnlyList<IRemoteDrive> Drives,
     IReadOnlyList<string> Warnings,
     int NtlmFallbackHostCount,
-    int AuthenticationFailureCount);
+    int AuthenticationFailureCount,
+    int TargetHostCount,
+    int AuthenticatedHostCount);
 
 internal enum SmbAuthenticationProtocol
 {
