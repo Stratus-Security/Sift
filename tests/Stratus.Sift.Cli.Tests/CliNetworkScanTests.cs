@@ -974,7 +974,7 @@ public class CliNetworkScanTests
 
     [Theory]
     [InlineData("IPC$", 0u, false)]
-    [InlineData("ADMIN$", 0x80000000u, false)]
+    [InlineData("ADMIN$", 0x80000000u, true)]
     [InlineData("print$", 0u, false)]
     [InlineData("C$", 0x80000000u, true)]
     [InlineData("Shared", 0u, true)]
@@ -984,6 +984,22 @@ public class CliNetworkScanTests
         var actual = SmbDiscoveryService.IsCandidateShare(shareName, shareType);
 
         Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void SelectSharesForCoverage_UsesAdminShareWhenCDriveIsUnavailable()
+    {
+        var selected = SmbDiscoveryService.SelectSharesForCoverage(["ADMIN$", "Shared"]);
+
+        Assert.Equal(["ADMIN$", "Shared"], selected);
+    }
+
+    [Fact]
+    public void SelectSharesForCoverage_SuppressesAdminShareWhenCDriveIsReadable()
+    {
+        var selected = SmbDiscoveryService.SelectSharesForCoverage(["ADMIN$", "C$", "Shared"]);
+
+        Assert.Equal(["C$", "Shared"], selected);
     }
 
     [Fact]

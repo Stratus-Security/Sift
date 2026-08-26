@@ -133,13 +133,14 @@ internal sealed partial class SmbDiscoveryService
                             continue;
                         }
 
-                        foreach (var share in EnumerateShares(connectionHost.UncHost))
+                        var readableShares = EnumerateShares(connectionHost.UncHost)
+                            .Where(share => IsAccessibleDirectory($@"\\{connectionHost.UncHost}\{share}"))
+                            .ToArray();
+
+                        foreach (var share in SelectSharesForCoverage(readableShares))
                         {
                             var root = $@"\\{connectionHost.UncHost}\{share}";
-                            if (IsAccessibleDirectory(root))
-                            {
-                                discoveredRoots.TryAdd(root, 0);
-                            }
+                            discoveredRoots.TryAdd(root, 0);
                         }
                     }
                 }
@@ -262,8 +263,24 @@ internal sealed partial class SmbDiscoveryService
         }
 
         return !shareName.Equals("IPC$", StringComparison.OrdinalIgnoreCase)
-            && !shareName.Equals("print$", StringComparison.OrdinalIgnoreCase)
-            && !shareName.Equals("ADMIN$", StringComparison.OrdinalIgnoreCase);
+            && !shareName.Equals("print$", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static IReadOnlyList<string> SelectSharesForCoverage(IEnumerable<string> readableShares)
+    {
+        var shares = readableShares
+            .Where(share => !string.IsNullOrWhiteSpace(share))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // ADMIN$ maps to the Windows directory and is already covered by C$ on
+        // the normal system drive. Keep it as a fallback when C$ is not readable.
+        if (shares.Contains("C$", StringComparer.OrdinalIgnoreCase))
+        {
+            shares.RemoveAll(share => share.Equals("ADMIN$", StringComparison.OrdinalIgnoreCase));
+        }
+
+        return shares;
     }
 
     [SupportedOSPlatform("windows")]

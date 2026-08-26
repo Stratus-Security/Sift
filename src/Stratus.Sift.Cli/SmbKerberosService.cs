@@ -111,6 +111,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             throw new InvalidOperationException($"share enumeration failed with {FormatStatus(listStatus)}");
         }
 
+        var readableShares = new List<string>();
         foreach (var shareName in shareNames
                      .Where(name => SmbDiscoveryService.IsCandidateShare(name, 0))
                      .Where(name => hostTarget.Share is null || name.Equals(hostTarget.Share, StringComparison.OrdinalIgnoreCase))
@@ -127,6 +128,14 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 continue;
             }
 
+            readableShares.Add(shareName);
+        }
+
+        var selectedShares = hostTarget.Share is null
+            ? SmbDiscoveryService.SelectSharesForCoverage(readableShares)
+            : readableShares;
+        foreach (var shareName in selectedShares)
+        {
             drives.Add(new SmbKerberosDrive(connection, shareName, shouldPruneDirectory, onCurrentPath));
         }
     }

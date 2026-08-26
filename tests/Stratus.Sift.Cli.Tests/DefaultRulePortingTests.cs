@@ -697,6 +697,20 @@ public class DefaultRulePortingTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultConfiguration_ShouldScanAdminShareWhenSelectedForCoverage()
+    {
+        var (_, _, ignoreRules) = await LoadDefaultConfigurationWithIgnoreRulesAsync();
+
+        var matchedRules = IgnoreRuleEvaluator.GetMatchedRules(@"\\server\ADMIN$\System32\config.txt", ignoreRules);
+
+        Assert.DoesNotContain(matchedRules, rule => rule.MatchTarget == RuleTarget.ShareName && rule.Pattern == "ADMIN$");
+        Assert.Contains(ignoreRules, rule =>
+            rule.MatchTarget == RuleTarget.ShareName
+            && rule.Pattern == "ADMIN$"
+            && !rule.IsEnabled);
+    }
+
+    [Fact]
     public async Task DefaultConfiguration_ShouldDetectGenericSecretAssignment()
     {
         var scanner = CreateScanner();
