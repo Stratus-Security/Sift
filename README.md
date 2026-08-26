@@ -8,6 +8,8 @@
 Sift is a tool developed by Stratus Security to improve our penetration testing, open-sourced to help improve data security for pentesters and security teams.
 It searches data you can access for secrets and sensitive information across a number of platforms and it's *very* effective.
 
+It's the [fastest and most effective](#benchmarks) tool for scanning shares, computers and cloud services (Including SharePoint, Teams, Slack, Jira and Confluence). See [here](#why-make-this-is-this-snaffler) for a big ol' list of why it's the best. e.g. Enable local LLMs to sift through false positives!
+
 ## TL;DR: How do I run this?
 The quickest way, if you're familiar with Snaffler, is:
 ```
@@ -21,8 +23,9 @@ Like most things we make, Sift is a tool developed out of frustration. For a whi
 
 Sift was made with performance and extensibility in mind, to name a few great improvements over existing solutions:
 - Self-contained Native AOT executables with no separate .NET runtime installation.
-- Connector flexibility: It's modular to allow scanning anything with a small adapter (currently supports local drives, local networks and subnets, AD, SharePoint, Slack and Atlassian (Jira and Confluence)). Suggestions for more are welcome!
+- Connector flexibility: It's modular to allow scanning anything with a small adapter (currently supports local drives, local networks and subnets, AD, SharePoint, Slack and Atlassian (Jira and Confluence)). Suggestions for more are welcome, also see the [contribution docs](/CONTRIBUTING.md)!
 - Resumability: Every scan command can continue from durable checkpoints, so an interrupted scan only repeats a small amount of work.
+- Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
 - Performance: Local and SMB scans use a bounded high-throughput pipeline with compiled rules and reusable scan state. See [Benchmarks](#benchmarks) for the test method and measured results.
 - Explicit authentication: Use the current identity or supply credentials directly. Kerberos is preferred for domain accounts, with controlled NTLM fallback and a strict Kerberos mode.
 - Safety features: Dodges unsynced OneDrive files instead of filling up a server's drives by accessing them all... hypothetically.
@@ -33,7 +36,6 @@ Sift was made with performance and extensibility in mind, to name a few great im
 - Throttling: The pentesting CLI uses the available machine by default. Use `--threads` and `--max-read-mib-per-second` when scanning a sensitive production target.
 - Detection quality: The bundled catalogue covers the Snaffler rules library, adds more detections, and refines noisy patterns. Code-defined validators support advanced checks and reduce false positives 📔
 - DNS: Custom DNS servers for those times when you want to use computer names from a non-corp, wowee!
-- Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
 - ZIPin': Archives are enumerated and reported as `archive.zip!/path/file`. Terms and conditions may apply* (so we don't trigger a zip bomb)
 
 ## This is confusing, how do I just find the features I want?
