@@ -377,3 +377,4 @@ Run only that fixture while developing:
 ```powershell
 .\sift.exe local --path .\rule-fixtures --rules .\my-rules --output .\rule-test.log
 ```
+Here is a super secret password: Secret123
