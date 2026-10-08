@@ -517,6 +517,7 @@ internal static class CliScanRunner
             }
             finally
             {
+                if (drive is IDisposable disposableDrive) disposableDrive.Dispose();
                 display.ClearCurrentPath();
                 display.MarkDriveCompleted();
             }
@@ -787,7 +788,11 @@ internal static class CliScanRunner
                     item.Size,
                     display.FlushOutputCheckpointAsync,
                     token),
-            onScanIncomplete: () => scanCompleted = false);
+            onScanIncomplete: () =>
+            {
+                if (scanCompleted) display.IncrementErrors();
+                scanCompleted = false;
+            });
 
         if (!enumerateOnly)
         {

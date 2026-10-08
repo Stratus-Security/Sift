@@ -95,6 +95,48 @@ public sealed class SmbAccessHandlingTests
     }
 
     [Fact]
+    public async Task ScanDriveChangesAsync_LeavesTransientSmbFailurePending()
+    {
+        var logger = new RecordingLogger<RemoteDriveScanner>();
+        var scanner = CreateScanner(logger, out var optimizer, out var policyMap);
+        var scanned = 0;
+        var markedCompleted = false;
+        var incomplete = false;
+
+        await scanner.ScanDriveChangesAsync(
+            new SingleFileDrive(new ThrowingRemoteFile(
+                "metadata.json",
+                @"\\server\C$\metadata.json",
+                _ => throw new RemoteContentUnavailableException("SMB session setup timed out", shouldRetry: true))),
+            deltaToken: null,
+            optimizer,
+            policyMap,
+            ignoreRules: [],
+            new ScanOptions(),
+            onIssueFound: _ => Task.CompletedTask,
+            onCheckpointToken: null,
+            onNewDeltaToken: _ => Task.CompletedTask,
+            onFilesDiscovered: null,
+            onFilesScanned: count => scanned += count,
+            onQueueDepth: null,
+            onCurrentPath: null,
+            ensureScanActive: null,
+            cancellationToken: CancellationToken.None,
+            onItemProcessed: (_, _) =>
+            {
+                markedCompleted = true;
+                return ValueTask.CompletedTask;
+            },
+            onScanIncomplete: () => incomplete = true);
+
+        Assert.Equal(0, scanned);
+        Assert.False(markedCompleted);
+        Assert.True(incomplete);
+        Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Warning
+            && entry.Message.Contains("Deferring file scan", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ScanDriveChangesAsync_PropagatesRequestedCancellationWithoutLoggingFailure()
     {
         using var cancellation = new CancellationTokenSource();
@@ -169,7 +211,7 @@ public sealed class SmbAccessHandlingTests
                 {
                     Target = RuleTarget.Content,
                     Patterns = ["secret"],
-                    IncludedExtensions = [".txt", ".log", ".inf"]
+                    IncludedExtensions = [".txt", ".log", ".inf", ".json"]
                 }
             ]
         };

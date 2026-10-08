@@ -437,6 +437,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 message,
                 shouldRetry: false,
                 isExpected: true),
+            _ when SmbTransientRetry.IsTransientStatus(status) => new SmbOperationException(status, message),
             _ => new IOException(message)
         };
     }
@@ -474,8 +475,10 @@ internal sealed class SmbKerberosDrive(
     SmbKerberosConnection connection,
     string shareName,
     Func<string, bool>? shouldPruneDirectory,
-    Action<string>? onCurrentPath) : IRemoteDrive
+    Action<string>? onCurrentPath) : IRemoteDrive, IDisposable
 {
+    private readonly SmbKerberosSessionPool _contentSessions = new(connection, shareName);
+
     public string Id => $"{connection.KerberosHostName}/{shareName}";
     public string Name => $@"\\{connection.DisplayHost}\{shareName}";
     public string ConnectionId => $"smb-{connection.AuthenticationProtocol.ToString().ToLowerInvariant()}://{connection.KerberosHostName}/{Uri.EscapeDataString(shareName)}";
@@ -545,7 +548,7 @@ internal sealed class SmbKerberosDrive(
                     : $@"{directory}\{entry.FileName}";
                 var isDirectory = (entry.FileAttributes & FileAttributes.Directory) != 0;
                 var isReparsePoint = (entry.FileAttributes & FileAttributes.ReparsePoint) != 0;
-                var item = new SmbKerberosRemoteFile(connection, shareName, relativePath, entry, isDirectory);
+                var item = new SmbKerberosRemoteFile(connection, shareName, relativePath, entry, isDirectory, _contentSessions);
                 await onChange(item);
 
                 if (isDirectory
@@ -610,6 +613,8 @@ internal sealed class SmbKerberosDrive(
             return null;
         }
     }
+
+    public void Dispose() => _contentSessions.Dispose();
 }
 
 internal sealed class SmbKerberosRemoteFile(
@@ -617,7 +622,8 @@ internal sealed class SmbKerberosRemoteFile(
     string shareName,
     string relativePath,
     FileDirectoryInformation information,
-    bool isDirectory) : IRemoteFile
+    bool isDirectory,
+    SmbKerberosSessionPool contentSessions) : IRemoteFile
 {
     private readonly string _uncPath = $@"\\{connection.DisplayHost}\{shareName}\{relativePath}";
 
@@ -632,18 +638,19 @@ internal sealed class SmbKerberosRemoteFile(
     public bool IsLink => false;
     public bool IsExternal => false;
 
-    public Task<Stream?> GetContentAsync(CancellationToken cancellationToken = default)
+    public async Task<Stream?> GetContentAsync(CancellationToken cancellationToken = default)
     {
         if (IsDirectory)
         {
-            return Task.FromResult<Stream?>(null);
+            return null;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult<Stream?>(SmbKerberosReadStream.Open(connection, shareName, relativePath, 0, Size));
+        return await SmbKerberosReadStream.OpenAsync(contentSessions, relativePath, 0, Size, cancellationToken)
+            .ConfigureAwait(false);
     }
 
-    public Task<Stream?> GetContentRangeAsync(long start, long end, CancellationToken cancellationToken = default)
+    public async Task<Stream?> GetContentRangeAsync(long start, long end, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(start);
         if (end < start)
@@ -653,12 +660,13 @@ internal sealed class SmbKerberosRemoteFile(
 
         if (IsDirectory)
         {
-            return Task.FromResult<Stream?>(null);
+            return null;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
         var available = Size.HasValue ? Math.Max(0, Math.Min(end, Size.Value - 1) - start + 1) : end - start + 1;
-        return Task.FromResult<Stream?>(SmbKerberosReadStream.Open(connection, shareName, relativePath, start, available));
+        return await SmbKerberosReadStream.OpenAsync(contentSessions, relativePath, start, available, cancellationToken)
+            .ConfigureAwait(false);
     }
 }
 
@@ -680,7 +688,8 @@ internal sealed class SmbKerberosSession : IDisposable
         var client = new SMB2Client(SmbKerberosService.ResponseTimeoutMs);
         if (!client.Connect(connection.Address, SMBTransportType.DirectTCPTransport))
         {
-            throw new InvalidOperationException($"SMB negotiation failed for {connection.Address}:445.");
+            try { client.Disconnect(); } catch { }
+            throw new SmbConnectionException($"SMB negotiation failed for {connection.Address}:445.");
         }
 
         var credential = connection.Credential;
@@ -794,7 +803,10 @@ internal sealed class SmbKerberosSession : IDisposable
         var store = Client.TreeConnect(shareName, out var status);
         if (status != NTStatus.STATUS_SUCCESS || store == null)
         {
-            throw new InvalidOperationException($"Could not connect to share '{shareName}': {SmbKerberosService.FormatStatus(status)}.");
+            var message = $"Could not connect to share '{shareName}': {SmbKerberosService.FormatStatus(status)}.";
+            throw SmbTransientRetry.IsTransientStatus(status)
+                ? new SmbOperationException(status, message)
+                : new IOException(message);
         }
 
         return new SmbKerberosStore(store);
@@ -804,6 +816,12 @@ internal sealed class SmbKerberosSession : IDisposable
     {
         if (_disposed) return;
         try { Client.Logoff(); } catch { }
+        Abort();
+    }
+
+    internal void Abort()
+    {
+        if (_disposed) return;
         try { Client.Disconnect(); } catch { }
         (_authentication as IDisposable)?.Dispose();
         _disposed = true;
@@ -875,70 +893,261 @@ internal sealed class SmbKerberosStore(ISMBFileStore store) : IDisposable
     }
 }
 
-internal sealed class SmbKerberosReadStream : Stream
+internal sealed class SmbConnectionException(string message) : IOException(message);
+
+internal sealed class SmbOperationException(NTStatus status, string message) : IOException(message)
+{
+    internal NTStatus Status { get; } = status;
+}
+
+internal static class SmbTransientRetry
+{
+    private const int MaxAttempts = 4;
+
+    internal static bool IsTransientStatus(NTStatus status) => status is
+        NTStatus.STATUS_INVALID_SMB or
+        NTStatus.STATUS_IO_TIMEOUT or
+        NTStatus.STATUS_NETWORK_NAME_DELETED or
+        NTStatus.STATUS_USER_SESSION_DELETED or
+        NTStatus.STATUS_TOO_MANY_SESSIONS or
+        NTStatus.STATUS_INSUFF_SERVER_RESOURCES;
+
+    internal static bool IsTransient(Exception exception) => exception switch
+    {
+        SmbAuthenticationException authentication => authentication.SecurityStatus == null
+            && IsTransientStatus(authentication.Status),
+        SmbOperationException operation => IsTransientStatus(operation.Status),
+        SmbConnectionException => true,
+        SocketException => true,
+        TimeoutException => true,
+        IOException { InnerException: SocketException or TimeoutException } => true,
+        _ => false
+    };
+
+    internal static async Task<T> RunAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        string description,
+        CancellationToken cancellationToken,
+        Func<int, TimeSpan>? retryDelay = null)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return await operation(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (IsTransient(exception) && !cancellationToken.IsCancellationRequested)
+            {
+                if (attempt == MaxAttempts)
+                {
+                    throw new RemoteContentUnavailableException(
+                        $"{description} failed after {MaxAttempts} attempts: {exception.Message}",
+                        shouldRetry: true,
+                        innerException: exception);
+                }
+
+                var delay = retryDelay?.Invoke(attempt)
+                    ?? TimeSpan.FromMilliseconds(1000 * (1 << (attempt - 1)) + Random.Shared.Next(0, 500));
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+}
+
+// SMBLibrary clients and tree connections are used by one file at a time. Reuse
+// authenticated sessions across files, with a small cap per share so a fast scan
+// does not create dozens of concurrent Kerberos sessions against one server.
+internal sealed class SmbKerberosSessionPool(SmbKerberosConnection connection, string shareName) : IDisposable
+{
+    internal const int MaxSessions = 8;
+    private readonly SemaphoreSlim _slots = new(MaxSessions, MaxSessions);
+    private readonly Stack<SmbKerberosShareSession> _idle = new();
+    private readonly object _sync = new();
+    private bool _disposed;
+
+    internal async ValueTask<SmbKerberosShareSession> RentAsync(CancellationToken cancellationToken)
+    {
+        await _slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            while (true)
+            {
+                SmbKerberosShareSession? idle;
+                lock (_sync)
+                {
+                    ObjectDisposedException.ThrowIf(_disposed, this);
+                    idle = _idle.Count > 0 ? _idle.Pop() : null;
+                }
+
+                if (idle == null) break;
+                if (idle.IsConnected)
+                {
+                    return idle;
+                }
+
+                idle.Abort();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var created = SmbKerberosShareSession.Connect(connection, shareName);
+            lock (_sync)
+            {
+                if (!_disposed) return created;
+            }
+            created.Abort();
+            throw new ObjectDisposedException(nameof(SmbKerberosSessionPool));
+        }
+        catch
+        {
+            _slots.Release();
+            throw;
+        }
+    }
+
+    internal void Return(SmbKerberosShareSession session, bool reusable)
+    {
+        try
+        {
+            var retained = false;
+            lock (_sync)
+            {
+                if (reusable && !_disposed && session.IsConnected)
+                {
+                    _idle.Push(session);
+                    retained = true;
+                }
+            }
+            if (!retained) session.Abort();
+        }
+        finally
+        {
+            _slots.Release();
+        }
+    }
+
+    public void Dispose()
+    {
+        SmbKerberosShareSession[] idle;
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            idle = _idle.ToArray();
+            _idle.Clear();
+        }
+        foreach (var session in idle) session.Dispose();
+    }
+}
+
+internal sealed class SmbKerberosShareSession : IDisposable
 {
     private readonly SmbKerberosSession _session;
-    private readonly SmbKerberosStore _store;
+    internal SmbKerberosStore Store { get; }
+    internal bool IsConnected => _session.Client.IsConnected;
+
+    private SmbKerberosShareSession(SmbKerberosSession session, SmbKerberosStore store)
+    {
+        _session = session;
+        Store = store;
+    }
+
+    internal static SmbKerberosShareSession Connect(SmbKerberosConnection connection, string shareName)
+    {
+        var session = SmbKerberosSession.Connect(connection);
+        try
+        {
+            return new SmbKerberosShareSession(session, session.ConnectShare(shareName));
+        }
+        catch (Exception exception)
+        {
+            if (SmbTransientRetry.IsTransient(exception)) session.Abort();
+            else session.Dispose();
+            throw;
+        }
+    }
+
+    internal void Abort() => _session.Abort();
+
+    public void Dispose()
+    {
+        Store.Dispose();
+        _session.Dispose();
+    }
+}
+
+internal sealed class SmbKerberosReadStream : Stream
+{
+    private readonly SmbKerberosSessionPool _pool;
+    private readonly SmbKerberosShareSession _shareSession;
     private readonly object _handle;
     private readonly long? _length;
     private long _remoteOffset;
     private long _position;
     private long? _remaining;
     private bool _disposed;
+    private bool _reusable = true;
 
     private SmbKerberosReadStream(
-        SmbKerberosSession session,
-        SmbKerberosStore store,
+        SmbKerberosSessionPool pool,
+        SmbKerberosShareSession shareSession,
         object handle,
         long start,
         long? length)
     {
-        _session = session;
-        _store = store;
+        _pool = pool;
+        _shareSession = shareSession;
         _handle = handle;
         _remoteOffset = start;
         _length = length;
         _remaining = length;
     }
 
-    internal static SmbKerberosReadStream Open(
-        SmbKerberosConnection connection,
-        string shareName,
+    internal static Task<SmbKerberosReadStream> OpenAsync(
+        SmbKerberosSessionPool pool,
         string path,
         long start,
-        long? length)
-    {
-        var session = SmbKerberosSession.Connect(connection);
-        SmbKerberosStore? store = null;
-        object? handle = null;
-        try
+        long? length,
+        CancellationToken cancellationToken)
+        => SmbTransientRetry.RunAsync(async token =>
         {
-            store = session.ConnectShare(shareName);
-            var status = store.Inner.CreateFile(
-                out handle,
-                out _,
-                path,
-                AccessMask.GENERIC_READ | AccessMask.SYNCHRONIZE,
-                FileAttributes.Normal,
-                ShareAccess.Read | ShareAccess.Write | ShareAccess.Delete,
-                CreateDisposition.FILE_OPEN,
-                CreateOptions.FILE_SYNCHRONOUS_IO_NONALERT | CreateOptions.FILE_NON_DIRECTORY_FILE | CreateOptions.FILE_SEQUENTIAL_ONLY,
-                null);
-            if (status != NTStatus.STATUS_SUCCESS || handle == null)
+            var shareSession = await pool.RentAsync(token).ConfigureAwait(false);
+            object? handle = null;
+            try
             {
-                throw SmbKerberosService.CreateFileOpenException(path, status);
-            }
+                token.ThrowIfCancellationRequested();
+                var status = shareSession.Store.Inner.CreateFile(
+                    out handle,
+                    out _,
+                    path,
+                    AccessMask.GENERIC_READ | AccessMask.SYNCHRONIZE,
+                    FileAttributes.Normal,
+                    ShareAccess.Read | ShareAccess.Write | ShareAccess.Delete,
+                    CreateDisposition.FILE_OPEN,
+                    CreateOptions.FILE_SYNCHRONOUS_IO_NONALERT | CreateOptions.FILE_NON_DIRECTORY_FILE | CreateOptions.FILE_SEQUENTIAL_ONLY,
+                    null);
+                if (status != NTStatus.STATUS_SUCCESS || handle == null)
+                {
+                    throw SmbKerberosService.CreateFileOpenException(path, status);
+                }
 
-            return new SmbKerberosReadStream(session, store, handle, start, length);
-        }
-        catch
-        {
-            if (handle != null) try { store?.Inner.CloseFile(handle); } catch { }
-            store?.Dispose();
-            session.Dispose();
-            throw;
-        }
-    }
+                return new SmbKerberosReadStream(pool, shareSession, handle, start, length);
+            }
+            catch (Exception exception)
+            {
+                var reusable = !SmbTransientRetry.IsTransient(exception);
+                if (reusable && handle != null)
+                {
+                    try
+                    {
+                        reusable &= shareSession.Store.Inner.CloseFile(handle) == NTStatus.STATUS_SUCCESS;
+                    }
+                    catch { reusable = false; }
+                }
+                pool.Return(shareSession, reusable);
+                throw;
+            }
+        }, $"Opening remote SMB file '{path}'", cancellationToken);
 
     public override bool CanRead => !_disposed;
     public override bool CanSeek => false;
@@ -956,29 +1165,42 @@ internal sealed class SmbKerberosReadStream : Stream
             return 0;
         }
 
-        var requested = Math.Min(buffer.Length, checked((int)Math.Min(_store.Inner.MaxReadSize, int.MaxValue)));
+        var requested = Math.Min(buffer.Length, checked((int)Math.Min(_shareSession.Store.Inner.MaxReadSize, int.MaxValue)));
         if (_remaining.HasValue)
         {
             requested = checked((int)Math.Min(requested, _remaining.Value));
         }
 
-        var status = _store.Inner.ReadFile(out var data, _handle, _remoteOffset, requested);
-        if (status == NTStatus.STATUS_END_OF_FILE || data.Length == 0)
+        try
         {
-            return 0;
-        }
+            var status = _shareSession.Store.Inner.ReadFile(out var data, _handle, _remoteOffset, requested);
+            if (status == NTStatus.STATUS_END_OF_FILE) return 0;
+            if (status != NTStatus.STATUS_SUCCESS)
+            {
+                throw new SmbOperationException(status, $"Remote SMB read failed: {SmbKerberosService.FormatStatus(status)}.");
+            }
 
-        if (status != NTStatus.STATUS_SUCCESS)
+            if (data.Length == 0) return 0;
+            var read = Math.Min(data.Length, requested);
+            data.AsSpan(0, read).CopyTo(buffer);
+            _remoteOffset += read;
+            _position += read;
+            if (_remaining.HasValue) _remaining -= read;
+            return read;
+        }
+        catch (Exception exception) when (SmbTransientRetry.IsTransient(exception))
         {
-            throw new IOException($"Remote SMB read failed: {SmbKerberosService.FormatStatus(status)}.");
+            _reusable = false;
+            throw new RemoteContentUnavailableException(
+                $"Remote SMB read failed at offset {_remoteOffset}: {exception.Message}",
+                shouldRetry: true,
+                innerException: exception);
         }
-
-        var read = Math.Min(data.Length, requested);
-        data.AsSpan(0, read).CopyTo(buffer);
-        _remoteOffset += read;
-        _position += read;
-        if (_remaining.HasValue) _remaining -= read;
-        return read;
+        catch
+        {
+            _reusable = false;
+            throw;
+        }
     }
 
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
@@ -996,10 +1218,19 @@ internal sealed class SmbKerberosReadStream : Stream
     {
         if (disposing && !_disposed)
         {
-            try { _store.Inner.CloseFile(_handle); } catch { }
-            _store.Dispose();
-            _session.Dispose();
             _disposed = true;
+            if (_reusable)
+            {
+                try
+                {
+                    if (_shareSession.Store.Inner.CloseFile(_handle) != NTStatus.STATUS_SUCCESS)
+                    {
+                        _reusable = false;
+                    }
+                }
+                catch { _reusable = false; }
+            }
+            _pool.Return(_shareSession, _reusable);
         }
 
         base.Dispose(disposing);

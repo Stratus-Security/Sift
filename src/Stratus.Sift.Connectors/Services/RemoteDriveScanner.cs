@@ -287,6 +287,15 @@ public class RemoteDriveScanner
             ExceptionDispatchInfo.Capture(producerException).Throw();
         }
 
+        var deferredCount = Interlocked.Read(ref deferredContentItems);
+        if (deferredCount > 0)
+        {
+            onScanIncomplete?.Invoke();
+            _logger.LogWarning(
+                "{DeferredCount} file scan(s) were deferred after transient content failures; they will remain eligible for a resumed scan.",
+                deferredCount);
+        }
+
         if (!string.IsNullOrEmpty(newDeltaToken))
         {
             if (Interlocked.Read(ref deferredContentItems) > 0)
@@ -447,10 +456,11 @@ public class RemoteDriveScanner
         if (exception.ShouldRetry)
         {
             _logger.LogWarning(
-                exception,
-                "Deferring file scan for {ItemPath} because content download will be retried before advancing the delta token.{StatusSuffix}",
+                "Deferring file scan for {ItemPath}: {Reason}{StatusSuffix}",
                 item.Path,
+                exception.Message,
                 statusSuffix);
+            _logger.LogDebug(exception, "Transient content failure for {ItemPath}", item.Path);
             return RemoteScanOutcome.DeferredRetry;
         }
 
