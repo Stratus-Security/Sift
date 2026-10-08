@@ -15,7 +15,8 @@ internal sealed partial class ActiveDirectoryLdapDiscovery(CliDnsResolver dnsRes
     private const uint DsDirectoryServiceRequired = 0x00000010;
     private const uint DsIpRequired = 0x00000200;
     private const uint DsReturnDnsName = 0x40000000;
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DomainControllerLookupTimeout = TimeSpan.FromSeconds(60);
 
     internal const string EnabledComputerFilter =
         "(&(objectCategory=computer)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))";
@@ -26,7 +27,8 @@ internal sealed partial class ActiveDirectoryLdapDiscovery(CliDnsResolver dnsRes
         CliWindowsCredential? credential,
         bool strictKerberos,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -34,7 +36,24 @@ internal sealed partial class ActiveDirectoryLdapDiscovery(CliDnsResolver dnsRes
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var domainController = ResolveDomainController(requestedDomainController, credential);
+        progress?.FindingDomainController();
+        var lookup = Task.Run(() => ResolveDomainController(requestedDomainController, credential));
+        string domainController;
+        try
+        {
+            domainController = await lookup.WaitAsync(DomainControllerLookupTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException ex)
+        {
+            ObserveFault(lookup);
+            throw new TimeoutException(
+                $"Domain-controller discovery exceeded {DomainControllerLookupTimeout.TotalSeconds:N0} seconds. Use --domain-controller to specify a known controller.", ex);
+        }
+        catch (OperationCanceledException)
+        {
+            ObserveFault(lookup);
+            throw;
+        }
 
         try
         {
@@ -56,6 +75,7 @@ internal sealed partial class ActiveDirectoryLdapDiscovery(CliDnsResolver dnsRes
             }
 
             ValidateAuthenticationTarget(authenticationHostName, strictKerberos);
+            progress?.FindingComputers();
             using var connection = CreateConnection(connectionTarget, authenticationHostName, credential, strictKerberos);
             var rootDse = await SendSearchAsync(
                 connection,
@@ -97,6 +117,7 @@ internal sealed partial class ActiveDirectoryLdapDiscovery(CliDnsResolver dnsRes
                         hosts.Add(host.Trim().TrimEnd('.'));
                     }
                 }
+                progress?.ComputersFound(hosts.Count);
 
                 cookie = ReadPageCookie(response);
                 if (cookie.Length == 0)

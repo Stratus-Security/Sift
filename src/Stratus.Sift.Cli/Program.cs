@@ -87,6 +87,7 @@ public class Program
         builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.ContextualIdentifierValidator>();
         builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.EnvironmentSecretAssignmentValidator>();
         builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.PowerShellCredentialUsageValidator>();
+        builder.Services.AddSingleton<IValidator, Stratus.Sift.Scanner.Validators.CommandCredentialUsageValidator>();
         builder.Services.AddSingleton<ValidatorFactory>();
 
         builder.Services.AddHttpClient();

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Runtime.Versioning;
 using System.Text;
 using SMBLibrary;
@@ -16,7 +17,8 @@ namespace Stratus.Sift.Cli;
 internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, CliDnsResolver dnsResolver)
 {
     private const int HostParallelism = 16;
-    internal const int ConnectionTimeoutMs = 5_000;
+    internal const int ResponseTimeoutMs = 30_000;
+    private static readonly TimeSpan TcpConnectTimeout = TimeSpan.FromSeconds(10);
 
     internal async Task<SmbKerberosDiscoveryResult> DiscoverDrivesAsync(
         FileSystemScanTarget target,
@@ -25,7 +27,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         IPAddress? dnsServer,
         Func<string, bool>? shouldPruneDirectory,
         Action<string>? onCurrentPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress = null)
     {
         if (credential?.IsLocalMachineAccount == true && !credential.UsesNtHash)
         {
@@ -38,12 +41,14 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             credential,
             strictKerberos: !allowNtlmFallback,
             dnsServer,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, progress).ConfigureAwait(false);
+        progress?.FindingShares(hostTargets.Count);
         var drives = new ConcurrentBag<IRemoteDrive>();
         var warnings = new ConcurrentBag<string>();
         var ntlmFallbackHosts = 0;
         var authenticationFailures = 0;
         var authenticatedHosts = 0;
+        var timedOutHosts = 0;
 
         await Parallel.ForEachAsync(
             hostTargets,
@@ -54,59 +59,53 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             },
             async (hostTarget, token) =>
             {
+                progress?.ServerStarted();
+                var failed = false;
                 try
                 {
                     var connection = await ResolveConnectionAsync(hostTarget.Host, credential, dnsServer, token);
-                    if (credential?.UsesNtHash == true)
-                    {
-                        DiscoverHostDrives(
-                            connection with { AuthenticationProtocol = SmbAuthenticationProtocol.Ntlm },
-                            hostTarget,
-                            drives,
-                            warnings,
-                            shouldPruneDirectory,
-                            onCurrentPath,
-                            token,
-                            () => Interlocked.Increment(ref authenticatedHosts));
-                        return;
-                    }
+                    await CheckTcpConnectionAsync(connection.Address, token).ConfigureAwait(false);
+                    var result = await SmbHostOperation.RunAsync(
+                        operationToken => DiscoverHostDrives(
+                            connection, hostTarget, credential, allowNtlmFallback,
+                            shouldPruneDirectory, onCurrentPath, operationToken),
+                        $"SMB discovery for {hostTarget.Host}", token).ConfigureAwait(false);
 
-                    try
+                    foreach (var drive in result.Drives)
                     {
-                        if (!connection.IsKerberosReady)
-                        {
-                            throw new InvalidOperationException(
-                                "Kerberos requires the target's DNS hostname for its cifs service principal, but the target could not be mapped to one.");
-                        }
-
-                        DiscoverHostDrives(connection, hostTarget, drives, warnings, shouldPruneDirectory, onCurrentPath, token);
+                        drives.Add(drive);
                     }
-                    catch (Exception kerberosException) when (allowNtlmFallback && ShouldFallbackToNtlm(kerberosException))
+                    foreach (var warning in result.Warnings)
                     {
-                        var ntlmConnection = connection with { AuthenticationProtocol = SmbAuthenticationProtocol.Ntlm };
-                        try
-                        {
-                            DiscoverHostDrives(ntlmConnection, hostTarget, drives, warnings, shouldPruneDirectory, onCurrentPath, token);
-                            Interlocked.Increment(ref ntlmFallbackHosts);
-                            warnings.Add($"{hostTarget.Host}: Kerberos was unavailable ({kerberosException.Message}) Using explicit NTLM fallback.");
-                        }
-                        catch (Exception ntlmException)
-                        {
-                            throw new InvalidOperationException(
-                                $"Kerberos failed ({kerberosException.Message}) NTLM fallback also failed ({ntlmException.Message})",
-                                ntlmException);
-                        }
+                        warnings.Add(warning);
+                        progress?.Warning(warning);
                     }
+                    progress?.SharesListed(result.SharesListed);
+                    progress?.SharesReadable(result.Drives.Count);
+                    if (result.Authenticated && credential?.UsesNtHash == true)
+                    {
+                        Interlocked.Increment(ref authenticatedHosts);
+                    }
+                    if (result.UsedNtlmFallback) Interlocked.Increment(ref ntlmFallbackHosts);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
+                    failed = true;
+                    if (ex is TimeoutException) Interlocked.Increment(ref timedOutHosts);
                     if (ex is SmbAuthenticationException)
                     {
                         Interlocked.Increment(ref authenticationFailures);
                     }
 
-                    warnings.Add($"{hostTarget.Host}: {ex.Message}");
+                    var warning = $"{hostTarget.Host}: {ex.Message}";
+                    warnings.Add(warning);
+                    progress?.Warning(warning);
                 }
+                finally { progress?.ServerCompleted(failed); }
             });
 
         return new SmbKerberosDiscoveryResult(
@@ -115,39 +114,91 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             ntlmFallbackHosts,
             authenticationFailures,
             hostTargets.Count,
-            authenticatedHosts);
+            authenticatedHosts,
+            timedOutHosts);
     }
 
-    private static void DiscoverHostDrives(
+    private static HostDiscoveryResult DiscoverHostDrives(
         SmbKerberosConnection connection,
         SmbHostTarget hostTarget,
-        ConcurrentBag<IRemoteDrive> drives,
-        ConcurrentBag<string> warnings,
+        CliWindowsCredential? credential,
+        bool allowNtlmFallback,
         Func<string, bool>? shouldPruneDirectory,
         Action<string>? onCurrentPath,
-        CancellationToken cancellationToken,
-        Action? onAuthenticated = null)
+        CancellationToken cancellationToken)
     {
+        var result = new HostDiscoveryResult();
+        if (credential?.UsesNtHash == true)
+        {
+            DiscoverSharesOnHost(connection with { AuthenticationProtocol = SmbAuthenticationProtocol.Ntlm },
+                hostTarget, result, shouldPruneDirectory, onCurrentPath, cancellationToken);
+            return result;
+        }
+
+        try
+        {
+            if (!connection.IsKerberosReady)
+            {
+                throw new InvalidOperationException(
+                    "Kerberos requires the target's DNS hostname for its cifs service principal, but the target could not be mapped to one.");
+            }
+            DiscoverSharesOnHost(connection, hostTarget, result, shouldPruneDirectory, onCurrentPath, cancellationToken);
+        }
+        catch (Exception kerberosException) when (allowNtlmFallback && ShouldFallbackToNtlm(kerberosException))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                DiscoverSharesOnHost(connection with { AuthenticationProtocol = SmbAuthenticationProtocol.Ntlm },
+                    hostTarget, result, shouldPruneDirectory, onCurrentPath, cancellationToken);
+                result.UsedNtlmFallback = true;
+                result.Warnings.Add($"{hostTarget.Host}: Kerberos was unavailable ({kerberosException.Message}) Using explicit NTLM fallback.");
+            }
+            catch (Exception ntlmException)
+            {
+                throw new InvalidOperationException(
+                    $"Kerberos failed ({kerberosException.Message}) NTLM fallback also failed ({ntlmException.Message})",
+                    ntlmException);
+            }
+        }
+        return result;
+    }
+
+    private static void DiscoverSharesOnHost(
+        SmbKerberosConnection connection,
+        SmbHostTarget hostTarget,
+        HostDiscoveryResult result,
+        Func<string, bool>? shouldPruneDirectory,
+        Action<string>? onCurrentPath,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         using var session = SmbKerberosSession.Connect(connection);
-        onAuthenticated?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+        result.Authenticated = true;
         var shareNames = session.Client.ListShares(out var listStatus);
+        cancellationToken.ThrowIfCancellationRequested();
         if (listStatus != NTStatus.STATUS_SUCCESS)
         {
             throw new InvalidOperationException($"share enumeration failed with {FormatStatus(listStatus)}");
         }
 
         var readableShares = new List<string>();
-        foreach (var shareName in shareNames
-                     .Where(name => SmbDiscoveryService.IsCandidateShare(name, 0))
-                     .Where(name => hostTarget.Share is null || name.Equals(hostTarget.Share, StringComparison.OrdinalIgnoreCase))
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        var candidateShares = shareNames
+            .Where(name => SmbDiscoveryService.IsCandidateShare(name, 0))
+            .Where(name => hostTarget.Share is null || name.Equals(hostTarget.Share, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        result.SharesListed += candidateShares.Length;
+        foreach (var shareName in candidateShares)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!session.CanReadShare(shareName, out var accessStatus))
             {
                 if (hostTarget.Share != null)
                 {
-                    warnings.Add($"{connection.DisplayHost}\\{shareName}: {connection.AuthenticationProtocol} authentication succeeded, but the share is not readable ({FormatStatus(accessStatus)}).");
+                    var warning = $"{connection.DisplayHost}\\{shareName}: {connection.AuthenticationProtocol} authentication succeeded, but the share is not readable ({FormatStatus(accessStatus)}).";
+                    result.Warnings.Add(warning);
                 }
 
                 continue;
@@ -161,7 +212,36 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             : readableShares;
         foreach (var shareName in selectedShares)
         {
-            drives.Add(new SmbKerberosDrive(connection, shareName, shouldPruneDirectory, onCurrentPath));
+            cancellationToken.ThrowIfCancellationRequested();
+            result.Drives.Add(new SmbKerberosDrive(connection, shareName, shouldPruneDirectory, onCurrentPath));
+        }
+    }
+
+    private sealed class HostDiscoveryResult
+    {
+        internal List<IRemoteDrive> Drives { get; } = [];
+        internal List<string> Warnings { get; } = [];
+        internal int SharesListed { get; set; }
+        internal bool Authenticated { get; set; }
+        internal bool UsedNtlmFallback { get; set; }
+    }
+
+    private static async Task CheckTcpConnectionAsync(IPAddress address, CancellationToken cancellationToken)
+    {
+        using var client = new TcpClient(address.AddressFamily);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TcpConnectTimeout);
+        try
+        {
+            await client.ConnectAsync(address, SMB2Client.DirectTCPPort, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"TCP port 445 did not connect within {TcpConnectTimeout.TotalSeconds:N0} seconds.", ex);
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+        {
+            throw new TimeoutException($"TCP port 445 did not connect within {TcpConnectTimeout.TotalSeconds:N0} seconds.", ex);
         }
     }
 
@@ -191,7 +271,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         CliWindowsCredential? credential,
         bool strictKerberos,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress)
     {
         if (target.Mode == FileSystemScanMode.Domain)
         {
@@ -211,7 +292,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 credential,
                 strictKerberos,
                 dnsServer,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, progress).ConfigureAwait(false);
             return hosts
                 .Select(host => new SmbHostTarget(host, null))
                 .ToArray();
@@ -268,7 +349,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
 
         if (!IsUsableKerberosHostName(kerberosHostName))
         {
-            probeResult = TryProbeSmbTarget(address);
+            probeResult = await SmbHostOperation.RunAsync(
+                _ => TryProbeSmbTarget(address), $"SMB name probe for {address}", cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(probeResult?.DnsHostName))
             {
                 kerberosHostName = probeResult.DnsHostName;
@@ -296,7 +378,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
 
     private static SmbTargetNameProbeResult? TryProbeSmbTarget(IPAddress address)
     {
-        var client = new SMB2Client(ConnectionTimeoutMs);
+        var client = new SMB2Client(ResponseTimeoutMs);
         try
         {
             if (!client.Connect(address, SMBTransportType.DirectTCPTransport))
@@ -368,7 +450,8 @@ internal sealed record SmbKerberosDiscoveryResult(
     int NtlmFallbackHostCount,
     int AuthenticationFailureCount,
     int TargetHostCount,
-    int AuthenticatedHostCount);
+    int AuthenticatedHostCount,
+    int TimedOutHostCount = 0);
 
 internal enum SmbAuthenticationProtocol
 {
@@ -594,7 +677,7 @@ internal sealed class SmbKerberosSession : IDisposable
 
     internal static SmbKerberosSession Connect(SmbKerberosConnection connection)
     {
-        var client = new SMB2Client(SmbKerberosService.ConnectionTimeoutMs);
+        var client = new SMB2Client(SmbKerberosService.ResponseTimeoutMs);
         if (!client.Connect(connection.Address, SMBTransportType.DirectTCPTransport))
         {
             throw new InvalidOperationException($"SMB negotiation failed for {connection.Address}:445.");

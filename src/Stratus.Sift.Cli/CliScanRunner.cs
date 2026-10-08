@@ -358,7 +358,7 @@ internal static class CliScanRunner
     {
         var kerberosService = session.Host.Services.GetRequiredService<SmbKerberosService>();
         var usesNtHash = credential?.UsesNtHash == true;
-        display.SetPhase($"Discovering {target.DisplayName.ToLowerInvariant()} SMB shares");
+        var discoveryProgress = display.BeginDiscovery(target.Mode == FileSystemScanMode.Domain);
         display.WriteEvent(
             usesNtHash
                 ? "Authentication mode: explicit NTLMv2 pass-the-hash; Kerberos is disabled."
@@ -381,7 +381,8 @@ internal static class CliScanRunner
                 dnsServer,
                 path => IgnoreRuleEvaluator.ShouldPruneDirectory(path, session.IgnoreRules),
                 display.SetCurrentPath,
-                cancellationToken);
+                cancellationToken,
+                discoveryProgress);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -389,22 +390,6 @@ internal static class CliScanRunner
             display.IncrementErrors();
             display.Complete("Network crawl failed");
             return CliExitCodes.Failed;
-        }
-
-        const int maximumPthWarnings = 8;
-        var warningsToDisplay = usesNtHash
-            ? discovery.Warnings.Take(maximumPthWarnings)
-            : discovery.Warnings;
-        foreach (var warning in warningsToDisplay)
-        {
-            display.WriteEvent($"Warning: {warning}", ConsoleColor.Yellow);
-        }
-
-        if (usesNtHash && discovery.Warnings.Count > maximumPthWarnings)
-        {
-            display.WriteEvent(
-                $"Warning: {discovery.Warnings.Count - maximumPthWarnings:N0} additional target error(s) were omitted from the console output.",
-                ConsoleColor.Yellow);
         }
 
         if (usesNtHash && discovery.AuthenticationFailureCount > 0)
@@ -420,6 +405,12 @@ internal static class CliScanRunner
             display.WriteEvent(
                 $"Authentication summary: {discovery.NtlmFallbackHostCount:N0} host(s) required explicit NTLM fallback.",
                 ConsoleColor.Yellow);
+        }
+
+        if (discovery.TimedOutHostCount > 0)
+        {
+            display.IncrementErrors();
+            display.WriteEvent($"Warning: {discovery.TimedOutHostCount:N0} server(s) timed out during discovery; results are incomplete.", ConsoleColor.Yellow);
         }
 
         if (discovery.Drives.Count == 0)
@@ -446,8 +437,8 @@ internal static class CliScanRunner
                     ? "Warning: no readable SMB shares were discovered through Kerberos or NTLM fallback."
                     : "Warning: no readable SMB shares were discovered through strict Kerberos authentication.",
                 ConsoleColor.Yellow);
-            display.Complete("Network crawl complete");
-            return CliExitCodes.Success;
+            display.Complete(enumerateOnly ? "Network enumeration complete" : "Network crawl complete");
+            return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
 
         if (usesNtHash && ShouldMarkPtHDiscoveryPartial(discovery))
@@ -464,6 +455,12 @@ internal static class CliScanRunner
             display.WriteDiscoveryRoot("share", drive.WebUrl, "R", authentication);
         }
 
+        if (enumerateOnly)
+        {
+            display.Complete("Network enumeration complete");
+            return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
+        }
+        display.EndDiscovery();
         if (!enumerateOnly)
         {
             llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
@@ -574,7 +571,7 @@ internal static class CliScanRunner
 
         using (impersonationSession)
         {
-            display.SetPhase($"Discovering {target.DisplayName.ToLowerInvariant()} SMB shares");
+            var discoveryProgress = display.BeginDiscovery(target.Mode == FileSystemScanMode.Domain);
             if (dnsServer != null)
             {
                 display.WriteEvent($"DNS mode: direct queries to {dnsServer}; local DNS and local fallback are disabled.", ConsoleColor.Cyan);
@@ -584,8 +581,8 @@ internal static class CliScanRunner
             try
             {
                 roots = target.Mode == FileSystemScanMode.Domain && credential?.IsLocalMachineAccount == true
-                    ? await DiscoverDomainRootsWithLocalCredentialAsync(smbDiscovery, impersonationSession, display, dnsServer, cancellationToken)
-                    : await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsAsync(target, credential, dnsServer, cancellationToken));
+                    ? await DiscoverDomainRootsWithLocalCredentialAsync(smbDiscovery, impersonationSession, display, dnsServer, cancellationToken, discoveryProgress)
+                    : await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsAsync(target, credential, dnsServer, cancellationToken, discoveryProgress));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -595,20 +592,39 @@ internal static class CliScanRunner
                 return CliExitCodes.Failed;
             }
 
+            if (discoveryProgress.TimedOutServers > 0)
+            {
+                display.IncrementErrors();
+                display.WriteEvent($"Warning: {discoveryProgress.TimedOutServers:N0} server(s) timed out during discovery; results are incomplete.", ConsoleColor.Yellow);
+            }
+
             if (roots.Count == 0)
             {
                 display.WriteEvent("Warning: no accessible SMB shares were discovered for the requested target.", ConsoleColor.Yellow);
-                display.Complete("Network crawl complete");
-                return CliExitCodes.Success;
+                display.Complete(enumerateOnly ? "Network enumeration complete" : "Network crawl complete");
+                return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
             }
 
             display.WriteEvent($"Discovered {roots.Count:N0} accessible SMB share(s).", ConsoleColor.Cyan);
             foreach (var root in roots)
             {
-                var rootInfo = await impersonationSession.RunAsync(() => Task.FromResult(GetRootDisplayInfo(root, standardEnumerator)));
-                display.WriteDiscoveryRoot("share", root, rootInfo.Exposure, rootInfo.Access);
+                if (enumerateOnly)
+                {
+                    display.WriteDiscoveryRoot("share", root, null);
+                }
+                else
+                {
+                    var rootInfo = await impersonationSession.RunAsync(() => Task.FromResult(GetRootDisplayInfo(root, standardEnumerator)));
+                    display.WriteDiscoveryRoot("share", root, rootInfo.Exposure, rootInfo.Access);
+                }
             }
 
+            if (enumerateOnly)
+            {
+                display.Complete("Network enumeration complete");
+                return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
+            }
+            display.EndDiscovery();
             if (!enumerateOnly)
             {
                 llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
@@ -674,15 +690,16 @@ internal static class CliScanRunner
         WindowsImpersonationSession impersonationSession,
         CliProgressDisplay display,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress discoveryProgress)
     {
         display.WriteEvent("Info: using the current Windows identity for AD computer discovery and the supplied local credentials for SMB access.", ConsoleColor.Cyan);
         var hosts = await smbDiscovery.EnumerateDomainHostsForScanAsync(
             credential: null,
             strictKerberos: false,
             dnsServer,
-            cancellationToken).ConfigureAwait(false);
-        return await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsForHostsAsync(hosts, dnsServer, cancellationToken));
+            cancellationToken, discoveryProgress).ConfigureAwait(false);
+        return await impersonationSession.RunAsync(() => smbDiscovery.DiscoverRootsForHostsAsync(hosts, dnsServer, cancellationToken, discoveryProgress));
     }
 
     private static async Task ScanRemoteDriveAsync(

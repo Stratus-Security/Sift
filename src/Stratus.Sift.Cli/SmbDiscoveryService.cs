@@ -15,7 +15,7 @@ internal sealed partial class SmbDiscoveryService
     private const int ShareEnumerationLevel = 1;
     private const int MaxShareBufferLength = -1;
     private const int SmbPort = 445;
-    private const int ConnectTimeoutMs = 750;
+    private const int ConnectTimeoutMs = 10_000;
     private const int HostParallelism = 32;
 
     public SmbDiscoveryService(
@@ -33,7 +33,8 @@ internal sealed partial class SmbDiscoveryService
         FileSystemScanTarget target,
         CliWindowsCredential? credential,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -46,9 +47,9 @@ internal sealed partial class SmbDiscoveryService
                 target.Value.Equals("current domain", StringComparison.OrdinalIgnoreCase) ? null : target.Value,
                 credential,
                 dnsServer,
-                cancellationToken),
-            FileSystemScanMode.Subnet => DiscoverSubnetRootsAsync(target.Value, dnsServer, cancellationToken),
-            FileSystemScanMode.Device => DiscoverDeviceRootsAsync(target.Value, dnsServer, cancellationToken),
+                cancellationToken, progress),
+            FileSystemScanMode.Subnet => DiscoverSubnetRootsAsync(target.Value, dnsServer, cancellationToken, progress),
+            FileSystemScanMode.Device => DiscoverDeviceRootsAsync(target.Value, dnsServer, cancellationToken, progress),
             _ => throw new ArgumentException($"Unsupported discovery mode '{target.Mode}'.", nameof(target))
         };
     }
@@ -58,49 +59,61 @@ internal sealed partial class SmbDiscoveryService
         string? domainController,
         CliWindowsCredential? credential,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress)
     {
         var hosts = await EnumerateDomainHostsForScanAsync(
             domainController,
             credential,
             strictKerberos: false,
             dnsServer,
-            cancellationToken).ConfigureAwait(false);
-        return await DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken);
+            cancellationToken, progress).ConfigureAwait(false);
+        return await DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken, progress);
     }
 
     [SupportedOSPlatform("windows")]
-    private async Task<IReadOnlyList<string>> DiscoverSubnetRootsAsync(string cidr, IPAddress? dnsServer, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> DiscoverSubnetRootsAsync(string cidr, IPAddress? dnsServer, CancellationToken cancellationToken, CliDiscoveryProgress? progress)
     {
         var hosts = EnumerateSubnetHosts(cidr);
-        return await DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken);
+        return await DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken, progress);
     }
 
     [SupportedOSPlatform("windows")]
-    private async Task<IReadOnlyList<string>> DiscoverDeviceRootsAsync(string device, IPAddress? dnsServer, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> DiscoverDeviceRootsAsync(string device, IPAddress? dnsServer, CancellationToken cancellationToken, CliDiscoveryProgress? progress)
     {
         if (TryExtractExplicitShareRoot(device, out var explicitRoot))
         {
-            if (dnsServer is null)
+            progress?.FindingShares(1);
+            progress?.ServerStarted();
+            var failed = true;
+            try
             {
-                return IsAccessibleDirectory(explicitRoot)
-                    ? [explicitRoot]
-                    : [];
+                var candidates = dnsServer is null
+                    ? new[] { explicitRoot }
+                    : await ResolveExplicitShareRootsAsync(explicitRoot, dnsServer, cancellationToken).ConfigureAwait(false);
+                var roots = await SmbHostOperation.RunAsync(
+                    operationToken => candidates.Where(path =>
+                    {
+                        operationToken.ThrowIfCancellationRequested();
+                        return IsAccessibleDirectory(path);
+                    }).ToArray(),
+                    $"share accessibility check for {explicitRoot}", cancellationToken).ConfigureAwait(false);
+                foreach (var root in candidates) progress?.ShareListed();
+                foreach (var root in roots) progress?.ShareReadable();
+                failed = roots.Length == 0;
+                return roots;
             }
-
-            var resolvedRoots = await ResolveExplicitShareRootsAsync(explicitRoot, dnsServer, cancellationToken).ConfigureAwait(false);
-            return resolvedRoots
-                .Where(IsAccessibleDirectory)
-                .ToArray();
+            finally { progress?.ServerCompleted(failed); }
         }
 
-        return await DiscoverSharesForHostsAsync([NormalizeHost(device)], dnsServer, cancellationToken);
+        return await DiscoverSharesForHostsAsync([NormalizeHost(device)], dnsServer, cancellationToken, progress);
     }
 
     private async Task<IReadOnlyList<string>> DiscoverSharesForHostsAsync(
         IEnumerable<string> hosts,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress)
     {
         var discoveredRoots = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var uniqueHosts = hosts
@@ -109,6 +122,7 @@ internal sealed partial class SmbDiscoveryService
             .Where(host => !string.IsNullOrWhiteSpace(host))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        progress?.FindingShares(uniqueHosts.Length);
 
         await Parallel.ForEachAsync(
             uniqueHosts,
@@ -119,6 +133,10 @@ internal sealed partial class SmbDiscoveryService
             },
             async (host, token) =>
             {
+                progress?.ServerStarted();
+                var failed = false;
+                var timedOut = false;
+                var reachable = false;
                 try
                 {
                     var connectionHosts = dnsServer is null
@@ -128,24 +146,40 @@ internal sealed partial class SmbDiscoveryService
                             .ToArray();
                     foreach (var connectionHost in connectionHosts)
                     {
-                        if (!await IsSmbReachableAsync(connectionHost.ReachabilityHost, token))
+                        var reachability = await IsSmbReachableAsync(connectionHost.ReachabilityHost, token);
+                        if (!reachability.Reachable)
                         {
+                            timedOut |= reachability.TimedOut;
                             continue;
                         }
+                        reachable = true;
 
-                        var readableShares = EnumerateShares(connectionHost.UncHost)
-                            .Where(share => IsAccessibleDirectory($@"\\{connectionHost.UncHost}\{share}"))
-                            .ToArray();
+                        var listing = await SmbHostOperation.RunAsync(
+                            operationToken => EnumerateReadableShares(connectionHost.UncHost, operationToken),
+                            $"SMB share listing for {host}", token).ConfigureAwait(false);
+                        progress?.SharesListed(listing.ListedShareCount);
+                        if (listing.Win32Error != 0)
+                        {
+                            failed = true;
+                            progress?.Warning($"{host}: share enumeration returned Windows error {listing.Win32Error}.");
+                        }
 
-                        foreach (var share in SelectSharesForCoverage(readableShares))
+                        foreach (var share in listing.ReadableShares)
                         {
                             var root = $@"\\{connectionHost.UncHost}\{share}";
-                            discoveredRoots.TryAdd(root, 0);
+                            if (discoveredRoots.TryAdd(root, 0)) progress?.ShareReadable();
                         }
                     }
                 }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
+                    failed = true;
+                    timedOut |= ex is TimeoutException;
+                    progress?.Warning($"{host}: {ex.Message}");
                     if (dnsServer is null)
                     {
                         _logger.LogDebug(ex, "Failed to discover SMB shares on host {Host}", host);
@@ -155,12 +189,32 @@ internal sealed partial class SmbDiscoveryService
                         _logger.LogWarning(ex, "Failed to resolve or discover SMB shares on host {Host} through explicit DNS server {DnsServer}", host, dnsServer);
                     }
                 }
+                finally
+                {
+                    progress?.ServerCompleted(failed || !reachable, timedOut);
+                }
             });
 
         return discoveredRoots.Keys
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static NativeShareListing EnumerateReadableShares(string host, CancellationToken cancellationToken)
+    {
+        var win32Error = 0;
+        var candidateShares = EnumerateShares(host, error => win32Error = error).ToArray();
+        var readableShares = new List<string>();
+        foreach (var share in candidateShares)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsAccessibleDirectory($@"\\{host}\{share}")) readableShares.Add(share);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return new NativeShareListing(SelectSharesForCoverage(readableShares), candidateShares.Length, win32Error);
+    }
+
+    private sealed record NativeShareListing(IReadOnlyList<string> ReadableShares, int ListedShareCount, int Win32Error);
 
     internal static bool IsValidSubnetOrSingleHost(string value)
     {
@@ -288,9 +342,10 @@ internal sealed partial class SmbDiscoveryService
         CliWindowsCredential? credential,
         bool strictKerberos,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress = null)
     {
-        return EnumerateDomainHostsForScanAsync(null, credential, strictKerberos, dnsServer, cancellationToken);
+        return EnumerateDomainHostsForScanAsync(null, credential, strictKerberos, dnsServer, cancellationToken, progress);
     }
 
     [SupportedOSPlatform("windows")]
@@ -299,25 +354,29 @@ internal sealed partial class SmbDiscoveryService
         CliWindowsCredential? credential,
         bool strictKerberos,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress = null)
     {
-        return _activeDirectory.EnumerateComputersAsync(domainController, credential, strictKerberos, dnsServer, cancellationToken);
+        return _activeDirectory.EnumerateComputersAsync(domainController, credential, strictKerberos, dnsServer, cancellationToken, progress);
     }
 
     internal Task<IReadOnlyList<string>> DiscoverRootsForHostsAsync(
         IEnumerable<string> hosts,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CliDiscoveryProgress? progress = null)
     {
-        return DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken);
+        return DiscoverSharesForHostsAsync(hosts, dnsServer, cancellationToken, progress);
     }
 
-    private IEnumerable<string> EnumerateShares(string host)
+    private static IEnumerable<string> EnumerateShares(string host, Action<int> onFailure)
     {
         var serverName = host.StartsWith(@"\\", StringComparison.Ordinal) ? host : $@"\\{host}";
         var resultCode = NetShareEnum(serverName, ShareEnumerationLevel, out var buffer, MaxShareBufferLength, out var entriesRead, out _, out _);
         if (resultCode != 0)
         {
+            onFailure(resultCode);
+            if (buffer != IntPtr.Zero) NetApiBufferFree(buffer);
             yield break;
         }
 
@@ -416,7 +475,7 @@ internal sealed partial class SmbDiscoveryService
         return $"{address.ToString().Replace(':', '-').Replace('%', 's')}.ipv6-literal.net";
     }
 
-    private static async Task<bool> IsSmbReachableAsync(string host, CancellationToken cancellationToken)
+    private static async Task<(bool Reachable, bool TimedOut)> IsSmbReachableAsync(string host, CancellationToken cancellationToken)
     {
         using var tcpClient = new TcpClient();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -425,11 +484,23 @@ internal sealed partial class SmbDiscoveryService
         try
         {
             await tcpClient.ConnectAsync(host, SmbPort, timeoutCts.Token);
-            return true;
+            return (true, false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return (false, true);
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+        {
+            return (false, true);
         }
         catch
         {
-            return false;
+            return (false, false);
         }
     }
 

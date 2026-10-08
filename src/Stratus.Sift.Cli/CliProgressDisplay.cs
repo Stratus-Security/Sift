@@ -39,6 +39,11 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
     private bool _statusDirty = true;
     private bool _interactivePromptActive;
     private DateTimeOffset _lastStatusRenderUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastPlainStatusRenderUtc = DateTimeOffset.MinValue;
+    private CliDiscoverySnapshot? _discoverySnapshot;
+    private bool _discoveryActive;
+    private int _discoveryWarnings;
+    private string _lastPlainPhase = string.Empty;
 
     public CliProgressDisplay(
         string title,
@@ -58,12 +63,9 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
                 outputOptions.Append);
         }
 
-        if (!Console.IsInputRedirected)
-        {
-            _renderCts = new CancellationTokenSource();
-            _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
-            _renderTask = Task.Run(() => RenderLoopAsync(_renderCts.Token));
-        }
+        _renderCts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+        _renderTask = Task.Run(() => RenderLoopAsync(_renderCts.Token));
 
         WriteHeader();
         if (_style == CliOutputStyle.Default)
@@ -80,6 +82,61 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
             MarkStatusDirtyUnsafe();
         }
     }
+
+    internal CliDiscoveryProgress BeginDiscovery(bool domain)
+    {
+        lock (ConsoleLock)
+        {
+            _discoveryActive = true;
+            _discoverySnapshot = new(domain ? CliDiscoveryStage.DomainController : CliDiscoveryStage.Shares,
+                0, null, 0, 0, 0, 0, 0, Stopwatch.GetTimestamp());
+            MarkStatusDirtyUnsafe();
+        }
+        return new CliDiscoveryProgress(ReportDiscovery, ReportDiscoveryWarning);
+    }
+
+    internal void ReportDiscovery(CliDiscoverySnapshot snapshot)
+    {
+        lock (ConsoleLock)
+        {
+            _discoverySnapshot = snapshot;
+            MarkStatusDirtyUnsafe();
+        }
+    }
+
+    private void ReportDiscoveryWarning(string message)
+    {
+        // Keep failed servers visible in the counters without flooding a large-domain console.
+        lock (ConsoleLock)
+        {
+            if (++_discoveryWarnings <= 8)
+            {
+                WriteEvent($"Warning: {message}", ConsoleColor.Yellow);
+            }
+            else
+            {
+                _outputCapture?.RecordEvent("warning", message);
+                _outputCapture?.RecordCliLines($"Warning: {message}");
+                if (_discoveryWarnings == 9)
+                    WriteEvent("Additional discovery warnings are suppressed on the console; use --output to retain their details.", ConsoleColor.Yellow);
+            }
+        }
+    }
+
+    internal void EndDiscovery()
+    {
+        lock (ConsoleLock)
+        {
+            if (_discoverySnapshot is { } discovery)
+                WriteEvent(FormatDiscoverySummary(discovery), ConsoleColor.Cyan);
+            _discoveryActive = false;
+            MarkStatusDirtyUnsafe();
+        }
+    }
+
+    private static string FormatDiscoverySummary(CliDiscoverySnapshot discovery) =>
+        $"Discovery: {discovery.CompletedServers:N0}/{discovery.TotalServers?.ToString("N0") ?? "?"} servers checked; " +
+        $"{discovery.SharesListed:N0} shares listed; {discovery.ReadableShares:N0} readable shares; {discovery.FailedServers:N0} failed servers.";
 
     public void AttachThrottleMonitor(ThrottleNotificationHub throttleNotifications)
     {
@@ -293,6 +350,8 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
 
             if (_style == CliOutputStyle.Snaffler)
             {
+                if (_discoveryActive && _discoverySnapshot is { } snafflerDiscovery)
+                    WriteRenderedLine(_snafflerFormatter.FormatInfo(FormatDiscoverySummary(snafflerDiscovery)), "discovery");
                 var line = _snafflerFormatter.FormatInfo("Snaffler out.");
                 ClearStatusLineUnsafe();
                 CliConsoleFormat.WriteStyledLine(line.Segments);
@@ -310,16 +369,26 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
 
             WriteStyledLineUnsafe(summaryLines[0], ConsoleColor.Cyan);
             WritePlainLineUnsafe(summaryLines[1]);
-            if (Interlocked.Read(ref _filesDiscovered) > 0)
+            if (_discoveryActive && _discoverySnapshot is { } discovery)
+            {
+                var discoverySummary = FormatDiscoverySummary(discovery);
+                summaryLines.Add(discoverySummary);
+                WritePlainLineUnsafe(discoverySummary);
+                _outputCapture?.RecordEvent("discovery", discoverySummary);
+            }
+            if (!_discoveryActive && Interlocked.Read(ref _filesDiscovered) > 0)
             {
                 summaryLines.Add($"Files discovered: {Interlocked.Read(ref _filesDiscovered):N0}");
                 WritePlainLineUnsafe(summaryLines[^1]);
             }
 
-            summaryLines.Add($"Files scanned: {Interlocked.Read(ref _filesScanned):N0}");
-            summaryLines.Add($"Findings: {Interlocked.Read(ref _findings):N0}");
-            WritePlainLineUnsafe(summaryLines[^2]);
-            WritePlainLineUnsafe(summaryLines[^1]);
+            if (!_discoveryActive)
+            {
+                summaryLines.Add($"Files scanned: {Interlocked.Read(ref _filesScanned):N0}");
+                summaryLines.Add($"Findings: {Interlocked.Read(ref _findings):N0}");
+                WritePlainLineUnsafe(summaryLines[^2]);
+                WritePlainLineUnsafe(summaryLines[^1]);
+            }
             if (Interlocked.Read(ref _errors) > 0)
             {
                 summaryLines.Add($"Errors: {Interlocked.Read(ref _errors):N0}");
@@ -448,7 +517,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
             {
                 lock (ConsoleLock)
                 {
-                    if (!_interactivePromptActive)
+                    if (!_interactivePromptActive && !Console.IsInputRedirected)
                     {
                         CliConsoleFormat.DrainBufferedInput();
                     }
@@ -458,7 +527,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
                         return;
                     }
 
-                    if (_style == CliOutputStyle.Default && !_interactivePromptActive && ShouldRenderStatusUnsafe())
+                    if ((_style == CliOutputStyle.Default || _discoveryActive) && !_interactivePromptActive && ShouldRenderStatusUnsafe())
                     {
                         RenderStatusLineUnsafe();
                     }
@@ -548,12 +617,79 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
 
     private void RenderStatusLineUnsafe()
     {
-        if (_style != CliOutputStyle.Default)
+        if (_style != CliOutputStyle.Default && !_discoveryActive)
         {
             return;
         }
 
+        var status = BuildStatusTextUnsafe();
+
+        if (!CliConsoleFormat.SupportsAnsi || _style == CliOutputStyle.Snaffler)
+        {
+            // Redirected/non-ANSI output gets a bounded heartbeat instead of silent progress.
+            var phase = _discoveryActive ? _discoverySnapshot?.Stage.ToString() ?? _phase : _phase;
+            var now = DateTimeOffset.UtcNow;
+            if (phase != _lastPlainPhase || now - _lastPlainStatusRenderUtc >= TimeSpan.FromSeconds(30))
+            {
+                if (_style == CliOutputStyle.Snaffler)
+                    WriteRenderedLine(_snafflerFormatter.FormatInfo(status), "progress");
+                else
+                    WritePlainLineUnsafe(status);
+                _lastPlainPhase = phase;
+                _lastPlainStatusRenderUtc = now;
+            }
+            _lastStatusRenderUtc = now;
+            _statusDirty = false;
+            return;
+        }
+
+        var renderedStatus = FitToConsoleWidth(status);
+        if (string.Equals(renderedStatus, _lastRenderedStatusLine, StringComparison.Ordinal))
+        {
+            _lastStatusRenderUtc = DateTimeOffset.UtcNow;
+            _statusDirty = false;
+            return;
+        }
+
+        Console.Write("\r\u001b[2K");
+        var ansiCode = CliConsoleFormat.GetAnsiColorCode(ConsoleColor.DarkGray);
+        Console.Write(ansiCode != null ? $"{ansiCode}{renderedStatus}\u001b[0m" : renderedStatus);
+        _lastRenderedStatusLine = renderedStatus;
+        _lastStatusRenderUtc = DateTimeOffset.UtcNow;
+        _statusDirty = false;
+    }
+
+    internal string GetStatusText()
+    {
+        lock (ConsoleLock) return BuildStatusTextUnsafe();
+    }
+
+    private string BuildStatusTextUnsafe()
+    {
         var elapsed = _stopwatch.Elapsed;
+        if (_discoveryActive && _discoverySnapshot is { } discovery)
+        {
+            var discoveryStatus = new StringBuilder();
+            discoveryStatus.Append(discovery.Stage switch
+            {
+                CliDiscoveryStage.DomainController => "Finding domain controller",
+                CliDiscoveryStage.Computers => "Discovering AD computers",
+                _ => "Discovering SMB shares"
+            });
+            if (discovery.Stage == CliDiscoveryStage.Computers)
+                discoveryStatus.Append($" | Servers found {discovery.ServersFound:N0}");
+            if (discovery.Stage == CliDiscoveryStage.Shares)
+            {
+                discoveryStatus.Append($" | Servers {discovery.CompletedServers:N0}/{discovery.TotalServers?.ToString("N0") ?? "?"}");
+                discoveryStatus.Append($" | Listed {discovery.SharesListed:N0} | Readable {discovery.ReadableShares:N0}");
+                discoveryStatus.Append($" | Failed {discovery.FailedServers:N0} | Active {discovery.ActiveServers:N0}");
+            }
+            var idle = Stopwatch.GetElapsedTime(discovery.LastResultTimestamp);
+            if (idle >= TimeSpan.FromSeconds(30))
+                discoveryStatus.Append($" | Idle {(int)idle.TotalMinutes:00}:{idle.Seconds:00}");
+            discoveryStatus.Append($" | Elapsed {elapsed:hh\\:mm\\:ss}");
+            return discoveryStatus.ToString();
+        }
         var discovered = Interlocked.Read(ref _filesDiscovered);
         var scanned = Interlocked.Read(ref _filesScanned);
         var findings = Interlocked.Read(ref _findings);
@@ -588,31 +724,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
             }
         }
 
-        if (CliConsoleFormat.SupportsAnsi)
-        {
-            var renderedStatus = FitToConsoleWidth(status.ToString());
-            if (string.Equals(renderedStatus, _lastRenderedStatusLine, StringComparison.Ordinal))
-            {
-                _lastStatusRenderUtc = DateTimeOffset.UtcNow;
-                _statusDirty = false;
-                return;
-            }
-
-            Console.Write("\r\u001b[2K");
-            var ansiCode = CliConsoleFormat.GetAnsiColorCode(ConsoleColor.DarkGray);
-            if (ansiCode != null)
-            {
-                Console.Write($"{ansiCode}{renderedStatus}\u001b[0m");
-            }
-            else
-            {
-                Console.Write(renderedStatus);
-            }
-
-            _lastRenderedStatusLine = renderedStatus;
-            _lastStatusRenderUtc = DateTimeOffset.UtcNow;
-            _statusDirty = false;
-        }
+        return status.ToString();
     }
 
     private bool ShouldRenderStatusUnsafe()

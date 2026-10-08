@@ -122,6 +122,12 @@ Throughput is unlimited by default, as used above. Resource limits can be set ex
 ## How Do?
 In case you're wondering how to do the things, here are a few examples to get you started.
 
+Domain and network discovery report their own progress: AD computers found, servers checked/total, active and failed servers, shares listed, and readable shares selected for coverage. File counters appear once content scanning begins. `Idle` is the time since the last discovery result; it reports a wait without declaring a timeout. Redirected output gets a progress heartbeat every 30 seconds. The console shows the first eight discovery warnings; `--output` retains all warning details.
+
+Domain discovery allows up to 60 seconds for a domain-controller lookup and each LDAP request. SMB discovery allows 10 seconds for TCP connection and up to two minutes for a server's SMB work, with a 30-second response wait for individual SMB commands. A server that exceeds its budget is reported as failed while discovery continues. Slow operations that cannot be stopped immediately remain capped so they do not consume unlimited background threads.
+
+For domain and network commands, `-e` lists the discovered readable shares and exits without recursively walking their contents or opening scan checkpoints.
+
 Scan a specific computer:
 ```powershell
 .\sift.exe network --device SRV01 --output srv01-findings.log

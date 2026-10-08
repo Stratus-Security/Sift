@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.RegularExpressions;
 using Stratus.Sift.Cli;
 using Stratus.Sift.Core.Enums;
 using Stratus.Sift.Core.Models;
@@ -584,6 +585,128 @@ public class DefaultRulePortingTests : IDisposable
         Assert.Single(issues, i => i.ClassifierName == "Command Credential Usage");
     }
 
+    [Theory]
+    [InlineData("deploy.cmd", "SymRedistributable.exe -rebootinstall -proxyhost proxy.example.test -proxyport 3128 -proxyauthuser svc.deploy -proxyauthpassword T7m!Q2r9")]
+    [InlineData("deploy.bat", "installer.exe --passwordforproxy=\"T7m Q2r9!\"")]
+    [InlineData("deploy.cmd", "installer.exe /dbpasswd:T7m!Q2r9")]
+    [InlineData("deploy.cmd", "installer.exe --backupPasswordValue T7m!Q2r9")]
+    [InlineData("deploy.cmd", "installer.exe --password-confirm T7m!Q2r9")]
+    [InlineData("deploy.cmd", "installer.exe -proxyauthpassword x")]
+    public async Task DefaultConfiguration_ShouldDetectInlinePasswordSwitchValues(string fileName, string content)
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, fileName);
+        await File.WriteAllTextAsync(filePath, content);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.Contains(issues, issue => issue.ClassifierName == "Command Credential Usage");
+    }
+
+    [Theory]
+    [InlineData("installer.exe --passwordfile C:\\deploy\\credentials.txt")]
+    [InlineData("installer.exe --passwordPolicy strict")]
+    [InlineData("installer.exe --password-file-name credentials.txt")]
+    [InlineData("installer.exe -proxyauthpassword %PROXY_PASSWORD%")]
+    [InlineData("installer.exe -proxyauthpassword -proxyport 3128")]
+    [InlineData("installer.exe -authpassword true")]
+    [InlineData("installer.exe -password-hint firstpet")]
+    [InlineData("installer.exe -password <redacted>")]
+    [InlineData("installer.exe --pwd work")]
+    public async Task DefaultConfiguration_ShouldIgnorePasswordSwitchesWithoutInlineSecrets(string content)
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "deploy.cmd");
+        await File.WriteAllTextAsync(filePath, content);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.DoesNotContain(issues, issue => issue.ClassifierName == "Command Credential Usage");
+    }
+
+    [Theory]
+    [InlineData("set password=\"Fine9!x\"")]
+    [InlineData("set passwrd=\"Fine9!x\"")]
+    [InlineData("set passwod=\"Fine9!x\"")]
+    [InlineData("schtasks /create /tn nightly /tr backup.cmd /ru service /rp Fine9!x")]
+    [InlineData("schtasks /create /tn nightly /tr backup.cmd /ru service /rp x")]
+    [InlineData("net user deploy Fine9!x /add")]
+    [InlineData("net user deploy x /add")]
+    [InlineData("net\tuser deploy Fine9!x /add")]
+    [InlineData("psexec \\\\host -u DOMAIN\\user -p Fine9!x cmd")]
+    [InlineData("psexec \\\\host -u DOMAIN\\user -p x cmd")]
+    [InlineData("net use \\\\server\\share Fine9!x /user:DOMAIN\\user")]
+    [InlineData("net use \\\\server\\share x /user:DOMAIN\\user")]
+    [InlineData("net use Z: \\\\server\\share /user:DOMAIN\\user Fine9!x")]
+    [InlineData("net use Z: \\\\server\\share /user:DOMAIN\\user /persistent:yes x")]
+    [InlineData("cmdkey /add:server /user:DOMAIN\\user /pass:Fine9!x")]
+    [InlineData("cmdkey /add:server /user:DOMAIN\\user /pass:x")]
+    public async Task DefaultConfiguration_ShouldRequireInlineValuesForCredentialCommands(string content)
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "deploy.cmd");
+        await File.WriteAllTextAsync(filePath, content);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.Contains(issues, issue => issue.ClassifierName == "Command Credential Usage");
+    }
+
+    [Theory]
+    [InlineData("schtasks /query /fo LIST")]
+    [InlineData("schtasks /create /tn nightly /tr backup.cmd /ru service /rp %TASK_PASSWORD%")]
+    [InlineData("net user")]
+    [InlineData("net user alice /domain")]
+    [InlineData("net user alice * /add")]
+    [InlineData("net use Z: \\\\server\\share /user:DOMAIN\\user")]
+    [InlineData("net use \\\\server\\share * /user:DOMAIN\\user")]
+    [InlineData("cmdkey /list")]
+    [InlineData("cmdkey /delete:server")]
+    [InlineData("psexec \\\\host -u DOMAIN\\user -p %DEPLOY_PASSWORD% cmd")]
+    [InlineData("net use \\\\server\\share %NET_PASSWORD% /user:DOMAIN\\user")]
+    public async Task DefaultConfiguration_ShouldIgnoreCredentialCommandsWithoutLiteralValues(string content)
+    {
+        var scanner = CreateScanner();
+        var (classifiers, policies) = await LoadDefaultConfigurationAsync();
+        var filePath = Path.Combine(_tempDirectory, "deploy.cmd");
+        await File.WriteAllTextAsync(filePath, content);
+
+        var issues = scanner.ScanFile(filePath, classifiers, policies).ToList();
+
+        Assert.DoesNotContain(issues, issue => issue.ClassifierName == "Command Credential Usage");
+    }
+
+    [Theory]
+    [InlineData(0, "installer.exe -proxyauthpassword x", "installer.exe -proxyhost proxy01")]
+    [InlineData(1, "set passwrd=\"Fine9!x\"", "set password=Fine9!x")]
+    [InlineData(2, "schtasks /create /tn nightly /tr backup.cmd /rp x", "schtasks /query /fo LIST")]
+    [InlineData(3, "net user deploy x /add", "net user deploy /domain")]
+    [InlineData(4, "psexec \\\\host -u deploy -p x cmd", "psexec \\\\host -u deploy cmd")]
+    [InlineData(5, "net use \\\\server\\share x /user:DOMAIN\\deploy", "net use \\\\server\\share /user:DOMAIN\\deploy")]
+    [InlineData(6, "net use \\\\server\\share /user:DOMAIN\\deploy x", "net use \\\\server\\share /user:DOMAIN\\deploy /persistent:yes")]
+    [InlineData(7, "cmdkey /add:server /user:deploy /pass:x", "cmdkey /list")]
+    public async Task DefaultConfiguration_CommandCredentialPatternsMatchIndividually(
+        int patternIndex,
+        string positive,
+        string negative)
+    {
+        var (classifiers, _) = await LoadDefaultConfigurationAsync();
+        var classifier = Assert.Single(classifiers, item => item.Name == "Command Credential Usage");
+        var match = Assert.Single(classifier.Matches);
+        Assert.Equal(8, match.Patterns.Count);
+
+        var regex = new Regex(
+            match.Patterns[patternIndex],
+            RegexOptions.NonBacktracking | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+
+        Assert.True(regex.IsMatch(positive), $"Pattern {patternIndex} did not match its credential example.");
+        Assert.False(regex.IsMatch(negative), $"Pattern {patternIndex} matched its passwordless example.");
+    }
+
     [Fact]
     public async Task DefaultConfiguration_ShouldDetectAzureStorageAccountKey()
     {
@@ -918,7 +1041,7 @@ public class DefaultRulePortingTests : IDisposable
         return new FileScanner(
             NullLogger<FileScanner>.Instance,
             new ContentExtractor(),
-            new ValidatorFactory([new PowerShellCredentialUsageValidator()]));
+            new ValidatorFactory([new PowerShellCredentialUsageValidator(), new CommandCredentialUsageValidator()]));
     }
 
     private static FileScanner CreateScannerWithAdditionalValidators()
@@ -941,7 +1064,8 @@ public class DefaultRulePortingTests : IDisposable
             new SqlConnectionStringValidator(),
             new TwilioValidator(),
             new EnvironmentSecretAssignmentValidator(),
-            new PowerShellCredentialUsageValidator()
+            new PowerShellCredentialUsageValidator(),
+            new CommandCredentialUsageValidator()
         ];
 
         return new FileScanner(

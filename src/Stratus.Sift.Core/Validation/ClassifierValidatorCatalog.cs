@@ -36,6 +36,7 @@ public static class ClassifierValidatorCatalog
     public const string ContextualIdentifier = "ContextualIdentifier";
     public const string EnvironmentSecretAssignment = "EnvironmentSecretAssignment";
     public const string PowerShellCredentialUsage = "PowerShellCredentialUsage";
+    public const string CommandCredentialUsage = "CommandCredentialUsage";
 
     public static IReadOnlyList<string> All { get; } =
     [
@@ -72,7 +73,8 @@ public static class ClassifierValidatorCatalog
         AustralianMedicare,
         ContextualIdentifier,
         EnvironmentSecretAssignment,
-        PowerShellCredentialUsage
+        PowerShellCredentialUsage,
+        CommandCredentialUsage
     ];
 
     public static bool IsKnown(string? validatorName)

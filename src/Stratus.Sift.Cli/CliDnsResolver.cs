@@ -13,7 +13,8 @@ internal sealed class CliDnsResolver
     private const int HeaderLength = 12;
     private const int MaximumNameJumps = 128;
     private const int MaximumAttempts = 2;
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan SystemResolverTimeout = TimeSpan.FromSeconds(30);
 
     internal async Task<IReadOnlyList<IPAddress>> ResolveHostAddressesAsync(
         string host,
@@ -28,7 +29,8 @@ internal sealed class CliDnsResolver
 
         if (explicitDnsServer is null)
         {
-            return await Dns.GetHostAddressesAsync(normalizedHost, cancellationToken).ConfigureAwait(false);
+            return await Dns.GetHostAddressesAsync(normalizedHost, cancellationToken)
+                .WaitAsync(SystemResolverTimeout, cancellationToken).ConfigureAwait(false);
         }
 
         return await ResolveHostAddressesAsync(
@@ -74,7 +76,8 @@ internal sealed class CliDnsResolver
         {
             try
             {
-                var entry = await Dns.GetHostEntryAsync(address).WaitAsync(cancellationToken).ConfigureAwait(false);
+                var entry = await Dns.GetHostEntryAsync(address)
+                    .WaitAsync(SystemResolverTimeout, cancellationToken).ConfigureAwait(false);
                 return string.IsNullOrWhiteSpace(entry.HostName) ? null : entry.HostName.TrimEnd('.');
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
