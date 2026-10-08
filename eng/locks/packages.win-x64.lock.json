@@ -2,6 +2,22 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "DnsClient": {
+        "type": "Direct",
+        "requested": "[1.8.0, )",
+        "resolved": "1.8.0",
+        "contentHash": "RRwtaCXkXWsx0mmsReGDqCbRLtItfUbkRJlet1FpdciVhyMGKcPd57T1+8Jki9ojHlq9fntVhXQroOOgRak8DQ=="
+      },
+      "Kerberos.NET": {
+        "type": "Direct",
+        "requested": "[4.6.168, )",
+        "resolved": "4.6.168",
+        "contentHash": "QJaRtUTd73h0AXnbxzHfExJhiDA8+eh+EbW0ov4RVrJ5VUP9oX/XxYtBMPfF5YDL3QFyO/5Se0S8BQvXPwasmQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.2",
+          "System.Security.Cryptography.Pkcs": "8.0.1"
+        }
+      },
       "Microsoft.DotNet.ILCompiler": {
         "type": "Direct",
         "requested": "[10.0.12, )",
@@ -57,6 +73,15 @@
         "requested": "[10.0.12, )",
         "resolved": "10.0.12",
         "contentHash": "xi+BDjFpW+Sb+MHFHaH6Y/gV9I8BluFwRXc1QyCdoZbIK26eNiBeFuMTe/FMwc33G1wdHCyDg7CVTmb8OdQrMQ=="
+      },
+      "Novell.Directory.Ldap.NETStandard": {
+        "type": "Direct",
+        "requested": "[4.0.0, )",
+        "resolved": "4.0.0",
+        "contentHash": "qyaOhuyv5nhp35yK3X0cBa+pnuVyOqec37LKQDzRSmFPECn6d1cnxBCrJdaqgaWuvOQtWa1rqlEaZyp+lpcXZQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "9.0.2"
+        }
       },
       "SMBLibrary": {
         "type": "Direct",
@@ -575,6 +600,11 @@
         "resolved": "10.0.1",
         "contentHash": "BZC4mhdL569AXV56ep9YO6ShjhxFXGP7SwVX0Bc/e0dJPWnS6aBEXZJXqh64RVx8HquqWHkJUINBydLRQ1yq0g=="
       },
+      "System.Security.Cryptography.Pkcs": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "CoCRHFym33aUSf/NtWSVSZa99dkd0Hm7OCZUxORBjRB16LNhIEOf8THPqzIYlvKM0nNDAPTRBa1FxEECrgaxxA=="
+      },
       "System.Security.Cryptography.ProtectedData": {
         "type": "Transitive",
         "resolved": "4.5.0",
@@ -641,6 +671,11 @@
         "type": "Transitive",
         "resolved": "5.0.0",
         "contentHash": "SxHB3nuNrpptVk+vZ/F+7OHEpoHUIKKMl02bUmYHQr1r+glbZQxs7pRtsf4ENO29TVm2TH3AEeep2fJcy92oYw=="
+      },
+      "System.Security.Cryptography.Pkcs": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "CoCRHFym33aUSf/NtWSVSZa99dkd0Hm7OCZUxORBjRB16LNhIEOf8THPqzIYlvKM0nNDAPTRBa1FxEECrgaxxA=="
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "Transitive",

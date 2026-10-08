@@ -85,7 +85,7 @@ Options:
   -d, --domain <domain>                         Windows/AD domain for impersonation when --username is not already qualified.
   -l, --local                                   Use the local machine account namespace instead of a domain account.
   -k, --kerberos                                Require Kerberos for LDAP and SMB authentication and reject the default per-host NTLM fallback. Use DNS hostnames for service principals.
-  --dns-server <dns-server>                     Send A, AAAA, and PTR queries directly to this DNS server IP address.
+  --dns-server <dns-server>                     Send A, AAAA, PTR, and AD SRV queries directly to this DNS server IP address.
   -dc, --domain-controller <domain-controller>  Domain controller hostname or IP address to use for LDAP discovery if auto-discovery fails.
   -?, -h, --help                                Show help and usage information
 ```
@@ -129,7 +129,12 @@ Scan a specific computer:
 
 Scan all shares in a domain from an unmanaged device:
 ```powershell
-.\sift.exe domain --username pentester --password '<password>' --domain CONTOSO --domain-controller 10.0.0.10
+.\sift.exe domain --username pentester --password '<password>' --domain contoso.com --domain-controller 10.0.0.10
+```
+
+On Linux, use the domain DNS server to discover a controller and resolve hosts:
+```bash
+./sift domain --username pentester --password '<password>' --domain contoso.com --dns-server 10.0.0.10
 ```
 
 Scan a subnet with a local admin:
@@ -150,6 +155,10 @@ Remove-Item Env:SIFT_NT_HASH
 ```
 
 Pass-the-hash uses explicit NTLMv2 and works for `network --device` and `network --subnet` scans on every supported platform. The `domain` command discovers computers through LDAP, so it still requires a password, Kerberos ticket, or the current Windows identity.
+
+On Linux, `network` supports explicit domain passwords, target-local passwords (`--local`), NT hashes, and a Kerberos ticket in a FILE credential cache. `domain` uses DNS SRV records to locate a controller and paged LDAP searches to find computers. With an explicit password, it normally binds over LDAPS on port 636; trust the controller certificate's issuing CA in the Linux trust store. With `--kerberos` or an existing ticket, it uses the system LDAP GSSAPI mechanism on port 389. Install the distribution's GSSAPI SASL module if that mechanism is missing (for example, `libsasl2-modules-gssapi-mit` on Debian-based systems). Set `KRB5CCNAME=FILE:/path/to/cache` for ticket-based SMB scans; the default FILE cache at `/tmp/krb5cc_<uid>` is also supported. Keep the scanner clock synchronized with the domain controllers for Kerberos.
+
+For Linux domain scans, supply the AD DNS domain with `--domain` or a qualified `--username`, or use a ticket whose realm identifies the domain. `--dns-server` can resolve controller SRV records and target hostnames without changing the system resolver. The TLS certificate must match the controller's DNS hostname; a trusted CA is still required when connecting to an IP supplied by DNS.
 
 Sift accepts the NT hash only. It does not accept LM hashes, `LM:NT` pairs, NetNTLM challenge responses, or Kerberos keys. Supplying the hash through `--nt-hash` may retain it in shell history or process listings; use `--nt-hash-env` when that matters.
 
@@ -178,7 +187,7 @@ Sift includes commands for:
 - Local files and folders.
 - Mounted filesystems, mapped drives, and Windows UNC shares.
 - Host and subnet-based SMB discovery, with Kerberos, password-based NTLM, and NTLMv2 pass-the-hash support.
-- Active Directory discovery in regular and Native AOT Windows builds, with paged LDAP queries and signed, sealed authentication.
+- Active Directory discovery on Windows and Linux.
 - Microsoft 365 content in SharePoint, OneDrive and Teams channel files.
 - Slack messages and attachments.
 - Atlassian Cloud content in Jira and Confluence.

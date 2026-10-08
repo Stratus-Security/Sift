@@ -10,7 +10,10 @@ using Stratus.Sift.Connectors.Slack;
 using SMBLibrary;
 using System.DirectoryServices.Protocols;
 using System.Net;
+using System.Net.Security;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 
 namespace Stratus.Sift.Cli.Tests;
@@ -48,6 +51,44 @@ public class CliNetworkScanTests
             "authentication failed");
 
         Assert.Equal(expected, SmbKerberosService.ShouldFallbackToNtlm(exception));
+    }
+
+    [Theory]
+    [InlineData("KDC KRB_AP_ERR_SKEW: Clock skew too great", true)]
+    [InlineData("Cannot locate SRV record for EXAMPLE.TEST", true)]
+    [InlineData("KDC KDC_ERR_PREAUTH_FAILED: Pre-authentication information was invalid", false)]
+    public void KerberosFallback_DoesNotHideInvalidCredentials(string message, bool expected)
+    {
+        Assert.Equal(expected, SmbKerberosService.ShouldFallbackToNtlm(new InvalidOperationException(message)));
+    }
+
+    [Fact]
+    public void PortableLdapCertificateValidation_RequiresTrustAndControllerName()
+    {
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=dc.example.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+
+        Assert.True(PortableLdapDiscovery.VerifyControllerCertificate(
+            certificate, "dc.example.test", SslPolicyErrors.RemoteCertificateNameMismatch));
+        Assert.False(PortableLdapDiscovery.VerifyControllerCertificate(
+            certificate, "other.example.test", SslPolicyErrors.RemoteCertificateNameMismatch));
+        Assert.False(PortableLdapDiscovery.VerifyControllerCertificate(
+            certificate, "dc.example.test", SslPolicyErrors.RemoteCertificateChainErrors));
+    }
+
+    [Fact]
+    public void ActiveDirectoryComputerSearchPolicy_NormalizesHostsAndRejectsRepeatedPages()
+    {
+        var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ActiveDirectoryComputerSearchPolicy.AddHost(hosts, "winterfell.example.test.", "ignored");
+        ActiveDirectoryComputerSearchPolicy.AddHost(hosts, null, "castelblack.example.test.");
+        Assert.Equal(["castelblack.example.test", "winterfell.example.test"], ActiveDirectoryComputerSearchPolicy.OrderHosts(hosts));
+
+        var seenCookies = new HashSet<string>(StringComparer.Ordinal);
+        Assert.True(ActiveDirectoryComputerSearchPolicy.HasMorePages([1, 2], seenCookies));
+        Assert.False(ActiveDirectoryComputerSearchPolicy.HasMorePages([], seenCookies));
+        Assert.Throws<InvalidOperationException>(() => ActiveDirectoryComputerSearchPolicy.HasMorePages([1, 2], seenCookies));
     }
 
     [Fact]
@@ -364,7 +405,7 @@ public class CliNetworkScanTests
 
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        var discovery = new ActiveDirectoryLdapDiscovery(new CliDnsResolver());
+        var discovery = new ActiveDirectoryLdapDiscovery(new CliDnsResolver(), new DomainControllerLocator());
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             discovery.EnumerateComputersAsync(
@@ -951,6 +992,23 @@ public class CliNetworkScanTests
         var parseResult = rootCommand.Parse(["domain", "--username", "alice", "--password", "secret", "--domain", "contoso", "--local"]);
 
         Assert.Contains(parseResult.Errors, error => error.Message.Contains("Use either --domain or --local", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildRootCommand_DomainLocalCredentialPreservesWindowsMode()
+    {
+        var rootCommand = Program.BuildRootCommand();
+
+        var parseResult = rootCommand.Parse(["domain", "--username", "alice", "--password", "secret", "--local"]);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Empty(parseResult.Errors);
+        }
+        else
+        {
+            Assert.Contains(parseResult.Errors, error => error.Message.Contains("--local is only valid", StringComparison.Ordinal));
+        }
     }
 
     [Fact]

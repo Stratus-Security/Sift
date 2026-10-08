@@ -337,7 +337,6 @@ internal sealed partial class SmbDiscoveryService
         return shares;
     }
 
-    [SupportedOSPlatform("windows")]
     internal Task<IReadOnlyList<string>> EnumerateDomainHostsForScanAsync(
         CliWindowsCredential? credential,
         bool strictKerberos,
@@ -348,7 +347,6 @@ internal sealed partial class SmbDiscoveryService
         return EnumerateDomainHostsForScanAsync(null, credential, strictKerberos, dnsServer, cancellationToken, progress);
     }
 
-    [SupportedOSPlatform("windows")]
     internal Task<IReadOnlyList<string>> EnumerateDomainHostsForScanAsync(
         string? domainController,
         CliWindowsCredential? credential,

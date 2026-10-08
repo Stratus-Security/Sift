@@ -180,7 +180,7 @@ internal static class CliCommandFactory
         var dnsServerOption = CreateDnsServerOption();
         var domainControllerOption = new Option<string>("--domain-controller")
         {
-            Description = "Domain controller hostname or IP address to use for LDAP discovery. If omitted, Windows auto-discovers a domain controller."
+            Description = "Domain controller hostname or IP address to use for LDAP discovery. If omitted, the controller is discovered from the AD domain."
         };
         domainControllerOption.Aliases.Add("--dc");
         domainControllerOption.Aliases.Add("-dc");
@@ -225,7 +225,15 @@ internal static class CliCommandFactory
         AddResumeValidator(command, commonOptions.Resume, commonOptions.EnumOnly);
         command.Validators.Add(result =>
         {
-            if (!string.IsNullOrWhiteSpace(result.GetValue(dnsServerOption)) &&
+            if (!OperatingSystem.IsWindows() && result.GetValue(credentialOptions.Local))
+            {
+                result.AddError("Domain discovery requires an Active Directory identity; --local is only valid for targeted network scans.");
+            }
+        });
+        command.Validators.Add(result =>
+        {
+            if (OperatingSystem.IsWindows() &&
+                !string.IsNullOrWhiteSpace(result.GetValue(dnsServerOption)) &&
                 string.IsNullOrWhiteSpace(result.GetValue(domainControllerOption)))
             {
                 result.AddError("--dns-server requires --domain-controller for domain scans so Windows auto-discovery cannot consult local DNS.");
@@ -916,7 +924,7 @@ internal static class CliCommandFactory
     {
         var option = new Option<string>("--dns-server")
         {
-            Description = "DNS server IPv4 or IPv6 address for direct A, AAAA, and PTR queries. When supplied, local DNS is not consulted or used as fallback."
+            Description = "DNS server IPv4 or IPv6 address for direct A, AAAA, PTR, and AD SRV queries. When supplied, local DNS is not consulted or used as fallback."
         };
         option.Validators.Add(result =>
         {

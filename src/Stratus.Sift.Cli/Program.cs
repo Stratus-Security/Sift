@@ -19,6 +19,10 @@ public class Program
 
     public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken = default)
     {
+        if (args.Length > 0 && args[0].Equals("--sift-internal-ldap", StringComparison.Ordinal))
+        {
+            return await ActiveDirectoryLdapDiscovery.RunLdapChildCommandAsync(args, cancellationToken);
+        }
         var rootCommand = BuildRootCommand();
         var result = rootCommand.Parse(args);
         try
@@ -50,6 +54,7 @@ public class Program
         builder.Services.AddSingleton<RemoteDriveScanner>();
         builder.Services.AddSingleton<ThrottleNotificationHub>();
         builder.Services.AddSingleton<CliDnsResolver>();
+        builder.Services.AddSingleton<DomainControllerLocator>();
         builder.Services.AddSingleton<ActiveDirectoryLdapDiscovery>();
         builder.Services.AddSingleton<SmbDiscoveryService>();
         builder.Services.AddSingleton<SmbKerberosService>();

@@ -14,7 +14,7 @@ using FileAttributes = SMBLibrary.FileAttributes;
 
 namespace Stratus.Sift.Cli;
 
-internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, CliDnsResolver dnsResolver)
+internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, CliDnsResolver dnsResolver, DomainControllerLocator controllerLocator)
 {
     private const int HostParallelism = 16;
     internal const int ResponseTimeoutMs = 30_000;
@@ -30,12 +30,6 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         CancellationToken cancellationToken,
         CliDiscoveryProgress? progress = null)
     {
-        if (credential?.IsLocalMachineAccount == true && !credential.UsesNtHash)
-        {
-            throw new InvalidOperationException(
-                "Kerberos requires an Active Directory identity. Qualify the username with --domain <ad-dns-domain> or use user@domain.");
-        }
-
         var hostTargets = await GetHostTargetsAsync(
             target,
             credential,
@@ -43,6 +37,9 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             dnsServer,
             cancellationToken, progress).ConfigureAwait(false);
         progress?.FindingShares(hostTargets.Count);
+        var kdcLookups = OperatingSystem.IsWindows()
+            ? null
+            : new ConcurrentDictionary<KdcLookupKey, Lazy<Task<string?>>>();
         var drives = new ConcurrentBag<IRemoteDrive>();
         var warnings = new ConcurrentBag<string>();
         var ntlmFallbackHosts = 0;
@@ -63,7 +60,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 var failed = false;
                 try
                 {
-                    var connection = await ResolveConnectionAsync(hostTarget.Host, credential, dnsServer, token);
+                    var connection = await ResolveConnectionAsync(hostTarget.Host, credential, dnsServer, token, kdcLookups);
                     await CheckTcpConnectionAsync(connection.Address, token).ConfigureAwait(false);
                     var result = await SmbHostOperation.RunAsync(
                         operationToken => DiscoverHostDrives(
@@ -128,7 +125,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         CancellationToken cancellationToken)
     {
         var result = new HostDiscoveryResult();
-        if (credential?.UsesNtHash == true)
+        if (credential?.UsesNtHash == true ||
+            (!OperatingSystem.IsWindows() && credential?.IsLocalMachineAccount == true))
         {
             DiscoverSharesOnHost(connection with { AuthenticationProtocol = SmbAuthenticationProtocol.Ntlm },
                 hostTarget, result, shouldPruneDirectory, onCurrentPath, cancellationToken);
@@ -250,7 +248,11 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         if (exception is not SmbAuthenticationException authenticationException)
         {
             return exception.Message.Contains("DNS hostname", StringComparison.OrdinalIgnoreCase)
-                || exception.Message.Contains("service principal", StringComparison.OrdinalIgnoreCase);
+                || exception.Message.Contains("service principal", StringComparison.OrdinalIgnoreCase)
+                || exception.Message.Contains("KRB_AP_ERR_SKEW", StringComparison.OrdinalIgnoreCase)
+                || exception.Message.Contains("KDC_ERR_S_PRINCIPAL_UNKNOWN", StringComparison.OrdinalIgnoreCase)
+                || exception.Message.Contains("Cannot locate SRV record", StringComparison.OrdinalIgnoreCase)
+                || exception.Message.Contains("No KDC", StringComparison.OrdinalIgnoreCase);
         }
 
         if (authenticationException.Status == NTStatus.STATUS_NOT_SUPPORTED)
@@ -276,11 +278,6 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
     {
         if (target.Mode == FileSystemScanMode.Domain)
         {
-            if (!OperatingSystem.IsWindows())
-            {
-                throw new PlatformNotSupportedException("Active Directory LDAP discovery is currently supported only on Windows.");
-            }
-
             if (credential?.UsesNtHash == true)
             {
                 throw new InvalidOperationException(
@@ -322,11 +319,19 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             : new SmbHostTarget(parts[0], null);
     }
 
-    internal async Task<SmbKerberosConnection> ResolveConnectionAsync(
+    internal Task<SmbKerberosConnection> ResolveConnectionAsync(
         string host,
         CliWindowsCredential? credential,
         IPAddress? dnsServer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        ResolveConnectionAsync(host, credential, dnsServer, cancellationToken, null);
+
+    private async Task<SmbKerberosConnection> ResolveConnectionAsync(
+        string host,
+        CliWindowsCredential? credential,
+        IPAddress? dnsServer,
+        CancellationToken cancellationToken,
+        ConcurrentDictionary<KdcLookupKey, Lazy<Task<string?>>>? kdcLookups)
     {
         var normalizedHost = host.Trim().TrimStart('\\').TrimEnd('.');
         var realm = GetCredentialRealm(credential);
@@ -366,6 +371,17 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         realm = string.IsNullOrWhiteSpace(realm)
             ? FirstNonEmpty(probeResult?.DnsDomainName, kerberosReady ? InferDnsDomain(kerberosHostName) : null)
             : realm;
+        string? kdcHost = null;
+        if (!OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(realm) && kerberosReady &&
+            credential?.UsesNtHash != true && credential?.IsLocalMachineAccount != true)
+        {
+            var lookup = kdcLookups is null
+                ? ResolveKdcHostAsync(realm, dnsServer, cancellationToken)
+                : kdcLookups.GetOrAdd(
+                    new KdcLookupKey(realm.ToUpperInvariant(), dnsServer),
+                    _ => new Lazy<Task<string?>>(() => ResolveKdcHostAsync(realm, dnsServer, cancellationToken))).Value;
+            kdcHost = await lookup.ConfigureAwait(false);
+        }
         var displayHost = kerberosReady ? kerberosHostName.TrimEnd('.') : normalizedHost;
         return new SmbKerberosConnection(
             address,
@@ -373,7 +389,23 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             realm,
             credential,
             SmbAuthenticationProtocol.Kerberos,
-            kerberosReady);
+            kerberosReady,
+            kdcHost);
+    }
+
+    private async Task<string?> ResolveKdcHostAsync(string realm, IPAddress? dnsServer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var controller = await controllerLocator.LocateAsync(null, realm, dnsServer, cancellationToken).ConfigureAwait(false);
+            return (await dnsResolver.ResolveHostAddressesAsync(controller, dnsServer, cancellationToken)
+                .ConfigureAwait(false)).First().ToString();
+        }
+        catch when (!cancellationToken.IsCancellationRequested)
+        {
+            // NTLM fallback can still succeed when the realm's SRV records are unavailable.
+            return null;
+        }
     }
 
     private static SmbTargetNameProbeResult? TryProbeSmbTarget(IPAddress address)
@@ -443,6 +475,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
     }
 
     private sealed record SmbHostTarget(string Host, string? Share);
+
+    private readonly record struct KdcLookupKey(string Realm, IPAddress? DnsServer);
 }
 
 internal sealed record SmbKerberosDiscoveryResult(
@@ -466,7 +500,8 @@ internal sealed record SmbKerberosConnection(
     string? Realm,
     CliWindowsCredential? Credential,
     SmbAuthenticationProtocol AuthenticationProtocol,
-    bool IsKerberosReady)
+    bool IsKerberosReady,
+    string? KdcHost = null)
 {
     internal string DisplayHost => KerberosHostName;
 }
@@ -698,6 +733,10 @@ internal sealed class SmbKerberosSession : IDisposable
             : "NTLM";
         var authenticationUserName = credential?.UserName;
         var authenticationDomain = connection.Realm;
+        if (credential?.IsLocalMachineAccount == true && connection.AuthenticationProtocol == SmbAuthenticationProtocol.Ntlm)
+        {
+            authenticationDomain = connection.KerberosHostName.Split('.')[0];
+        }
         if (credential != null && connection.AuthenticationProtocol == SmbAuthenticationProtocol.Kerberos
             && credential.UserName.Contains('@', StringComparison.Ordinal))
         {
@@ -714,30 +753,77 @@ internal sealed class SmbKerberosSession : IDisposable
         }
 
         IAuthenticationClient authentication;
-        if (credential?.UsesNtHash == true)
+        try
         {
-            if (connection.AuthenticationProtocol != SmbAuthenticationProtocol.Ntlm)
+            if (credential?.UsesNtHash == true)
             {
-                throw new InvalidOperationException("An NT hash can only be used with explicit NTLM authentication.");
-            }
+                if (connection.AuthenticationProtocol != SmbAuthenticationProtocol.Ntlm)
+                {
+                    throw new InvalidOperationException("An NT hash can only be used with explicit NTLM authentication.");
+                }
 
-            authentication = new NtlmHashAuthenticationClient(
-                authenticationDomain,
-                authenticationUserName!,
-                credential.NtHash!,
-                $"cifs/{connection.KerberosHostName}",
-                credential.IsLocalMachineAccount);
-        }
-        else
-        {
-            authentication = credential == null
-                ? new SspiSmbAuthenticationClient(connection.KerberosHostName, securityPackage)
-                : new SspiSmbAuthenticationClient(
-                    connection.KerberosHostName,
-                    securityPackage,
+                authentication = new NtlmHashAuthenticationClient(
                     authenticationDomain,
+                    authenticationUserName!,
+                    credential.NtHash!,
+                    $"cifs/{connection.KerberosHostName}",
+                    credential.IsLocalMachineAccount);
+            }
+            else if (!OperatingSystem.IsWindows() && connection.AuthenticationProtocol == SmbAuthenticationProtocol.Ntlm)
+            {
+                if (credential?.Password is null)
+                {
+                    throw new InvalidOperationException("NTLM password authentication requires explicit credentials on this platform.");
+                }
+                if (credential.IsLocalMachineAccount)
+                {
+                    var ntHash = SMBLibrary.Authentication.NTLM.NTLMCryptography.NTOWFv1(credential.Password);
+                    try
+                    {
+                        authentication = new NtlmHashAuthenticationClient(
+                            authenticationDomain, authenticationUserName!, ntHash,
+                            $"cifs/{connection.KerberosHostName}", useServerTargetAsDomain: true);
+                    }
+                    finally
+                    {
+                        System.Security.Cryptography.CryptographicOperations.ZeroMemory(ntHash);
+                    }
+                }
+                else
+                {
+                    authentication = new NTLMAuthenticationClient(
+                        authenticationDomain ?? string.Empty,
+                        authenticationUserName!,
+                        credential.Password,
+                        $"cifs/{connection.KerberosHostName}",
+                        AuthenticationMethod.NTLMv2);
+                }
+            }
+            else if (!OperatingSystem.IsWindows())
+            {
+                authentication = new PortableKerberosAuthenticationClient(
+                    connection.KerberosHostName,
+                    connection.Realm,
+                    connection.KdcHost,
                     authenticationUserName,
-                    credential.Password);
+                    credential?.Password);
+            }
+            else
+            {
+                authentication = credential == null
+                    ? new SspiSmbAuthenticationClient(connection.KerberosHostName, securityPackage)
+                    : new SspiSmbAuthenticationClient(
+                        connection.KerberosHostName,
+                        securityPackage,
+                        authenticationDomain,
+                        authenticationUserName,
+                        credential.Password);
+            }
+        }
+        catch
+        {
+            try { client.Disconnect(); } catch { }
+            throw;
         }
 
         try

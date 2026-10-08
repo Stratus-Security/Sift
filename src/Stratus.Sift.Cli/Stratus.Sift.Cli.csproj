@@ -25,7 +25,10 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
     <PackageReference Include="Microsoft.Playwright" Version="1.61.0" Condition="'$(PublishAot)' != 'true'" />
+    <PackageReference Include="Novell.Directory.Ldap.NETStandard" Version="4.0.0" />
     <PackageReference Include="SMBLibrary" Version="1.5.7.1" />
+    <PackageReference Include="DnsClient" Version="1.8.0" />
+    <PackageReference Include="Kerberos.NET" Version="4.6.168" />
     <PackageReference Include="System.DirectoryServices.Protocols" Version="10.0.10" />
     <PackageReference Include="System.CommandLine" Version="2.0.5" />
   </ItemGroup>
@@ -38,6 +41,7 @@
   </PropertyGroup>
   <ItemGroup Condition="'$(PublishAot)' == 'true'">
     <Compile Remove="SlackBrowserConnector.cs" />
+    <TrimmerRootAssembly Include="Kerberos.NET" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Stratus.Sift.Cli.Tests" />

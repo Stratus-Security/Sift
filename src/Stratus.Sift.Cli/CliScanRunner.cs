@@ -182,7 +182,6 @@ internal static class CliScanRunner
                     llmValidator,
                     llmOptions,
                     diagnostics: null,
-                    enumerateOnly: false,
                     cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -291,17 +290,7 @@ internal static class CliScanRunner
             return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
 
-        if (!OperatingSystem.IsWindows() && (credential?.UsesNtHash != true || target.Mode == FileSystemScanMode.Domain))
-        {
-            display.WriteEvent(
-                "Error: domain discovery and password/Kerberos SMB authentication are currently supported only on Windows. Cross-platform network scans require --nt-hash.",
-                ConsoleColor.Red);
-            display.IncrementErrors();
-            display.Complete("Network crawl failed");
-            return CliExitCodes.Failed;
-        }
-
-        if (ShouldUseKerberosPreferredAuthentication(credential))
+        if (!OperatingSystem.IsWindows() || ShouldUseKerberosPreferredAuthentication(credential))
         {
             return await RunKerberosDiscoveryScanAsync(
                 target,
@@ -322,14 +311,6 @@ internal static class CliScanRunner
         if (kerberos)
         {
             display.WriteEvent("Error: Kerberos cannot authenticate a local machine account. Use an Active Directory identity or remove --kerberos.", ConsoleColor.Red);
-            display.IncrementErrors();
-            display.Complete("Network crawl failed");
-            return CliExitCodes.Failed;
-        }
-
-        if (!OperatingSystem.IsWindows())
-        {
-            display.WriteEvent("Error: this SMB authentication path requires Windows.", ConsoleColor.Red);
             display.IncrementErrors();
             display.Complete("Network crawl failed");
             return CliExitCodes.Failed;
@@ -362,6 +343,8 @@ internal static class CliScanRunner
         display.WriteEvent(
             usesNtHash
                 ? "Authentication mode: explicit NTLMv2 pass-the-hash; Kerberos is disabled."
+                : !OperatingSystem.IsWindows() && credential?.IsLocalMachineAccount == true
+                ? "Authentication mode: explicit NTLMv2 with a target-local account."
                 : allowNtlmFallback
                 ? "Authentication mode: Kerberos preferred; NTLM is attempted only per host when Kerberos is unavailable."
                 : "Authentication mode: strict Kerberos (cifs SPN); NTLM fallback is disabled.",
@@ -461,15 +444,12 @@ internal static class CliScanRunner
             return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
         display.EndDiscovery();
-        if (!enumerateOnly)
-        {
-            llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
-        }
+        llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
         var remoteDriveScanner = session.Host.Services.GetRequiredService<RemoteDriveScanner>();
         var checkpointStore = session.Host.Services.GetRequiredService<CliCheckpointStore>();
         var resumeStore = session.Host.Services.GetRequiredService<CliResumeStore>();
         display.SetTotalDrives(discovery.Drives.Count);
-        display.SetPhase(enumerateOnly ? "Enumerating SMB shares" : "Scanning SMB shares");
+        display.SetPhase("Scanning SMB shares");
 
         foreach (var drive in discovery.Drives)
         {
@@ -507,7 +487,6 @@ internal static class CliScanRunner
                     llmValidator,
                     llmOptions,
                     diagnostics,
-                    enumerateOnly,
                     cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -523,7 +502,7 @@ internal static class CliScanRunner
             }
         }
 
-        display.Complete(enumerateOnly ? "Network enumeration complete" : "Network crawl complete");
+        display.Complete("Network crawl complete");
         return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
     }
 
@@ -626,12 +605,9 @@ internal static class CliScanRunner
                 return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
             }
             display.EndDiscovery();
-            if (!enumerateOnly)
-            {
-                llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
-            }
+            llmValidator ??= await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
             display.SetTotalDrives(roots.Count);
-            display.SetPhase(enumerateOnly ? "Enumerating SMB shares" : "Scanning SMB shares");
+            display.SetPhase("Scanning SMB shares");
 
             foreach (var root in roots)
             {
@@ -641,20 +617,18 @@ internal static class CliScanRunner
 
                 try
                 {
-                    await using var resumeSession = enumerateOnly
-                        ? null
-                        : OpenFilesystemResumeSession(
-                            resumeStore,
-                            target,
-                            root,
-                            session,
-                            includeBinary,
-                            llmOptions,
-                            credential,
-                            strictKerberos,
-                            dnsServer,
-                            fullScan,
-                            display);
+                    await using var resumeSession = OpenFilesystemResumeSession(
+                        resumeStore,
+                        target,
+                        root,
+                        session,
+                        includeBinary,
+                        llmOptions,
+                        credential,
+                        strictKerberos,
+                        dnsServer,
+                        fullScan,
+                        display);
                     await impersonationSession.RunAsync(() => ScanFileSystemRootAsync(
                         root,
                         standardEnumerator,
@@ -665,7 +639,7 @@ internal static class CliScanRunner
                         llmValidator,
                         llmOptions,
                         diagnostics,
-                        enumerateOnly,
+                        enumerateOnly: false,
                         resumeSession,
                         cancellationToken));
                 }
@@ -680,7 +654,7 @@ internal static class CliScanRunner
                 }
             }
 
-            display.Complete(enumerateOnly ? "Network enumeration complete" : "Network crawl complete");
+            display.Complete("Network crawl complete");
             return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
     }
@@ -716,7 +690,6 @@ internal static class CliScanRunner
         Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator,
         CliLlmOptions? llmOptions,
         CliScanDiagnostics? diagnostics,
-        bool enumerateOnly,
         CancellationToken cancellationToken)
     {
         var scanCompleted = true;
@@ -742,7 +715,7 @@ internal static class CliScanRunner
             },
             onCheckpointToken: async token =>
             {
-                if (enumerateOnly || sourceCheckpointAge.Elapsed < TimeSpan.FromSeconds(30)) return;
+                if (sourceCheckpointAge.Elapsed < TimeSpan.FromSeconds(30)) return;
                 await display.FlushOutputCheckpointAsync(cancellationToken);
                 SetDeltaToken(checkpointStore, checkpointKey, token);
                 await resumeSession.ClearAsync(cancellationToken);
@@ -750,7 +723,6 @@ internal static class CliScanRunner
             },
             onNewDeltaToken: async token =>
             {
-                if (enumerateOnly) return;
                 await display.FlushOutputCheckpointAsync(cancellationToken);
                 SetDeltaToken(checkpointStore, checkpointKey, token);
                 finalTokenWritten = !string.IsNullOrWhiteSpace(token);
@@ -765,7 +737,7 @@ internal static class CliScanRunner
                     for (var index = 0; index < count; index++) diagnostics.RecordCandidate(directory: false);
                 }
             },
-            onFilesScanned: enumerateOnly ? null : display.AddFilesScanned,
+            onFilesScanned: display.AddFilesScanned,
             onQueueDepth: diagnostics is null ? null : depth => diagnostics.ObserveQueueDepth(depth),
             onCurrentPath: display.SetCurrentPath,
             ensureScanActive: null,
@@ -775,40 +747,33 @@ internal static class CliScanRunner
                 : new RemoteDriveScanExecutionOptions(
                     diagnostics.Workers,
                     diagnostics.QueueCapacity,
-                    enumerateOnly),
-            shouldSkipItem: enumerateOnly
-                ? null
-                : item => resumeSession.ContainsRemote(drive.ConnectionId, item.Id, item.Path, item.Size),
-            onItemProcessed: enumerateOnly
-                ? null
-                : (item, token) => resumeSession.MarkRemoteCompletedAsync(
-                    drive.ConnectionId,
-                    item.Id,
-                    item.Path,
-                    item.Size,
-                    display.FlushOutputCheckpointAsync,
-                    token),
+                    false),
+            shouldSkipItem: item => resumeSession.ContainsRemote(drive.ConnectionId, item.Id, item.Path, item.Size),
+            onItemProcessed: (item, token) => resumeSession.MarkRemoteCompletedAsync(
+                drive.ConnectionId,
+                item.Id,
+                item.Path,
+                item.Size,
+                display.FlushOutputCheckpointAsync,
+                token),
             onScanIncomplete: () =>
             {
                 if (scanCompleted) display.IncrementErrors();
                 scanCompleted = false;
             });
 
-        if (!enumerateOnly)
+        await resumeSession.CommitAsync(display.FlushOutputCheckpointAsync, cancellationToken);
+        if (scanCompleted)
         {
-            await resumeSession.CommitAsync(display.FlushOutputCheckpointAsync, cancellationToken);
-            if (scanCompleted)
+            if (finalTokenWritten)
             {
-                if (finalTokenWritten)
-                {
-                    await resumeSession.ClearAsync(cancellationToken);
-                }
-                else
-                {
-                    // Sources without an authoritative final delta token (for example SMB)
-                    // retain their item journal so a later --resume can skip unchanged content.
-                    checkpointStore.ClearRemoteDriveToken(checkpointKey);
-                }
+                await resumeSession.ClearAsync(cancellationToken);
+            }
+            else
+            {
+                // Sources without an authoritative final delta token (for example SMB)
+                // retain their item journal so a later --resume can skip unchanged content.
+                checkpointStore.ClearRemoteDriveToken(checkpointKey);
             }
         }
     }

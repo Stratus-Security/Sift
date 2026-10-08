@@ -57,6 +57,11 @@
           "Microsoft.Identity.Client.Extensions.Msal": "4.83.1"
         }
       },
+      "DnsClient": {
+        "type": "Transitive",
+        "resolved": "1.8.0",
+        "contentHash": "RRwtaCXkXWsx0mmsReGDqCbRLtItfUbkRJlet1FpdciVhyMGKcPd57T1+8Jki9ojHlq9fntVhXQroOOgRak8DQ=="
+      },
       "DocumentFormat.OpenXml": {
         "type": "Transitive",
         "resolved": "3.5.1",
@@ -71,6 +76,15 @@
         "contentHash": "U5txtc3ORno73xQx9Lf2gWzfaSZnZwKHfLkTAslhlew9lxe5XbUiCt0dY1fHeAf8yRqszUAe5i/+xLC9R/Xfsw==",
         "dependencies": {
           "System.IO.Packaging": "10.0.2"
+        }
+      },
+      "Kerberos.NET": {
+        "type": "Transitive",
+        "resolved": "4.6.168",
+        "contentHash": "QJaRtUTd73h0AXnbxzHfExJhiDA8+eh+EbW0ov4RVrJ5VUP9oX/XxYtBMPfF5YDL3QFyO/5Se0S8BQvXPwasmQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.2",
+          "System.Security.Cryptography.Pkcs": "8.0.1"
         }
       },
       "Microsoft.Bcl.AsyncInterfaces": {
@@ -559,6 +573,14 @@
         "resolved": "13.0.3",
         "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
       },
+      "Novell.Directory.Ldap.NETStandard": {
+        "type": "Transitive",
+        "resolved": "4.0.0",
+        "contentHash": "qyaOhuyv5nhp35yK3X0cBa+pnuVyOqec37LKQDzRSmFPECn6d1cnxBCrJdaqgaWuvOQtWa1rqlEaZyp+lpcXZQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "9.0.2"
+        }
+      },
       "PdfPig": {
         "type": "Transitive",
         "resolved": "0.1.13",
@@ -629,6 +651,11 @@
         "resolved": "10.0.1",
         "contentHash": "BZC4mhdL569AXV56ep9YO6ShjhxFXGP7SwVX0Bc/e0dJPWnS6aBEXZJXqh64RVx8HquqWHkJUINBydLRQ1yq0g=="
       },
+      "System.Security.Cryptography.Pkcs": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "CoCRHFym33aUSf/NtWSVSZa99dkd0Hm7OCZUxORBjRB16LNhIEOf8THPqzIYlvKM0nNDAPTRBa1FxEECrgaxxA=="
+      },
       "System.Security.Cryptography.ProtectedData": {
         "type": "Transitive",
         "resolved": "4.5.0",
@@ -677,9 +704,12 @@
       "sift": {
         "type": "Project",
         "dependencies": {
+          "DnsClient": "[1.8.0, )",
+          "Kerberos.NET": "[4.6.168, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "Microsoft.Extensions.Http": "[10.0.10, )",
           "Microsoft.Playwright": "[1.61.0, )",
+          "Novell.Directory.Ldap.NETStandard": "[4.0.0, )",
           "SMBLibrary": "[1.5.7.1, )",
           "Stratus.Sift.Connectors": "[0.3.0, )",
           "Stratus.Sift.Contracts": "[0.3.0, )",
