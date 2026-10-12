@@ -119,8 +119,8 @@ public sealed class Microsoft365ExpandedCoverageTests
             else
             {
                 var graph = Graph(request => request.RequestUri!.AbsolutePath.EndsWith("/versions")
-                    ? Json(new { value = new[] { new { id = "1.0", size = 6 } } })
-                    : request.RequestUri.AbsolutePath.EndsWith("/listItem") ? Json(new { fields = new { Custom = "secret" } }) : Content());
+                    ? Json(new { value = new[] { new { id = "2.0", size = 6 }, new { id = "1.0", size = 6 } } })
+                    : request.RequestUri.AbsolutePath.EndsWith("/listItem") ? Json(new { fields = new { Custom = "secret", _UIVersionString = "2.0" } }) : Content());
                 file = new SharePointFile(graph, "drive", Item("file", "test.txt", "v1"), "tenant", false, Only(versions: true, fields: true));
             }
             var rule = new Classifier { Name = "Content", Matches = [new ClassifierMatch { Target = RuleTarget.Content, Patterns = ["secret"], IncludedExtensions = [".txt", ".json"] }] };
@@ -130,6 +130,41 @@ public sealed class Microsoft365ExpandedCoverageTests
             Assert.Equal(3, result.Findings.Count);
             Assert.Contains(result.Findings, finding => finding.ResourcePath.Contains("#sift-version="));
         }
+    }
+
+    [Theory]
+    [InlineData("test.txt", false, false)]
+    [InlineData("test.loop", false, true)]
+    [InlineData("test.whiteboard", true, false)]
+    public async Task GraphHistory_SkipsCurrentVersionWithoutAssumingFirstEntryIsCurrent(string name, bool metadataSelected, bool fields)
+    {
+        var requests = new List<Uri>();
+        var graph = Graph(request =>
+        {
+            var uri = request.RequestUri!; requests.Add(uri);
+            if (uri.AbsolutePath.EndsWith("/versions")) return Json(new { value = new[]
+                { new { id = "1.0", size = 6 }, new { id = "2.0", size = 6 } } });
+            if (uri.AbsolutePath.EndsWith("/listItem")) return Json(new { fields = new { _UIVersionString = "2.0" } });
+            if (uri.AbsolutePath.EndsWith("/file"))
+            {
+                Assert.Contains("publication", uri.Query);
+                return Json(new { id = "file", publication = new { versionId = "2.0" } });
+            }
+            Assert.Contains("/versions/1.0/content", uri.AbsolutePath);
+            return Content();
+        });
+        var item = Item("file", name, "v1");
+        if (metadataSelected) item.Publication = new() { VersionId = "2.0" };
+        var file = new SharePointFile(graph, "drive", item, "tenant", false,
+            Only(versions: true, fields: fields) with { MaxVersionsPerFile = 1 });
+        var extras = new List<IRemoteFile>();
+
+        await foreach (var extra in file.GetSupplementalFilesAsync(CancellationToken.None)) extras.Add(extra);
+        var historical = Assert.Single(extras, extra => extra.Id.Contains(":version:"));
+        using var stream = await historical.GetContentAsync();
+        Assert.NotNull(stream);
+        Assert.Equal(metadataSelected || fields ? 0 : 1, requests.Count(uri => uri.AbsolutePath.EndsWith("/file")));
+        Assert.DoesNotContain(requests, uri => uri.AbsolutePath.Contains("/versions/2.0/content"));
     }
 
     [Theory]
@@ -347,6 +382,46 @@ public sealed class Microsoft365ExpandedCoverageTests
     }
 
     [Theory]
+    [InlineData(404, false, true, true, false, true)]
+    [InlineData(403, false, true, true, false, true)]
+    [InlineData(404, false, true, true, true, true)]
+    [InlineData(404, false, true, false, false, false)]
+    [InlineData(404, true, true, true, false, false)]
+    [InlineData(400, false, true, true, false, false)]
+    [InlineData(404, false, false, true, false, false)]
+    [InlineData(403, false, false, true, false, false)]
+    public async Task UnavailableGraphPrincipal_RequiresSuccessfulNativeReconciliation(
+        int status, bool graphComplete, bool nativeAvailable, bool nativeSucceeds, bool anonymousLink, bool complete)
+    {
+        var nativeReads = 0;
+        var rest = Rest(request =>
+        {
+            nativeReads++;
+            if (!nativeSucceeds) return Response(HttpStatusCode.Forbidden, "{}");
+            return request.RequestUri!.AbsolutePath.EndsWith("/RoleAssignments")
+                ? Json(new { value = Array.Empty<object>() })
+                : Json(new { HasUniqueRoleAssignments = false, Author = new { Title = "Owner" } });
+        });
+        var graph = Graph(request => request.RequestUri!.AbsolutePath.EndsWith("/permissions")
+            ? Json(new { value = new object[]
+            {
+                new { roles = new[] { "owner" }, grantedToV2 = new { user = new { id = "retired" } } },
+                anonymousLink ? new { roles = new[] { "read" }, link = new { scope = "anonymous" } } : new { }
+            } })
+            : Response((HttpStatusCode)status, "{}"));
+        var file = new SharePointFile(graph, "drive", Item("file", "test.txt", "v1"), "tenant", false,
+            Only(sharing: true) with { GraphPermissionsAreComplete = graphComplete, NativeClient = nativeAvailable ? rest : null, NativeSiteUrl = new(SiteUrl) });
+
+        if (complete) await file.PrepareAsync(CancellationToken.None);
+        else await Assert.ThrowsAnyAsync<Exception>(() => file.PrepareAsync(CancellationToken.None));
+
+        Assert.Equal(complete, file.IsContentComplete);
+        Assert.Equal(complete ? anonymousLink ? "Public" : "Restricted" : "Unknown", file.Exposure);
+        Assert.Equal(status is 403 or 404 && !graphComplete && nativeAvailable, nativeReads > 0);
+        if (complete) Assert.Contains(file.AclEntries, acl => acl.Permissions == "owner");
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task SharedSearch_RepeatedHitsStopAndFailedHitsPreserveOtherFiles(bool denyFirst)
@@ -380,8 +455,9 @@ public sealed class Microsoft365ExpandedCoverageTests
     public async Task SupplementalFailure_StillInspectsOtherContentAndDoesNotCommitSource(bool fieldsFail)
     {
         var graph = Graph(request => request.RequestUri!.AbsolutePath.EndsWith("/listItem")
-            ? fieldsFail ? Response(HttpStatusCode.Forbidden, "{}") : Json(new { fields = new { Custom = "secret" } })
-            : request.RequestUri.AbsolutePath.EndsWith("/versions") ? Json(new { value = new[] { new { id = "1" }, new { id = "2" } } }) : Content());
+            ? fieldsFail ? Response(HttpStatusCode.Forbidden, "{}") : Json(new { fields = new { Custom = "secret", _UIVersionString = "3" } })
+            : request.RequestUri.AbsolutePath.EndsWith("/versions") ? Json(new { value = new[] { new { id = "1" }, new { id = "2" } } })
+            : request.RequestUri.AbsolutePath.EndsWith("/file") ? Json(new { id = "file", publication = new { versionId = "3" } }) : Content());
         var file = new SharePointFile(graph, "drive", Item("file", "test.txt", "v1"), "tenant", false,
             Only(fields: true, versions: true) with { MaxVersionsPerFile = 1 });
         var rule = new Classifier { Name = "Content", Matches = [new ClassifierMatch { Target = RuleTarget.Content, Patterns = ["secret"], IncludedExtensions = [".txt", ".json"] }] };

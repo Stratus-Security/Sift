@@ -16,7 +16,7 @@ public partial class SharePointFile : IRemoteFile, IRemoteFileTraversal, IRemote
     private readonly bool _isExternal;
     private readonly Microsoft365CoverageOptions _coverage = Microsoft365CoverageOptions.Disabled;
     private static readonly string[] TraversalSelectFields =
-        ["id", "name", "webUrl", "size", "file", "folder", "deleted", "remoteItem", "sharepointIds", "eTag", "cTag", "lastModifiedDateTime", "createdBy", "parentReference", "shared"];
+        ["id", "name", "webUrl", "size", "file", "folder", "deleted", "remoteItem", "sharepointIds", "eTag", "cTag", "lastModifiedDateTime", "createdBy", "parentReference", "shared", "publication"];
 
     public SharePointFile(GraphServiceClient graphClient, string driveId, DriveItem item, string currentTenantId, bool isExternal = false)
     {

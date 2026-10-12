@@ -712,9 +712,12 @@ internal sealed partial class SharePointRestClient
         {
             var serverRelativeUrl = GetAttributeValue(row, "FileRef");
             serverRelativeUrl = ExtractLookupValue(serverRelativeUrl);
+            // CAML rowsets commonly omit the leading slash in FileRef, unlike
+            // the REST folder/file endpoints and the library root metadata.
+            if (!string.IsNullOrWhiteSpace(serverRelativeUrl) && !serverRelativeUrl.StartsWith('/'))
+                serverRelativeUrl = "/" + serverRelativeUrl;
             if (string.IsNullOrWhiteSpace(serverRelativeUrl)
-                || !serverRelativeUrl.StartsWith(library.RootFolderServerRelativeUrl, StringComparison.OrdinalIgnoreCase)
-                || serverRelativeUrl.Equals(library.RootFolderServerRelativeUrl, StringComparison.OrdinalIgnoreCase)
+                || !serverRelativeUrl.StartsWith(library.RootFolderServerRelativeUrl.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase)
                 || IsSystemFormsPath(library, serverRelativeUrl))
             {
                 continue;

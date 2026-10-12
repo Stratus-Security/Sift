@@ -10,7 +10,7 @@ namespace Stratus.Sift.Connectors.SharePoint;
 public class SharePointDrive : IRemoteDrive
 {
     private const int DeltaPageSize = 999;
-    private static readonly string[] DeltaSelectFields = ["id", "name", "webUrl", "size", "file", "folder", "deleted", "remoteItem", "eTag", "cTag", "lastModifiedDateTime", "createdBy", "parentReference", "sharepointIds", "shared"];
+    private static readonly string[] DeltaSelectFields = ["id", "name", "webUrl", "size", "file", "folder", "deleted", "remoteItem", "eTag", "cTag", "lastModifiedDateTime", "createdBy", "parentReference", "sharepointIds", "shared", "publication"];
 
     private readonly GraphServiceClient _graphClient;
     private readonly Drive _drive;

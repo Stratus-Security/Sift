@@ -31,6 +31,26 @@ public sealed class RemoteScanDiagnosticsRegressionTests
     }
 
     [Theory]
+    [InlineData(403, true)]
+    [InlineData(404, true)]
+    [InlineData(400, false)]
+    public async Task GraphFieldFailures_KeepContentAndClassifyWrappedAccessErrors(int status, bool expected)
+    {
+        var graph = Graph(request => request.RequestUri!.AbsolutePath.EndsWith("/listItem")
+            ? Response((HttpStatusCode)status, "{}") : Response(HttpStatusCode.OK, "secret"));
+        var file = new SharePointFile(graph, "drive", Item("file", "test.txt", "v1"), "tenant", false,
+            Microsoft365CoverageOptions.Disabled with { ScanLibraryFields = true });
+        var logger = new RecordingLogger();
+
+        var result = await ScanAsync(new Microsoft365CoverageTests.SingleFileDrive(file), logger: logger);
+
+        Assert.True(result.Incomplete);
+        Assert.Single(result.Findings);
+        Assert.Null(result.FinalToken);
+        Assert.Equal(!expected, logger.Entries.Any(entry => entry.Level >= LogLevel.Warning));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ExpectedReadFailures_RemainPendingWithoutRepeatedCheckpointWarnings(bool locked)

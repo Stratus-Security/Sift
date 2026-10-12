@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Kiota.Abstractions;
 using Stratus.Sift.Connectors.Interfaces;
 using Stratus.Sift.Core.Models;
 using static Stratus.Sift.Connectors.SharePoint.Microsoft365GraphReader;
@@ -86,7 +87,19 @@ public partial class SharePointFile
                         if (label.Contains("#ext#", StringComparison.OrdinalIgnoreCase)) externalAccess = true;
                         else if (kind is "user" or "group" && !string.IsNullOrWhiteSpace(principalId))
                         {
-                            externalAccess |= await Microsoft365PrincipalReader.IsGuestAsync(_graphClient, kind, principalId, cancellationToken);
+                            try
+                            {
+                                externalAccess |= await Microsoft365PrincipalReader.IsGuestAsync(_graphClient, kind, principalId, cancellationToken);
+                            }
+                            catch (ApiException ex) when (!cancellationToken.IsCancellationRequested
+                                && ex.ResponseStatusCode is 403 or 404
+                                && !_coverage.GraphPermissionsAreComplete && _coverage.NativeClient != null)
+                            {
+                                // Graph can retain grants for deleted users, or hide
+                                // directory details from delegated callers. Complete
+                                // native reconciliation below must resolve the gap.
+                                unknown = true;
+                            }
                         }
                         else if (kind is "siteGroup" or "siteUser" && principalId != null)
                         {
@@ -139,6 +152,7 @@ public partial class SharePointFile
         if (IsDeleted || IsDirectory || IsLink || (!_coverage.ScanLibraryFields && !_coverage.ScanVersions)) yield break;
         var reader = new Microsoft365GraphReader(_graphClient);
         var prefix = $"drives/{Segment(_driveId)}/items/{Segment(Id)}";
+        var currentVersion = _item.Publication?.VersionId;
         Exception? fieldFailure = null;
         Microsoft365ContentFile? fieldFile = null;
         if (_coverage.ScanLibraryFields)
@@ -148,6 +162,7 @@ public partial class SharePointFile
                 using var document = await reader.GetAsync(prefix + "/listItem?$expand=fields", cancellationToken);
                 if (!document.RootElement.TryGetProperty("fields", out var fields) || fields.ValueKind != JsonValueKind.Object)
                     throw new InvalidDataException("Library item response had no field values.");
+                currentVersion ??= String(fields, "_UIVersionString");
                 fieldFile = Microsoft365ContentFile.Text(TraversalIdentity + ":fields", Name + ".fields.json", WebUrl + "#sift-fields",
                     SearchableText(fields), _accessComplete, Exposure, Owner, _acls);
             }
@@ -157,11 +172,23 @@ public partial class SharePointFile
         if (_coverage.ScanVersions)
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            var historicalCount = 0;
             await foreach (var version in reader.EnumerateAsync(prefix + "/versions", cancellationToken))
             {
                 var versionId = Microsoft365GraphReader.Id(version);
                 if (!seen.Add(versionId)) continue;
-                if (seen.Count > _coverage.MaxVersionsPerFile) throw new InvalidDataException("File history exceeds MaxVersionsPerFile.");
+                if (string.IsNullOrWhiteSpace(currentVersion))
+                {
+                    using var current = await reader.GetAsync(prefix + "?$select=id,publication", cancellationToken);
+                    if (current.RootElement.TryGetProperty("publication", out var publication))
+                        currentVersion = String(publication, "versionId");
+                    if (string.IsNullOrWhiteSpace(currentVersion))
+                        throw new InvalidDataException("Current file version could not be established.");
+                }
+                // Graph includes the current version in history, but its version
+                // content endpoint rejects it. The main file already scans it.
+                if (versionId == currentVersion) continue;
+                if (++historicalCount > _coverage.MaxVersionsPerFile) throw new InvalidDataException("File history exceeds MaxVersionsPerFile.");
                 var size = long.TryParse(String(version, "size"), out var bytes) ? bytes : (long?)null;
                 var contentUrl = reader.Url(prefix + $"/versions/{Segment(versionId)}/content");
                 yield return new Microsoft365ContentFile(TraversalIdentity + ":version:" + versionId, Name,

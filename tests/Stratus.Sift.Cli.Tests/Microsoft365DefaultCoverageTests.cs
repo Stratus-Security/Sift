@@ -108,7 +108,9 @@ public sealed class Microsoft365DefaultCoverageTests
                 return Response(HttpStatusCode.OK, JsonSerializer.Serialize(new { id = "item", file = new { } }));
             }
             if (uri.AbsolutePath.EndsWith("/versions"))
-                return Response(HttpStatusCode.OK, JsonSerializer.Serialize(new { value = new[] { new { id = "1.0", size = 6 } } }));
+                return Response(HttpStatusCode.OK, JsonSerializer.Serialize(new { value = new[] { new { id = "2.0", size = 6 }, new { id = "1.0", size = 6 } } }));
+            if (uri.AbsolutePath.EndsWith("/items/item"))
+                return Response(HttpStatusCode.OK, JsonSerializer.Serialize(new { id = "item", publication = new { versionId = "2.0" } }));
             Assert.Contains("format=html", uri.Query);
             return historyUnavailable && uri.AbsolutePath.Contains("/versions/")
                 ? Response(HttpStatusCode.BadRequest, "")

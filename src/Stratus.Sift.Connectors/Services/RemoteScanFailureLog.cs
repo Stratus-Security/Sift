@@ -33,7 +33,8 @@ internal static class RemoteScanExceptionClassifier
             or "SharePoint item permissions require native access."
             or "Recycle-bin inventory requires SharePoint-native access."
             or "Delegated Graph permissions may only show grants visible to the caller; native permission reconciliation is required."
-            || invalid.Message == "Library field values could not be read." && invalid.InnerException != null && IsExpected(invalid.InnerException),
+            || (invalid.Message is "Library field values could not be read." or "Library fields could not be read.")
+                && invalid.InnerException != null && IsExpected(invalid.InnerException),
         IOException io => (io.HResult & 0xffff) is 2 or 3 or 5 or 32 or 33,
         _ => false
     };

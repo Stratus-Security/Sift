@@ -224,6 +224,64 @@ public sealed class SharePointRestPaginationTests
     }
 
     [Theory]
+    [InlineData("sites/Test/Documents/nested/test #100%.txt")]
+    [InlineData("/sites/Test/Documents/nested/test #100%.txt")]
+    [InlineData("12;#sites/Test/Documents/nested/test #100%.txt")]
+    public async Task IncrementalChanges_NormalizeCamlPathsAndRejectSiblingLibraries(string fileRef)
+    {
+        var xml = new XDocument(new XElement("listitems", new XElement("Changes", new XAttribute("LastChangeToken", "next")),
+            new XElement("data",
+                new XElement("row", new XAttribute("ows_UniqueId", "file"), new XAttribute("ows_FileRef", fileRef)),
+                new XElement("row", new XAttribute("ows_UniqueId", "sibling"), new XAttribute("ows_FileRef", "sites/Test/DocumentsArchive/secret.txt")),
+                new XElement("row", new XAttribute("ows_UniqueId", "forms"), new XAttribute("ows_FileRef", "sites/Test/Documents/Forms/AllItems.aspx")))));
+        var client = Client(_ => Microsoft365ReliabilityTests.Response(HttpStatusCode.OK, xml.ToString()));
+
+        var changes = await client.GetListItemChangesAsync(Library(), "previous", null, CancellationToken.None);
+
+        var file = Assert.Single(changes.Items);
+        Assert.Equal("file", file.Id);
+        Assert.Equal("/sites/Test/Documents/nested/test #100%.txt", file.ServerRelativeUrl);
+        Assert.Equal("/sites/Test/Documents/nested/test%20%23100%25.txt", file.WebUrl.AbsolutePath);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task IncrementalRowPagination_FinishesBeforeCheckpointAndStopsRepeatedPages(bool denySecond, bool repeat)
+    {
+        var requests = 0;
+        var checkpoints = new List<string>();
+        var client = Client(request =>
+        {
+            requests++;
+            using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            var query = body.RootElement.GetProperty("query");
+            Assert.Equal("previous", query.GetProperty("ChangeToken").GetString());
+            var options = XDocument.Parse(query.GetProperty("QueryOptions").GetString()!);
+            Assert.Equal(requests == 1 ? null : "Paged=TRUE&p_ID=2", options.Descendants("Paging").SingleOrDefault()?.Attribute("ListItemCollectionPositionNext")?.Value);
+            Assert.Empty(checkpoints);
+            if (requests == 2 && denySecond) return Microsoft365ReliabilityTests.Response(HttpStatusCode.Forbidden, "{}");
+            var data = new XElement("data", new XElement("row", new XAttribute("ows_UniqueId", "file" + requests),
+                new XAttribute("ows_FileRef", "sites/Test/Documents/file" + requests + ".txt")));
+            if (requests == 1 || repeat) data.Add(new XAttribute("ListItemCollectionPositionNext", "Paged=TRUE&p_ID=2"));
+            return Microsoft365ReliabilityTests.Response(HttpStatusCode.OK, new XDocument(new XElement("listitems",
+                new XElement("Changes", new XAttribute("LastChangeToken", "next"), new XAttribute("MoreChanges", "FALSE")), data)).ToString());
+        });
+        var drive = new SharePointRestDrive(client, Library(), "tenant", "Test");
+        var files = new List<IRemoteFile>();
+        Task<string> Run() => drive.ProcessChangesAsync("previous", f => { files.Add(f); return Task.CompletedTask; },
+            token => { checkpoints.Add(token); return Task.CompletedTask; });
+
+        if (denySecond || repeat) await Assert.ThrowsAnyAsync<Exception>(Run);
+        else Assert.Equal("next", await Run());
+
+        Assert.Equal(2, requests);
+        Assert.Equal(denySecond ? 1 : 2, files.Count);
+        Assert.Empty(checkpoints);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task MissingConfiguredLibrary_MarksRestDiscoveryIncomplete(bool includeValidTarget)

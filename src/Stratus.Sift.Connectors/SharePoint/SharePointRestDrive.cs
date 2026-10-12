@@ -65,10 +65,10 @@ internal sealed class SharePointRestDrive : IRemoteDrive
         var pagingToken = (string?)null;
         var latestChangeToken = currentToken ?? string.Empty;
 
-        var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+        var seenTokens = new HashSet<(string? Change, string? Paging)>();
         while (true)
         {
-            if (seenTokens.Count >= Microsoft365CoverageOptions.MaxPages || !seenTokens.Add(currentToken ?? ""))
+            if (seenTokens.Count >= Microsoft365CoverageOptions.MaxPages || !seenTokens.Add((currentToken, pagingToken)))
                 throw new InvalidDataException("SharePoint changes repeated a token or exceeded the page limit.");
             var changeSet = await _client.GetListItemChangesAsync(_library, currentToken, pagingToken, cancellationToken);
             if (!string.IsNullOrWhiteSpace(changeSet.LastChangeToken))
@@ -81,8 +81,19 @@ internal sealed class SharePointRestDrive : IRemoteDrive
                 await onChange(new SharePointRestFile(_client, _library.Site.Url, item, _coverage));
             }
 
-            if (changeSet.MoreChanges && !string.IsNullOrWhiteSpace(changeSet.LastChangeToken))
+            // Rowset pagination is independent of MoreChanges. Finish the rows
+            // for this change-token window before advancing or checkpointing it.
+            if (!string.IsNullOrWhiteSpace(changeSet.PagingToken))
             {
+                pagingToken = changeSet.PagingToken;
+                continue;
+            }
+
+            pagingToken = null;
+            if (changeSet.MoreChanges)
+            {
+                if (string.IsNullOrWhiteSpace(changeSet.LastChangeToken))
+                    throw new InvalidDataException("SharePoint reported more changes without a continuation token.");
                 if (onCheckpoint != null)
                 {
                     await onCheckpoint(changeSet.LastChangeToken);
