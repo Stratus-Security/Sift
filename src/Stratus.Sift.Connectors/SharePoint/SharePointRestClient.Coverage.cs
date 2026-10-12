@@ -17,8 +17,10 @@ internal sealed partial class SharePointRestClient
         {
             var query = Uri.EscapeDataString($"'IndexDocId>{cursor} AND IsDocument:1'");
             var properties = Uri.EscapeDataString("'Path,SPWebUrl,DocId'");
+            // REST sorting uses the managed property name. The older bracketed
+            // spelling can produce a misleading search-terms syntax error.
             using var document = await GetJsonDocumentAsync(Api(root,
-                $"search/query?querytext={query}&rowlimit={limit}&trimduplicates=false&selectproperties={properties}&sortlist='[docid]:ascending'"), ct);
+                $"search/query?querytext={query}&rowlimit={limit}&trimduplicates=false&selectproperties={properties}&sortlist='docid:ascending'"), ct);
             var rows = ExtractSearchRows(document.RootElement).ToList();
             foreach (var row in rows)
             {
