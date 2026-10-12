@@ -1,12 +1,17 @@
+using System.Collections.Frozen;
+using Stratus.Sift.Scanner.Services;
+
 namespace Stratus.Sift.Core.Validation;
 
 public static class ContentExtensionProfiles
 {
     public const string SourceAndConfig = "SourceAndConfig";
+    public const string Documents = "Documents";
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Profiles =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
+            [Documents] = ContentExtractor.SupportedExtensions,
             [SourceAndConfig] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 string.Empty,
@@ -15,7 +20,7 @@ public static class ContentExtensionProfiles
                 ".cnf", ".conf", ".config", ".cpp", ".credentials", ".cs", ".cshtml", ".csv", ".cue", ".cxx",
                 ".dart", ".dist", ".do", ".dockerfile", ".dockerignore", ".docx",
                 ".editorconfig", ".env", ".es", ".es6", ".exports", ".extra",
-                ".fdb", ".fs", ".fsx", ".functions",
+                ".fdb", ".fs", ".fsx", ".fx", ".functions",
                 ".gemrc", ".git-credentials", ".gitconfig", ".go", ".gql", ".gradle", ".graphql", ".groovy",
                 ".h", ".har", ".hcl", ".hpp", ".hta", ".http",
                 ".inc", ".inf", ".ini", ".irb_history",
@@ -30,7 +35,7 @@ public static class ContentExtensionProfiles
                 ".targets", ".templ", ".tf", ".tfplan", ".tfrc", ".tfstate", ".tfvars", ".toml", ".ts", ".tsv", ".tsx", ".txt",
                 ".vb", ".vbe", ".vbs", ".vue", ".wsc", ".wsf",
                 ".xlsx", ".xml", ".yaml", ".yml", ".zsh_history", ".zshrc"
-            }
+            }.Concat(ContentExtractor.SupportedExtensions).ToFrozenSet(StringComparer.OrdinalIgnoreCase)
         };
 
     public static IReadOnlyCollection<string> Names { get; } = Profiles.Keys.ToArray();

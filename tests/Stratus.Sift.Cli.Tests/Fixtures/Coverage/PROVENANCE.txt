@@ -1,0 +1,9 @@
+10x10.xlsb and BoolFormula.xlsb:
+https://github.com/ExcelDataReader/ExcelDataReader/tree/64a0c2a2ed29454f954797913fc9202854d7a7d1/src/TestData
+ExcelDataReader, MIT license.
+
+7Zip.Copy.7z and Rar.rar:
+https://github.com/adamhathcock/sharpcompress/tree/2cba09eba4ae400756933807ee5b0aae56bd4fa7/tests/TestArchives/Archives
+SharpCompress, MIT license.
+
+These are independently authored format interoperability fixtures, not tenant data.

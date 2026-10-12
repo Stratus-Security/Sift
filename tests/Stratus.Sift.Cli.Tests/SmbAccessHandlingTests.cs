@@ -32,6 +32,15 @@ public sealed class SmbAccessHandlingTests
         Assert.IsType<IOException>(exception);
     }
 
+    [Theory]
+    [InlineData(NTStatus.STATUS_OBJECT_NAME_NOT_FOUND)]
+    [InlineData(NTStatus.STATUS_NO_SUCH_FILE)]
+    [InlineData(NTStatus.STATUS_DELETE_PENDING)]
+    [InlineData(NTStatus.STATUS_OBJECT_PATH_NOT_FOUND)]
+    [InlineData(NTStatus.STATUS_LOCK_NOT_GRANTED)]
+    public void CreateFileOpenException_ClassifiesRoutineMissingAndLockedFiles(NTStatus status)
+        => Assert.True(RemoteScanExceptionClassifier.IsExpected(SmbKerberosService.CreateFileOpenException("test.txt", status)));
+
     [Fact]
     public void CreateFileOpenException_MapsSharingViolationToExpectedUnavailableContent()
     {

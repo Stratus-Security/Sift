@@ -17,7 +17,7 @@ using Stratus.Sift.Core;
 
 namespace Stratus.Sift.Scanner.Services;
 
-public class FileScanner : IScanner
+public partial class FileScanner : IScanner
 {
     private readonly ILogger<FileScanner> _logger;
     private readonly ContentExtractor _contentExtractor;
@@ -194,7 +194,7 @@ public class FileScanner : IScanner
         aclEntries ??= _emptyAclEntries;
 
         var policyNameLookup = plan.PolicyNameLookup;
-        var shouldInspectZip = options.EnableZipArchives && IsZipArchive(ext);
+        var shouldInspectZip = options.EnableZipArchives && IsSupportedArchive(ext);
 
         // Pre-filter Policies based on Path Scope
         // We only want to evaluate policies that apply to this file path.
@@ -315,11 +315,21 @@ public class FileScanner : IScanner
             }
 
             // Content Extraction
+            if (!options.EnableBinaryDocuments && _contentExtractor.Supports(ext))
+            {
+                options.Diagnostics?.RecordFileSkipped();
+                result.Issues = AggregateIssues(issues, policyNameLookup);
+                return result;
+            }
             if (options.EnableBinaryDocuments && _contentExtractor.Supports(ext))
             {
                 try
                 {
-                    string extractedText = _contentExtractor.Extract(filePath);
+                    var extraction = _contentExtractor.ExtractWithResult(filePath, options);
+                    result.IsComplete = extraction.IsComplete;
+                    if (!extraction.IsComplete)
+                        _logger.LogWarning("Could not fully extract {Path}: {Reason}", filePath, extraction.Error);
+                    string extractedText = extraction.Text;
                     if (!string.IsNullOrWhiteSpace(extractedText))
                     {
                         var bufferIssues = ScanBuffer(extractedText.AsSpan(), optimizer, scopedPolicyMap, filePath, ext, name, exposure, owner, aclEntries, subOptimizers, ruleStats, policyNameLookup);
@@ -329,6 +339,7 @@ public class FileScanner : IScanner
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    result.IsComplete = false;
                     _logger.LogWarning(ex, "Failed to extract content from file: {Path}", filePath);
                 }
                 result.Issues = AggregateIssues(issues, policyNameLookup);
@@ -474,7 +485,7 @@ public class FileScanner : IScanner
             options.MaxDiskReadBytesPerSecond,
             options.Diagnostics);
 
-        return await ScanZipArchiveAsync(
+        return await ScanArchiveAsync(
             stream,
             filePath,
             plan,
@@ -488,7 +499,7 @@ public class FileScanner : IScanner
             cancellationToken);
     }
 
-    private async Task<ScanResult> ScanZipArchiveAsync(
+    private async Task<ScanResult> ScanZipArchiveOnlyAsync(
         Stream stream,
         string archivePath,
         ScannerExecutionPlan plan,
@@ -514,10 +525,11 @@ public class FileScanner : IScanner
                 cancellationToken);
             if (bufferedStream == null)
             {
+                result.IsComplete = false;
                 return result;
             }
 
-            return await ScanZipArchiveAsync(
+            return await ScanZipArchiveOnlyAsync(
                 bufferedStream,
                 archivePath,
                 plan,
@@ -546,6 +558,7 @@ public class FileScanner : IScanner
                 "ZIP archive {ArchivePath} has an invalid central directory or exceeded the shared archive-tree safety limits and was not inspected.",
                 archivePath);
             options.Diagnostics?.RecordFileSkipped();
+            result.IsComplete = false;
             return result;
         }
 
@@ -567,6 +580,7 @@ public class FileScanner : IScanner
                     _logger.LogWarning(
                         "Stopped inspecting ZIP archive {ArchivePath} because it contained more entries than its central directory declared.",
                         archivePath);
+                    result.IsComplete = false;
                     break;
                 }
 
@@ -580,8 +594,9 @@ public class FileScanner : IScanner
 
                 var virtualPath = $"{archivePath}!/{entryName}";
                 var extension = Path.GetExtension(entryName);
-                var isNestedArchive = IsZipArchive(extension);
+                var isNestedArchive = IsSupportedArchive(extension);
                 var canExpandNestedArchive = isNestedArchive && depth < maximumDepth;
+                if (isNestedArchive && !canExpandNestedArchive) result.IsComplete = false;
                 if (!canExpandNestedArchive
                     && !plan.Optimizer.HasRulesForExtension(extension)
                     && !HasDirectMetadataMatch(virtualPath, plan.Optimizer))
@@ -619,12 +634,6 @@ public class FileScanner : IScanner
                     continue;
                 }
 
-                if (entryLength == 0)
-                {
-                    options.Diagnostics?.RecordFileSkipped();
-                    continue;
-                }
-
                 try
                 {
                     options.Diagnostics?.RecordFileOpened();
@@ -645,7 +654,7 @@ public class FileScanner : IScanner
                             cancellationToken);
                         var entryIssues = entryResult.Issues as List<ScanFinding>
                             ?? entryResult.Issues.ToList();
-                        var nestedResult = await ScanZipArchiveAsync(
+                        var nestedResult = await ScanArchiveAsync(
                             entryStream,
                             virtualPath,
                             plan,
@@ -692,6 +701,7 @@ public class FileScanner : IScanner
         {
             _logger.LogWarning("ZIP archive {ArchivePath} is invalid, encrypted, or unsupported.", archivePath);
             options.Diagnostics?.RecordFileSkipped();
+            result.IsComplete = false;
         }
         catch (IOException exception)
         {
@@ -700,10 +710,12 @@ public class FileScanner : IScanner
                 "I/O error while inspecting ZIP archive {ArchivePath}.",
                 archivePath);
             options.Diagnostics?.RecordFileSkipped();
+            result.IsComplete = false;
         }
 
         if (unsafeEntries > 0 || unreadableEntries > 0)
         {
+            result.IsComplete = false;
             _logger.LogWarning(
                 "Skipped {UnsafeEntries:N0} unsafe and {UnreadableEntries:N0} unreadable entries in ZIP archive {ArchivePath}.",
                 unsafeEntries,
@@ -873,6 +885,18 @@ public class FileScanner : IScanner
 
         var extension = Path.GetExtension(virtualPath);
         var name = Path.GetFileName(virtualPath);
+        if ((!options.EnableBinaryDocuments && _contentExtractor.Supports(extension))
+            || (!plan.Optimizer.HasRulesForExtension(extension)
+            && !plan.Optimizer.GetMetadataMatches(virtualPath).Any(match =>
+                PathsReferToSameScope(match.ResourcePath, virtualPath)
+                && plan.Optimizer.GetSubOptimizer(match.Classifier) != null)))
+        {
+            // Metadata-only rules do not require decompression or document extraction.
+            return await ScanStreamInternalAsync(Stream.Null, plan.Optimizer, scopedPolicyMap,
+                virtualPath, extension, name, exposure, owner, aclEntries, cancellationToken,
+                ruleStats, limitBytes: 0, ignoreRules: plan.IgnoreRules, policyLookup: plan.PolicyNameLookup,
+                diagnostics: options.Diagnostics);
+        }
         if (options.EnableBinaryDocuments && _contentExtractor.Supports(extension))
         {
             var result = await ScanStreamInternalAsync(
@@ -893,7 +917,9 @@ public class FileScanner : IScanner
                 diagnostics: options.Diagnostics);
             var issues = result.Issues as List<ScanFinding> ?? result.Issues.ToList();
 
-            var extractedText = _contentExtractor.Extract(stream, extension);
+            var extraction = _contentExtractor.ExtractWithResult(stream, extension, options, cancellationToken);
+            result.IsComplete = extraction.IsComplete;
+            var extractedText = extraction.Text;
             if (!string.IsNullOrWhiteSpace(extractedText))
             {
                 var extractedResult = ScanBuffer(
@@ -918,7 +944,7 @@ public class FileScanner : IScanner
         long? forwardScanLimit = entryLength <= options.MaxFileSize
             ? null
             : options.HeadSize;
-        return await ScanStreamInternalAsync(
+        var entryScanResult = await ScanStreamInternalAsync(
             stream,
             plan.Optimizer,
             scopedPolicyMap,
@@ -935,10 +961,13 @@ public class FileScanner : IScanner
             plan.PolicyNameLookup,
             rejectBinary: !options.EnableBinaryDocuments,
             diagnostics: options.Diagnostics);
+        if (forwardScanLimit.HasValue) entryScanResult.IsComplete = false;
+        return entryScanResult;
     }
 
     private static bool IsZipArchive(string? extension)
-        => string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".msapp", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasDirectMetadataMatch(string path, ClassifierOptimizer optimizer)
     {
@@ -953,7 +982,7 @@ public class FileScanner : IScanner
         return false;
     }
 
-    private static bool TryNormalizeZipEntryName(string fullName, out string normalizedName)
+    internal static bool TryNormalizeZipEntryName(string fullName, out string normalizedName)
     {
         normalizedName = string.Empty;
         if (string.IsNullOrWhiteSpace(fullName) || fullName.IndexOf('\0') >= 0)
@@ -1104,6 +1133,8 @@ public class FileScanner : IScanner
         ref List<ScanFinding>? issues,
         ScanResult source)
     {
+        target.IsComplete &= source.IsComplete;
+        target.IncompleteReason ??= source.IncompleteReason;
         foreach (var issue in source.Issues)
         {
             (issues ??= []).Add(issue);
@@ -1277,12 +1308,16 @@ public class FileScanner : IScanner
         string owner = "Unknown",
         List<AclEntry>? aclEntries = null,
         CancellationToken cancellationToken = default,
-        System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null)
+        System.Collections.Concurrent.ConcurrentDictionary<string, int>? ruleStats = null,
+        string? contentFileName = null,
+        string? metadataFileName = null)
     {
         options ??= new ScanOptions();
-        var ext = Path.GetExtension(fileName);
-        var name = Path.GetFileName(fileName);
-        var shouldInspectZip = options.EnableZipArchives && IsZipArchive(ext);
+        // Cloud browser URLs can point to a viewer or contain a query string.
+        // Keep that URL for policy scope and findings, but use the item's name for filename and extension rules.
+        var ext = Path.GetExtension(contentFileName ?? fileName);
+        var name = Path.GetFileName(metadataFileName ?? contentFileName ?? fileName);
+        var shouldInspectZip = options.EnableZipArchives && IsSupportedArchive(ext);
         aclEntries ??= new List<AclEntry>();
         var scopedPolicyMap = ScopePolicyMap(fileName, plan);
         if (scopedPolicyMap.Count == 0 && !shouldInspectZip)
@@ -1317,7 +1352,7 @@ public class FileScanner : IScanner
                 plan.PolicyNameLookup,
                 diagnostics: options.Diagnostics);
             var issues = result.Issues as List<ScanFinding> ?? result.Issues.ToList();
-            var archiveResult = await ScanZipArchiveAsync(
+            var archiveResult = await ScanArchiveAsync(
                 measuredStream,
                 fileName,
                 plan,
@@ -1328,9 +1363,34 @@ public class FileScanner : IScanner
                 ruleStats,
                 new ZipTraversalBudget(options),
                 depth: 1,
-                cancellationToken);
+                cancellationToken,
+                extension: ext);
             AddScanResult(result, ref issues, archiveResult);
             result.Issues = AggregateIssues(issues, plan.PolicyNameLookup);
+            return result;
+        }
+
+        if (_contentExtractor.Supports(ext))
+        {
+            var needsContent = plan.Optimizer.HasRulesForExtension(ext)
+                || plan.Optimizer.GetMetadataMatches(fileName, name).Any(match =>
+                    PathsReferToSameScope(match.ResourcePath, fileName)
+                    && plan.Optimizer.GetSubOptimizer(match.Classifier) != null);
+            if (!options.EnableBinaryDocuments || !needsContent)
+                return await ScanStreamInternalAsync(Stream.Null, plan.Optimizer, scopedPolicyMap,
+                    fileName, ext, name, exposure, owner, aclEntries, cancellationToken,
+                    ruleStats, limitBytes: 0, ignoreRules: plan.IgnoreRules, policyLookup: plan.PolicyNameLookup,
+                    diagnostics: options.Diagnostics);
+
+            var extraction = _contentExtractor.ExtractWithResult(measuredStream, ext, options, cancellationToken);
+            if (!extraction.IsComplete)
+                _logger.LogWarning("Could not fully extract {Path}: {Reason}", fileName, extraction.Error);
+            using var textStream = new MemoryStream(Encoding.UTF8.GetBytes(extraction.Text));
+            var result = await ScanStreamInternalAsync(textStream, plan.Optimizer, scopedPolicyMap,
+                fileName, ext, name, exposure, owner, aclEntries, cancellationToken,
+                ruleStats, ignoreRules: plan.IgnoreRules, policyLookup: plan.PolicyNameLookup,
+                diagnostics: options.Diagnostics);
+            result.IsComplete &= extraction.IsComplete;
             return result;
         }
 
@@ -1366,7 +1426,7 @@ public class FileScanner : IScanner
         }
 
         // 1. Check Metadata Classifiers
-        foreach (var metadataMatch in optimizer.GetMetadataMatches(fileName))
+        foreach (var metadataMatch in optimizer.GetMetadataMatches(fileName, name))
         {
             if (!PathsReferToSameScope(metadataMatch.ResourcePath, fileName)) continue;
 

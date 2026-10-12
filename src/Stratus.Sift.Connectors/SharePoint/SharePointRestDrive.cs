@@ -8,13 +8,16 @@ internal sealed class SharePointRestDrive : IRemoteDrive
     private readonly SharePointRestClient _client;
     private readonly SharePointRestClient.RestLibrary _library;
     private readonly string _tenantId;
+    private readonly Microsoft365CoverageOptions _coverage;
 
-    public SharePointRestDrive(SharePointRestClient client, SharePointRestClient.RestLibrary library, string tenantId, string name)
+    public SharePointRestDrive(SharePointRestClient client, SharePointRestClient.RestLibrary library, string tenantId, string name,
+        Microsoft365CoverageOptions? coverage = null)
     {
         _client = client;
         _library = library;
         _tenantId = tenantId;
         Name = name;
+        _coverage = coverage ?? Microsoft365CoverageOptions.Disabled;
     }
 
     public string Id => _library.Id;
@@ -47,11 +50,12 @@ internal sealed class SharePointRestDrive : IRemoteDrive
         Func<string, Task>? onCheckpoint = null,
         CancellationToken cancellationToken = default)
     {
+        if (_coverage.ReadSharing || _coverage.ScanLibraryFields || _coverage.ScanVersions) deltaToken = null;
         if (string.IsNullOrWhiteSpace(deltaToken))
         {
             await _client.ProcessLibraryFilesAsync(
                 _library,
-                item => onChange(new SharePointRestFile(_client, _library.Site.Url, item)),
+                item => onChange(new SharePointRestFile(_client, _library.Site.Url, item, _coverage)),
                 cancellationToken);
 
             return string.Empty;
@@ -61,8 +65,11 @@ internal sealed class SharePointRestDrive : IRemoteDrive
         var pagingToken = (string?)null;
         var latestChangeToken = currentToken ?? string.Empty;
 
+        var seenTokens = new HashSet<string>(StringComparer.Ordinal);
         while (true)
         {
+            if (seenTokens.Count >= Microsoft365CoverageOptions.MaxPages || !seenTokens.Add(currentToken ?? ""))
+                throw new InvalidDataException("SharePoint changes repeated a token or exceeded the page limit.");
             var changeSet = await _client.GetListItemChangesAsync(_library, currentToken, pagingToken, cancellationToken);
             if (!string.IsNullOrWhiteSpace(changeSet.LastChangeToken))
             {
@@ -71,7 +78,7 @@ internal sealed class SharePointRestDrive : IRemoteDrive
 
             foreach (var item in changeSet.Items)
             {
-                await onChange(new SharePointRestFile(_client, _library.Site.Url, item));
+                await onChange(new SharePointRestFile(_client, _library.Site.Url, item, _coverage));
             }
 
             if (changeSet.MoreChanges && !string.IsNullOrWhiteSpace(changeSet.LastChangeToken))

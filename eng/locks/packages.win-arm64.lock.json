@@ -139,6 +139,11 @@
           "System.IO.Packaging": "10.0.2"
         }
       },
+      "ExcelDataReader": {
+        "type": "Transitive",
+        "resolved": "3.8.0",
+        "contentHash": "kbUsldc5Fn9IKgzL2nr4VvN/mKqPqn8zGXUZpA7uL6svCA4psF+qMK519EhMvderpU4pAJoqk9DWpiSIkiZtXA=="
+      },
       "Microsoft.Bcl.AsyncInterfaces": {
         "type": "Transitive",
         "resolved": "10.0.2",
@@ -550,10 +555,60 @@
           "Microsoft.Kiota.Abstractions": "1.21.1"
         }
       },
+      "OfficeIMO.Core": {
+        "type": "Transitive",
+        "resolved": "3.4.4",
+        "contentHash": "s1MD3wvn2DSj6rPHKrIfq3qzfVefQrrS2hfl7+OZOWvFsWyuZwzCGC3TxVWevQdPwHUKPs5kzJaWY0vRGDHyqw=="
+      },
+      "OfficeIMO.Excel": {
+        "type": "Transitive",
+        "resolved": "3.4.4",
+        "contentHash": "ErDteUzpzO7mR0EKB+9m54cTTDBYx7q1ZAQM8wIkeqNUCjtYB/uJRXo+yiHTLkelI13M9MaPQpOVeDro932Flg==",
+        "dependencies": {
+          "DocumentFormat.OpenXml": "[3.5.1, 4.0.0)",
+          "OfficeIMO.Core": "3.4.4"
+        }
+      },
+      "OfficeIMO.OneNote": {
+        "type": "Transitive",
+        "resolved": "3.4.4",
+        "contentHash": "jaf36bKZ9IEDPcM2U9F3XstZf94YQi/7FnyvbYpQzPJVshIksNWIhcBrLX0cwJCKVwDuBqiMRsaMsqraJPFHNQ==",
+        "dependencies": {
+          "OfficeIMO.Core": "3.4.4"
+        }
+      },
+      "OfficeIMO.PowerPoint": {
+        "type": "Transitive",
+        "resolved": "3.4.4",
+        "contentHash": "U+TAKlfqnyTg8+Smt3YnyNuNgZx5QQ1ZIY1xXjHojppZ9bULBfJKy3guVWkb0NuyRZRf3HzL1cIpZZDwpHmqzg==",
+        "dependencies": {
+          "DocumentFormat.OpenXml": "[3.5.1, 4.0.0)",
+          "OfficeIMO.Core": "3.4.4"
+        }
+      },
+      "OfficeIMO.Word": {
+        "type": "Transitive",
+        "resolved": "3.4.4",
+        "contentHash": "eRHf7uhxCW9uwAf89/6RBW1THXxKl+ZgguUBVbmBTm4FrxlhgtMBBKaO+j8DlgqonaJIGyC0wfVWuBvA46UdzQ==",
+        "dependencies": {
+          "DocumentFormat.OpenXml": "[3.5.1, 4.0.0)",
+          "OfficeIMO.Core": "3.4.4"
+        }
+      },
+      "OpenMcdf": {
+        "type": "Transitive",
+        "resolved": "3.3.0",
+        "contentHash": "a7lcs+yTDzPRRS82KMmU/eVCMKbJrDStD1Yt+6RRZIsDxU006IdxEVkmMLvxt2hB5YS3Imfcxrdwywtv29ogjw=="
+      },
       "PdfPig": {
         "type": "Transitive",
         "resolved": "0.1.13",
         "contentHash": "2AUWNKHbkDr2Ofgi2vVPN/Ya++jhsuHd54xeKveqKOwDiAy2E2QhczOUKyU29ADRHoEJgQUhwHFgtbD6nCZ2WA=="
+      },
+      "SharpCompress": {
+        "type": "Transitive",
+        "resolved": "0.50.4",
+        "contentHash": "/hxjUR7DEX6mky8/LQXyrnrKioOL6D6veAID1EZpro+q4s02x5dHEYBV3qjEN6lDYYilDoQQ76BcmQj+lRx51w=="
       },
       "Std.UriTemplate": {
         "type": "Transitive",
@@ -626,9 +681,16 @@
         "type": "Project",
         "dependencies": {
           "DocumentFormat.OpenXml": "[3.5.1, )",
+          "ExcelDataReader": "[3.8.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
+          "OfficeIMO.Excel": "[3.4.4, )",
+          "OfficeIMO.OneNote": "[3.4.4, )",
+          "OfficeIMO.PowerPoint": "[3.4.4, )",
+          "OfficeIMO.Word": "[3.4.4, )",
+          "OpenMcdf": "[3.3.0, )",
           "PdfPig": "[0.1.13, )",
+          "SharpCompress": "[0.50.4, )",
           "Stratus.Sift.Contracts": "[0.3.0, )",
           "System.IO.FileSystem.AccessControl": "[5.0.0, )"
         }

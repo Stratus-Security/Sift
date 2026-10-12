@@ -519,10 +519,10 @@ public class ClassifierOptimizer
             .DistinctBy(classifier => classifier.Id);
     }
 
-    public IEnumerable<MetadataMatch> GetMetadataMatches(string path)
+    public IEnumerable<MetadataMatch> GetMetadataMatches(string path, string? fileName = null)
     {
-        var name = Path.GetFileName(path);
-        var ext = Path.GetExtension(path);
+        var name = Path.GetFileName(fileName ?? path);
+        var ext = Path.GetExtension(name);
 
         if (_filenameClassifiers.TryGetValue(name, out var rules))
         {

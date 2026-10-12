@@ -25,4 +25,8 @@
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="Fixtures\LegacyOffice\basic_test_ppt_file.ppt" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures\Coverage\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

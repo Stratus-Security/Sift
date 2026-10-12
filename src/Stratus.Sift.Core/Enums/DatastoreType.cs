@@ -20,5 +20,9 @@ public enum DatastoreType
     AzureFileShare = 12,
     Slack = 13,
     Jira = 14,
-    Confluence = 15
+    Confluence = 15,
+    Planner = 16,
+    ToDo = 17,
+    OneNote = 18,
+    VivaEngage = 19
 }

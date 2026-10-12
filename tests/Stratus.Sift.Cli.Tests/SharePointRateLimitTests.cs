@@ -14,6 +14,127 @@ namespace Stratus.Sift.Connectors.Tests;
 
 public class SharePointRateLimitTests
 {
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.GatewayTimeout)]
+    public async Task GraphClient_SharedPauseObservesSdkRetryResponsesAndBlocksOtherRequests(HttpStatusCode status)
+    {
+        var observed = new TaskCompletionSource<ThrottleNotice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hub = new ThrottleNotificationHub();
+        var notices = 0;
+        hub.Updated += notice => { Interlocked.Increment(ref notices); observed.TrySetResult(notice); };
+        var firstAttempts = 0;
+        var secondAttempts = 0;
+        var prematureRequests = 0;
+        var handler = new DelegateHttpMessageHandler((request, _) =>
+        {
+            var first = request.RequestUri!.AbsolutePath.EndsWith("/first", StringComparison.Ordinal);
+            HttpResponseMessage response;
+            if (first && Interlocked.Increment(ref firstAttempts) == 1)
+            {
+                response = RateLimitedResponse(status, 1)(request);
+            }
+            else
+            {
+                if (!first) Interlocked.Increment(ref secondAttempts);
+                if (hub.Latest?.RemainingGlobalPause > TimeSpan.Zero) Interlocked.Increment(ref prematureRequests);
+                response = JsonResponse(HttpStatusCode.OK, "{}")(request);
+            }
+            return Task.FromResult(response);
+        });
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = MicrosoftGraphClientBuilder.CreateHttpClient("Tests", finalHandler: handler, throttleNotifications: hub);
+        var tasks = new List<Task<HttpResponseMessage>>
+        {
+            client.GetAsync("https://graph.microsoft.com/v1.0/first", cancellation.Token)
+        };
+        try
+        {
+            // A successful internal retry must not hide the initial throttle response.
+            await Task.WhenAny(tasks[0], observed.Task).WaitAsync(cancellation.Token);
+            Assert.True(observed.Task.IsCompletedSuccessfully, "The shared gate must observe throttling before the SDK retries.");
+            Assert.Equal(status, (await observed.Task).StatusCode);
+            tasks.Add(client.GetAsync("https://graph.microsoft.com/v1.0/second", cancellation.Token));
+            await Task.WhenAll(tasks);
+
+            Assert.Equal(2, firstAttempts);
+            Assert.Equal(1, secondAttempts);
+            Assert.Equal(0, prematureRequests);
+            Assert.Equal(1, notices);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await DrainRequestsAsync(tasks);
+        }
+    }
+
+    [Fact]
+    public async Task GraphClient_InFlightRetryHonorsAnotherRequestsLongerSharedPause()
+    {
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstResponse = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondResponse = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shortPause = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var longPause = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstAttempts = 0;
+        var hub = new ThrottleNotificationHub();
+        hub.Updated += notice =>
+        {
+            if (notice.RetryDelay == TimeSpan.FromSeconds(1)) shortPause.TrySetResult();
+            if (notice.RetryDelay == TimeSpan.FromSeconds(60)) longPause.TrySetResult();
+        };
+        var handler = new DelegateHttpMessageHandler(async (request, ct) =>
+        {
+            HttpResponseMessage response;
+            if (request.RequestUri!.AbsolutePath.EndsWith("/first", StringComparison.Ordinal))
+            {
+                if (Interlocked.Increment(ref firstAttempts) == 1)
+                {
+                    firstEntered.TrySetResult();
+                    response = await firstResponse.Task.WaitAsync(ct);
+                }
+                else response = JsonResponse(HttpStatusCode.OK, "{}")(request);
+            }
+            else
+            {
+                secondEntered.TrySetResult();
+                response = await secondResponse.Task.WaitAsync(ct);
+            }
+            response.RequestMessage = request;
+            return response;
+        });
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = MicrosoftGraphClientBuilder.CreateHttpClient("Tests", finalHandler: handler, throttleNotifications: hub);
+        var tasks = new List<Task<HttpResponseMessage>>();
+        try
+        {
+            tasks.Add(client.GetAsync("https://graph.microsoft.com/v1.0/first", cancellation.Token));
+            await firstEntered.Task.WaitAsync(cancellation.Token);
+            tasks.Add(client.GetAsync("https://graph.microsoft.com/v1.0/second", cancellation.Token));
+            await secondEntered.Task.WaitAsync(cancellation.Token);
+            firstResponse.SetResult(new(HttpStatusCode.TooManyRequests)
+                { Content = new StringContent("{}"), Headers = { RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(1)) } });
+            await shortPause.Task.WaitAsync(cancellation.Token);
+            secondResponse.SetResult(new(HttpStatusCode.TooManyRequests)
+                { Content = new StringContent("{}"), Headers = { RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(60)) } });
+            await longPause.Task.WaitAsync(cancellation.Token);
+
+            await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellation.Token);
+            Assert.Equal(1, firstAttempts);
+            Assert.True(hub.Latest!.RemainingGlobalPause > TimeSpan.FromSeconds(50));
+            cancellation.Cancel();
+            foreach (var task in tasks) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await DrainRequestsAsync(tasks);
+        }
+    }
+
     [Fact]
     public async Task GetDrivesAsync_RetriesSiteEnumeration_On429_AndHonorsRetryAfter()
     {
@@ -138,6 +259,10 @@ public class SharePointRateLimitTests
         Assert.Single(drives);
         Assert.Equal("Finance", drives[0].Name);
         Assert.Equal(2, handler.GetAttemptCount("sites-page-2"));
+        Assert.False(connector.DiscoveryReport.IsComplete);
+        Assert.Contains("incomplete", connector.DiscoveryReport.Coverage, StringComparison.Ordinal);
+        Assert.Equal(1, connector.DiscoveryReport.SourceCounts["discovery failures"]);
+        Assert.Single(connector.DiscoveryReport.Warnings);
     }
 
     [Fact]
@@ -277,17 +402,41 @@ public class SharePointRateLimitTests
         Assert.Equal(2, handler.GetAttemptCount("content-rate-limited"));
     }
 
-    [Fact]
-    public async Task RequestThrottleGate_CapsGlobalPause_EvenWhenObservedDelayIsLong()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequestThrottleGate_HoldsAllWaitersForFullRetryAfter(bool dateHeader)
     {
-        var gate = new RequestThrottleGate(TimeSpan.FromMilliseconds(150));
-        gate.RegisterDelay(TimeSpan.FromSeconds(5));
+        var time = new ManualTimeProvider();
+        var gate = new RequestThrottleGate(time);
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.RetryAfter = dateHeader
+            ? new RetryConditionHeaderValue(time.GetUtcNow().AddSeconds(120))
+            : new RetryConditionHeaderValue(TimeSpan.FromSeconds(120));
+        Assert.Equal(TimeSpan.FromSeconds(120), gate.Observe(response));
+        // A shorter response must not shorten the existing tenant pause.
+        gate.RegisterDelay(TimeSpan.FromSeconds(2));
+        var waiters = Enumerable.Range(0, 4).Select(_ => gate.WaitAsync(CancellationToken.None).AsTask()).ToArray();
 
-        var stopwatch = Stopwatch.StartNew();
-        await gate.WaitAsync(CancellationToken.None);
-        stopwatch.Stop();
+        time.Advance(TimeSpan.FromSeconds(15));
+        Assert.All(waiters, waiter => Assert.False(waiter.IsCompleted));
+        time.Advance(TimeSpan.FromSeconds(104));
+        Assert.All(waiters, waiter => Assert.False(waiter.IsCompleted));
+        time.Advance(TimeSpan.FromSeconds(1));
+        await Task.WhenAll(waiters).WaitAsync(TimeSpan.FromSeconds(3));
+    }
 
-        Assert.InRange(stopwatch.ElapsedMilliseconds, 100, 1500);
+    [Fact]
+    public async Task RequestThrottleGate_LongPauseRemainsCancellable()
+    {
+        var gate = new RequestThrottleGate(new ManualTimeProvider());
+        gate.RegisterDelay(TimeSpan.FromMinutes(2));
+        using var cancellation = new CancellationTokenSource();
+        var waiting = gate.WaitAsync(cancellation.Token).AsTask();
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(3)));
     }
 
     [Fact]
@@ -381,6 +530,70 @@ public class SharePointRateLimitTests
             response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(retryAfterSeconds));
             return response;
         };
+    }
+
+    private static async Task DrainRequestsAsync(IEnumerable<Task<HttpResponseMessage>> tasks)
+    {
+        foreach (var task in tasks)
+        {
+            try { using var response = await task; }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private sealed class DelegateHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+            => callback(request, ct);
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        private readonly List<ManualTimer> _timers = [];
+        private readonly object _sync = new();
+
+        public override DateTimeOffset GetUtcNow() { lock (_sync) return _now; }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            List<ManualTimer> due;
+            lock (_sync)
+            {
+                _now += elapsed;
+                due = _timers.Where(timer => timer.Due <= _now).ToList();
+                foreach (var timer in due) _timers.Remove(timer);
+            }
+            foreach (var timer in due) timer.Fire();
+        }
+
+        private sealed class ManualTimer(ManualTimeProvider owner, TimerCallback callback, object? state) : ITimer
+        {
+            public DateTimeOffset Due { get; private set; }
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                lock (owner._sync)
+                {
+                    owner._timers.Remove(this);
+                    if (dueTime != Timeout.InfiniteTimeSpan)
+                    {
+                        Due = owner._now + dueTime;
+                        owner._timers.Add(this);
+                    }
+                }
+                return true;
+            }
+            public void Fire() => callback(state);
+            public void Dispose() { lock (owner._sync) owner._timers.Remove(this); }
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
     }
 
     private sealed class TestTokenCredential : TokenCredential

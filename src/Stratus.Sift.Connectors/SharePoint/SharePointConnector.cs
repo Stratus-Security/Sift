@@ -13,33 +13,23 @@ using System.Text.Json;
 
 namespace Stratus.Sift.Connectors.SharePoint;
 
-public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider, IConnectorCheckpointScopeProvider
+public partial class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider, IConnectorCheckpointScopeProvider
 {
     private const int MaxConcurrentSiteRequests = 6;
     private const string DefaultInteractiveRedirectUri = "http://localhost";
     private const string ProductPrefix = "StratusSiftConnector.SharePoint";
-    private static readonly string[] DefaultDelegatedScopes = ["Sites.Read.All", "Team.ReadBasic.All", "Channel.ReadBasic.All"];
-
-    private static readonly HashSet<string> SystemLibraries = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Style Library",
-        "Form Templates",
-        "Site Assets",
-        "Preservation Hold Library",
-        "MicroFeed",
-        "Pages",
-        "Site Pages",
-        "TaxonomyHiddenList",
-        "Taxonomy Hidden List",
-        "Master Page Gallery",
-        "PersonalCacheLibrary"
-    };
+    private static readonly string[] DefaultDelegatedScopes = ["Sites.Read.All", "Files.Read.All", "User.Read.All", "GroupMember.Read.All", "Team.ReadBasic.All", "Channel.ReadBasic.All"];
 
     private static readonly string[] SiteSelectFields = ["id", "name", "webUrl", "displayName"];
-    private static readonly string[] DriveSelectFields = ["id", "name", "webUrl"];
+    // Hidden/system drives can contain user files, custom code, and retained copies.
+    private static readonly string[] DriveSelectFields = ["id", "name", "webUrl", "system"];
 
     private GraphServiceClient? _graphClient;
     private SharePointRestClient? _sharePointRestClient;
+    private SharePointRestClient? _supplementalRestClient;
+    private Microsoft365CoverageOptions _coverage = Microsoft365CoverageOptions.Disabled;
+    private Microsoft365Cloud _cloud = Microsoft365Cloud.Resolve(null);
+    private string GraphBaseUrl => _graphClient?.RequestAdapter.BaseUrl?.TrimEnd('/') ?? _cloud.GraphRoot.AbsoluteUri;
     private Uri? _sharePointRestRootUrl;
     private string _tenantId = string.Empty;
     private string _checkpointScope = string.Empty;
@@ -52,6 +42,8 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
     private bool _discoverFollowedLocations;
     private readonly Dictionary<string, int> _discoverySourceCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _discoveryWarnings = [];
+    private readonly object _discoveryReportLock = new();
+    private bool _discoveryComplete = true;
 
     public ConnectorDiscoveryReport DiscoveryReport { get; private set; } = ConnectorDiscoveryReport.Empty;
 
@@ -70,7 +62,13 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         IEnumerable<Uri>? configuredSiteTargets = null,
         IEnumerable<string>? configuredDriveIds = null,
         bool discoverTeamsChannels = false,
-        bool discoverFollowedLocations = false)
+        bool discoverFollowedLocations = false,
+        Microsoft365CoverageOptions? coverage = null,
+        SharePointRestClient? supplementalRestClient = null,
+        Microsoft365WorkloadOptions? workloads = null,
+        bool workloadAppOnly = false,
+        TokenCredential? workloadCredential = null,
+        string[]? workloadAuthenticationScopes = null)
     {
         _graphClient = graphClient;
         _tenantId = tenantId;
@@ -79,6 +77,12 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         _useConfiguredTargets = useConfiguredTargets;
         _discoverTeamsChannels = discoverTeamsChannels;
         _discoverFollowedLocations = discoverFollowedLocations;
+        _coverage = coverage ?? Microsoft365CoverageOptions.Disabled;
+        _supplementalRestClient = supplementalRestClient;
+        _workloads = workloads ?? new();
+        _workloadAppOnly = workloadAppOnly;
+        _workloadCredential = workloadCredential;
+        _workloadAuthenticationScopes = workloadAuthenticationScopes ?? [];
 
         if (configuredSiteTargets != null)
         {
@@ -100,7 +104,9 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         bool useConfiguredTargets = false,
         IEnumerable<Uri>? configuredSiteTargets = null,
         IEnumerable<string>? configuredDriveIds = null,
-        bool discoverFollowedLocations = false)
+        bool discoverFollowedLocations = false,
+        Microsoft365CoverageOptions? coverage = null,
+        Microsoft365WorkloadOptions? workloads = null)
     {
         _sharePointRestClient = sharePointRestClient;
         _sharePointRestRootUrl = sharePointRestRootUrl is null ? null : SharePointRestClient.NormalizeRootUrl(sharePointRestRootUrl);
@@ -109,6 +115,8 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         _throttleNotifications = throttleNotifications;
         _useConfiguredTargets = useConfiguredTargets;
         _discoverFollowedLocations = discoverFollowedLocations;
+        _coverage = coverage ?? Microsoft365CoverageOptions.Disabled;
+        _workloads = workloads ?? new();
 
         if (configuredSiteTargets != null)
         {
@@ -130,20 +138,28 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
     {
         _graphClient = null;
         _sharePointRestClient = null;
+        _supplementalRestClient = null;
+        _coverage = Microsoft365CoverageOptions.FromConfiguration(config);
+        _workloads = Microsoft365WorkloadOptions.Parse(config);
+        _cloud = Microsoft365Cloud.Resolve(config.GetValueOrDefault("Cloud"));
         _sharePointRestRootUrl = null;
         _checkpointScope = string.Empty;
         _tenantId = config.GetValueOrDefault("TenantId") ?? string.Empty;
         var clientId = config.GetValueOrDefault("ClientId") ?? string.Empty;
         var clientSecret = config.GetValueOrDefault("ClientSecret") ?? string.Empty;
         var authMode = ResolveAuthenticationMode(config, clientSecret);
+        _workloadAppOnly = authMode == SharePointAuthenticationMode.AppOnly;
+        _workloadCredential = null;
         var delegatedScopes = GetDelegatedScopes(config);
+        _workloadAuthenticationScopes = delegatedScopes.Select(scope => scope.Contains("://", StringComparison.Ordinal)
+            ? scope : _cloud.GraphRoot.GetLeftPart(UriPartial.Authority) + "/" + scope).ToArray();
         _discoverTeamsChannels = GetBooleanSetting(config, "DiscoverTeamsChannels", defaultValue: true);
         _discoverFollowedLocations = GetBooleanSetting(config, "DiscoverFollowedLocations", defaultValue: true);
 
         ConfigureTargets(config, authMode);
 
         TokenCredential credential;
-        var authorityHost = AzureAuthorityHosts.AzurePublicCloud;
+        var authorityHost = _cloud.Authority;
 
         switch (authMode)
         {
@@ -151,12 +167,14 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                 if (string.IsNullOrWhiteSpace(_tenantId)
                     || string.Equals(_tenantId, "common", StringComparison.OrdinalIgnoreCase)
                     || string.IsNullOrWhiteSpace(clientId)
-                    || string.IsNullOrWhiteSpace(clientSecret))
+                    || (string.IsNullOrWhiteSpace(clientSecret) && string.IsNullOrWhiteSpace(config.GetValueOrDefault("CertificatePath"))))
                 {
-                    throw new ArgumentException("App-only Microsoft 365 scans require TenantId, ClientId, and ClientSecret.");
+                    throw new ArgumentException("App-only Microsoft 365 scans require TenantId, ClientId, and ClientSecret or CertificatePath.");
                 }
 
-                credential = new ClientSecretCredential(_tenantId, clientId, clientSecret, new ClientSecretCredentialOptions
+                credential = !string.IsNullOrWhiteSpace(config.GetValueOrDefault("CertificatePath"))
+                    ? CreateCertificateCredential(config, clientId, authorityHost)
+                    : new ClientSecretCredential(_tenantId, clientId, clientSecret, new ClientSecretCredentialOptions
                 {
                     AuthorityHost = authorityHost
                 });
@@ -167,12 +185,15 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                     timeout: null,
                     finalHandler: null,
                     retryOptions: null,
-                    throttleNotifications: _throttleNotifications);
+                    throttleNotifications: _throttleNotifications,
+                    serviceRoot: _cloud.GraphRoot);
                 _checkpointScope = ConnectorCheckpointIdentity.Create(
                     "m365-app",
                     _tenantId,
                     clientId,
-                    clientSecret);
+                    clientSecret,
+                    _cloud.GraphRoot.AbsoluteUri,
+                    config.GetValueOrDefault("CertificatePath") ?? string.Empty);
                 break;
 
             case SharePointAuthenticationMode.DeviceCode:
@@ -185,8 +206,8 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                     }
 
                     credential = authMode == SharePointAuthenticationMode.DeviceCode
-                        ? CreateDeviceCodeCredential(clientId, authorityHost)
-                        : CreateInteractiveBrowserCredential(clientId, authorityHost, config.GetValueOrDefault("RedirectUri"));
+                        ? CreateDeviceCodeCredential(clientId, authorityHost, graphLogin: true)
+                        : CreateInteractiveBrowserCredential(clientId, authorityHost, config.GetValueOrDefault("RedirectUri"), graphLogin: true);
                     credential = ObserveDelegatedCredential(credential);
 
                     _graphClient = MicrosoftGraphClientBuilder.Create(
@@ -196,7 +217,8 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                         timeout: null,
                         finalHandler: null,
                         retryOptions: null,
-                        throttleNotifications: _throttleNotifications);
+                        throttleNotifications: _throttleNotifications,
+                        serviceRoot: _cloud.GraphRoot);
                     break;
                 }
 
@@ -233,6 +255,12 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                 throw new InvalidOperationException($"Unsupported SharePoint auth mode '{authMode}'.");
         }
 
+        _workloadCredential = credential;
+        if (_graphClient != null)
+            _supplementalRestClient = SharePointRestClient.Create(credential, ProductPrefix, _logger, _throttleNotifications);
+        _coverage = _coverage with { NativeClient = _supplementalRestClient ?? _sharePointRestClient, GraphClient = _graphClient,
+            GraphPermissionsAreComplete = authMode == SharePointAuthenticationMode.AppOnly };
+
         if (string.IsNullOrWhiteSpace(_checkpointScope))
         {
             _checkpointScope = ConnectorCheckpointIdentity.Create(
@@ -250,9 +278,17 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
     public async Task<IEnumerable<IRemoteDrive>> GetDrivesAsync(CancellationToken cancellationToken = default)
     {
         ResetDiscoveryReport();
+        if (_graphClient != null) Microsoft365PrincipalReader.Reset(_graphClient);
+        if (_sharePointRestClient != null) Microsoft365NativeAccessReader.Reset(_sharePointRestClient);
+        if (_supplementalRestClient != null) Microsoft365NativeAccessReader.Reset(_supplementalRestClient);
         if (_graphClient == null && _sharePointRestClient == null)
         {
             throw new InvalidOperationException("Connector not initialized.");
+        }
+        if (!_workloads.ScanStorage)
+        {
+            await AuthenticateWorkloadDiscovery(cancellationToken);
+            return CompleteDiscoveryReport("selected workloads", []);
         }
 
         if (_sharePointRestClient != null)
@@ -267,6 +303,11 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             var restDrives = (await GetSharePointRestDrivesAsync(cancellationToken))
                 .DistinctBy(drive => drive.ConnectionId, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            if (_configuredSiteTargets.Count == 0 && _coverage.DiscoverSharedFiles && _sharePointRestRootUrl != null)
+            {
+                restDrives.Add(new Microsoft365RestSearchDrive(_sharePointRestClient, _sharePointRestRootUrl, _tenantId, _coverage));
+                AddDiscoveryWarning("Shared-file discovery uses SharePoint Search and is limited to indexed, accessible items.");
+            }
             return CompleteDiscoveryReport(
                 _configuredSiteTargets.Count > 0 ? "explicit-target" : "delegated/sharepoint-native best-effort",
                 restDrives);
@@ -282,6 +323,17 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             var sites = await GetSitesAsync(cancellationToken);
             AddDiscoveryCount("app sites", sites.Count);
             drives = (await GetDistinctDrivesForSitesAsync(sites, cancellationToken)).ToList();
+        }
+
+        if (_configuredSiteTargets.Count == 0 && _configuredDriveIds.Count == 0)
+        {
+            await AddPersonalDrivesAsync(drives, cancellationToken);
+            if (_useConfiguredTargets && _coverage.DiscoverSharedFiles)
+            {
+                drives.Add(new Microsoft365SharedSearchDrive(_graphClient!, _tenantId, _coverage));
+                AddDiscoveryWarning("Shared-file discovery uses Microsoft Search and is limited to indexed, accessible items; it is not an authoritative shared-item inventory.");
+            }
+            drives = drives.DistinctBy(drive => drive.ConnectionId, StringComparer.Ordinal).ToList();
         }
 
         if (!_discoverTeamsChannels || _configuredSiteTargets.Count > 0 || _configuredDriveIds.Count > 0)
@@ -330,6 +382,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             cachedDrive,
             _tenantId,
             NormalizeDriveType(share.Type),
+            _coverage,
             rootItemId,
             share.Name,
             share.WebUrl);
@@ -357,7 +410,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         foreach (var driveId in _configuredDriveIds)
         {
             var drive = await GetDriveByIdAsync(driveId, cancellationToken);
-            if (drive != null && seenDriveIds.Add(drive.Id))
+            if (drive != null && seenDriveIds.Add(drive.ConnectionId))
             {
                 drives.Add(drive);
             }
@@ -369,25 +422,33 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             if (resolvedTarget == null)
             {
                 _logger?.LogWarning("Unable to resolve SharePoint site target {SiteUrl}.", siteTarget);
+                AddDiscoveryFailure($"Unable to resolve SharePoint site target {siteTarget}.");
                 continue;
             }
 
-            var siteDrives = (await GetDrivesForSiteAsync(
-                    resolvedTarget.Site,
-                    cancellationToken,
-                    DetermineDriveType(resolvedTarget.Site.WebUrl ?? siteTarget.AbsoluteUri)))
-                .ToList();
+            var targetSites = resolvedTarget.RestrictToRequestedPath ? new[] { resolvedTarget.Site }
+                : await ExpandSitesAsync([resolvedTarget.Site], cancellationToken);
+            var siteDrives = new List<IRemoteDrive>();
+            foreach (var site in targetSites)
+                siteDrives.AddRange(await GetDrivesForSiteAsync(site, cancellationToken,
+                    DetermineDriveType(site.WebUrl ?? siteTarget.AbsoluteUri)));
 
             if (resolvedTarget.RestrictToRequestedPath)
             {
                 siteDrives = siteDrives
                     .Where(drive => DriveMatchesRequestedTarget(drive, siteTarget))
                     .ToList();
+                if (siteDrives.Count == 0)
+                {
+                    _logger?.LogWarning("No document library matches configured target {SiteUrl}.", siteTarget);
+                    AddDiscoveryFailure($"No document library matches configured target {siteTarget}.");
+                    continue;
+                }
             }
 
             foreach (var drive in siteDrives)
             {
-                if (seenDriveIds.Add(drive.Id))
+                if (seenDriveIds.Add(drive.ConnectionId))
                 {
                     drives.Add(drive);
                 }
@@ -430,20 +491,30 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             if (resolvedTarget == null)
             {
                 _logger?.LogWarning("Unable to resolve SharePoint site target {SiteUrl}.", siteTarget);
+                AddDiscoveryFailure($"Unable to resolve SharePoint site target {siteTarget}.");
                 continue;
             }
 
-            var siteDrives = (await GetSharePointRestDrivesForSiteAsync(resolvedTarget.Site, cancellationToken)).ToList();
+            var targetSites = resolvedTarget.RestrictToRequestedPath ? new[] { resolvedTarget.Site }
+                : await ExpandRestSitesAsync([resolvedTarget.Site], cancellationToken);
+            var siteDrives = new List<IRemoteDrive>();
+            foreach (var site in targetSites) siteDrives.AddRange(await GetSharePointRestDrivesForSiteAsync(site, cancellationToken));
             if (resolvedTarget.RestrictToRequestedPath)
             {
                 siteDrives = siteDrives
                     .Where(drive => DriveMatchesRequestedTarget(drive, siteTarget))
                     .ToList();
+                if (siteDrives.Count == 0)
+                {
+                    _logger?.LogWarning("No document library matches configured target {SiteUrl}.", siteTarget);
+                    AddDiscoveryFailure($"No document library matches configured target {siteTarget}.");
+                    continue;
+                }
             }
 
             foreach (var drive in siteDrives)
             {
-                if (seenDriveIds.Add(drive.Id))
+                if (seenDriveIds.Add(drive.ConnectionId))
                 {
                     drives.Add(drive);
                 }
@@ -461,7 +532,21 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         }
 
         _logger?.LogInformation("No explicit SharePoint targets configured for delegated SharePoint-native auth. Discovering accessible sites via SharePoint Search.");
-        var sites = (await _sharePointRestClient.SearchAccessibleSitesAsync(_sharePointRestRootUrl, cancellationToken)).ToList();
+        var sites = new List<SharePointRestClient.RestSite>();
+        try
+        {
+            await _sharePointRestClient.SearchAccessibleSitesAsync(_sharePointRestRootUrl, cancellationToken, sites.Add);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            const string warning = "SharePoint site search could not be completed; the site inventory is partial.";
+            AddDiscoveryFailure(warning);
+            _logger?.LogWarning(ex, "{DiscoveryWarning}", warning);
+        }
         AddDiscoveryCount("SharePoint search sites", sites.Count);
 
         if (_discoverFollowedLocations)
@@ -493,7 +578,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             catch (Exception ex)
             {
                 const string warning = "Followed SharePoint sites and documents could not be enumerated.";
-                AddDiscoveryWarning(warning);
+                AddDiscoveryFailure(warning);
                 _logger?.LogDebug(ex, "{DiscoveryWarning}", warning);
             }
         }
@@ -501,6 +586,24 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         var distinctSites = sites
             .DistinctBy(site => site.Url.AbsoluteUri, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        if (_coverage.DiscoverPersonalDrives)
+        {
+            try
+            {
+                using var profile = await _sharePointRestClient.ReadJsonAsync(SharePointRestClient.Api(_sharePointRestRootUrl,
+                    "SP.UserProfiles.PeopleManager/GetMyProperties"), cancellationToken);
+                var root = profile.RootElement;
+                if (root.TryGetProperty("d", out var wrapped)) root = wrapped;
+                if (Uri.TryCreate(GetJsonString(root, "PersonalUrl"), UriKind.Absolute, out var personalUrl)
+                    && Microsoft365Cloud.IsSharePointHost(personalUrl.Host))
+                {
+                    var personal = await _sharePointRestClient.TryResolveSiteAsync(personalUrl, cancellationToken);
+                    if (personal != null) distinctSites.Add(personal);
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            { AddDiscoveryFailure("The signed-in user's personal site could not be discovered."); }
+        }
         AddDiscoveryCount("distinct sites", distinctSites.Count);
         return await GetDistinctSharePointRestDrivesForSitesAsync(distinctSites, cancellationToken);
     }
@@ -514,6 +617,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             return [];
         }
 
+        sites = await ExpandRestSitesAsync(sites, cancellationToken);
         var allDrives = new System.Collections.Concurrent.ConcurrentBag<IRemoteDrive>();
         await Parallel.ForEachAsync(sites, new ParallelOptions
         {
@@ -528,7 +632,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             }
         });
 
-        return allDrives.DistinctBy(drive => drive.Id).ToList();
+        return allDrives.DistinctBy(drive => drive.ConnectionId, StringComparer.Ordinal).ToList();
     }
 
     private async Task<IEnumerable<IRemoteDrive>> GetSharePointRestDrivesForSiteAsync(
@@ -546,37 +650,36 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             var drives = new List<IRemoteDrive>();
             foreach (var library in libraries)
             {
-                if (SystemLibraries.Contains(library.Title))
-                {
-                    continue;
-                }
-
-                if (library.ItemCount.HasValue && library.ItemCount.Value <= 0)
-                {
-                    continue;
-                }
-
-                if (library.WebUrl.AbsolutePath.Contains("/_catalogs/masterpage", StringComparison.OrdinalIgnoreCase)
-                    || library.WebUrl.AbsolutePath.Contains("/lists/taxonomyhiddenlist", StringComparison.OrdinalIgnoreCase)
-                    || library.WebUrl.AbsolutePath.Contains("/sitepages/", StringComparison.OrdinalIgnoreCase)
-                    || library.WebUrl.AbsolutePath.Contains("/siteassets/", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
                 drives.Add(new SharePointRestDrive(
                     _sharePointRestClient,
                     library,
                     _tenantId,
-                    BuildSharePointRestDriveName(site, library)));
+                    BuildSharePointRestDriveName(site, library), _coverage));
             }
+
+            if (_coverage.ScanListsAndPages || _coverage.ScanRecycleBin)
+                drives.Add(new Microsoft365SiteDataDrive(null, _sharePointRestClient, _tenantId, site.Url.AbsoluteUri, site.Url, _coverage));
 
             return drives;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Error listing SharePoint libraries for site {SiteUrl}", site.Url);
-            return [];
+            if (RemoteScanExceptionClassifier.IsExpectedForEnumeration(ex))
+            {
+                AddExpectedDiscoveryFailure("inaccessible library inventories");
+                _logger?.LogDebug(ex, "Library discovery was unavailable for {SiteUrl}.", site.Url);
+            }
+            else
+            {
+                AddDiscoveryFailure($"Unable to list SharePoint libraries for {site.Url}.");
+                _logger?.LogWarning(ex, "Error listing SharePoint libraries for site {SiteUrl}", site.Url);
+            }
+            return _coverage.ScanListsAndPages || _coverage.ScanRecycleBin
+                ? [new Microsoft365SiteDataDrive(null, _sharePointRestClient, _tenantId, site.Url.AbsoluteUri, site.Url, _coverage)] : [];
         }
     }
 
@@ -640,6 +743,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         }
         catch (Exception ex)
         {
+            AddDiscoveryFailure("Teams could not be enumerated; channel file discovery is incomplete.");
             _logger?.LogWarning(
                 ex,
                 "Teams channel discovery is unavailable. Continuing with SharePoint site discovery. Grant Team.ReadBasic.All and Channel.ReadBasic.All to discover channel file locations.");
@@ -698,6 +802,10 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                 {
                     channelDrives.Add(drive);
                 }
+                else
+                {
+                    Interlocked.Increment(ref channelFailures);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -716,8 +824,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
 
         if (teamFailures > 0 || channelFailures > 0)
         {
-            AddDiscoveryCount("discovery failures", teamFailures + channelFailures);
-            AddDiscoveryWarning($"Teams discovery had {teamFailures:N0} team failure(s) and {channelFailures:N0} channel failure(s).");
+            AddDiscoveryFailure($"Teams discovery had {teamFailures:N0} team failure(s) and {channelFailures:N0} channel failure(s).", teamFailures + channelFailures);
             _logger?.LogWarning(
                 "Teams channel discovery completed with {TeamFailureCount} team failures and {ChannelFailureCount} channel failures. The scan will continue with every accessible drive discovered.",
                 teamFailures,
@@ -745,6 +852,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                     drive,
                     _tenantId,
                     DatastoreType.Teams,
+                    _coverage,
                     reference.RootItemId,
                     name,
                     reference.WebUrl);
@@ -764,7 +872,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
     {
         var teams = new List<TeamReference>();
         await ForEachGraphCollectionItemAsync(
-            new Uri("https://graph.microsoft.com/v1.0/teams?$select=id,displayName&$top=999"),
+            new Uri($"{GraphBaseUrl}/teams?$select=id,displayName&$top=999"),
             element =>
             {
                 var id = GetJsonString(element, "id");
@@ -781,7 +889,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
     {
         var channels = new List<ChannelReference>();
         await ForEachGraphCollectionItemAsync(
-            new Uri($"https://graph.microsoft.com/v1.0/teams/{Uri.EscapeDataString(team.Id)}/allChannels?$select=id,displayName,membershipType"),
+            new Uri($"{GraphBaseUrl}/teams/{Uri.EscapeDataString(team.Id)}/allChannels?$select=id,displayName,membershipType"),
             element =>
             {
                 var id = GetJsonString(element, "id");
@@ -853,8 +961,13 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         }
 
         Uri? nextUri = initialUri;
+        var visitedPages = new HashSet<string>(StringComparer.Ordinal);
         while (nextUri != null)
         {
+            if (visitedPages.Count >= Microsoft365CoverageOptions.MaxPages || !visitedPages.Add(nextUri.AbsoluteUri))
+            {
+                throw new InvalidDataException("Graph discovery returned a repeated collection continuation link.");
+            }
             var requestInfo = new RequestInformation
             {
                 HttpMethod = Method.GET,
@@ -866,7 +979,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                 cancellationToken: cancellationToken);
             if (stream == null)
             {
-                return;
+                throw new InvalidDataException($"Graph collection response was empty for {nextUri}.");
             }
 
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -878,13 +991,17 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                     processItem(element);
                 }
             }
+            else
+            {
+                throw new InvalidDataException($"Graph collection response did not contain an array for {nextUri}.");
+            }
 
             var nextLink = GetJsonString(document.RootElement, "@odata.nextLink");
-            nextUri = Uri.TryCreate(nextLink, UriKind.Absolute, out var parsedNextUri) ? parsedNextUri : null;
+            nextUri = string.IsNullOrWhiteSpace(nextLink) ? null : new Uri(nextLink, UriKind.Absolute);
         }
     }
 
-    private static Uri BuildChannelFilesFolderUrl(string teamId, string channelId, string? odataId)
+    private Uri BuildChannelFilesFolderUrl(string teamId, string channelId, string? odataId)
     {
         if (Uri.TryCreate(odataId, UriKind.Absolute, out var odataUri))
         {
@@ -904,11 +1021,11 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                 path += "/filesFolder";
             }
 
-            return new Uri($"https://graph.microsoft.com{path}");
+            return new Uri(new Uri(GraphBaseUrl).GetLeftPart(UriPartial.Authority) + path);
         }
 
         return new Uri(
-            $"https://graph.microsoft.com/v1.0/teams/{Uri.EscapeDataString(teamId)}/channels/{Uri.EscapeDataString(channelId)}/filesFolder");
+            $"{GraphBaseUrl}/teams/{Uri.EscapeDataString(teamId)}/channels/{Uri.EscapeDataString(channelId)}/filesFolder");
     }
 
     private static string? GetJsonString(JsonElement element, string propertyName)
@@ -926,6 +1043,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             return [];
         }
 
+        sites = await ExpandSitesAsync(sites, cancellationToken);
         var allDrives = new System.Collections.Concurrent.ConcurrentBag<IRemoteDrive>();
 
         await Parallel.ForEachAsync(sites, new ParallelOptions
@@ -946,7 +1064,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             }
         });
 
-        return allDrives.DistinctBy(d => d.Id).ToList();
+        return allDrives.DistinctBy(d => d.ConnectionId, StringComparer.Ordinal).ToList();
     }
 
     private async Task<IRemoteDrive?> GetDriveByIdAsync(string driveId, CancellationToken cancellationToken)
@@ -965,10 +1083,11 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
 
             if (drive?.Id == null)
             {
+                AddDiscoveryFailure($"Configured SharePoint drive {driveId} could not be resolved.");
                 return null;
             }
 
-            return new SharePointDrive(_graphClient, drive, _tenantId, DetermineDriveType(drive.WebUrl ?? string.Empty));
+            return new SharePointDrive(_graphClient, drive, _tenantId, DetermineDriveType(drive.WebUrl ?? string.Empty), _coverage);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -976,6 +1095,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         }
         catch (Exception ex)
         {
+            AddDiscoveryFailure($"Configured SharePoint drive {driveId} could not be resolved.");
             _logger?.LogWarning(ex, "Error resolving configured SharePoint drive {DriveId}", driveId);
             return null;
         }
@@ -1007,7 +1127,9 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         var requestInfo = new RequestInformation
         {
             HttpMethod = Method.GET,
-            URI = new Uri($"https://graph.microsoft.com/v1.0/sites/{host}:{candidatePath}?$select={string.Join(',', SiteSelectFields)}")
+            URI = candidatePath == "/"
+                ? new Uri($"{GraphBaseUrl}/sites/{host}?$select={string.Join(',', SiteSelectFields)}")
+                : new Uri($"{GraphBaseUrl}/sites/{host}:{candidatePath}?$select={string.Join(',', SiteSelectFields)}")
         };
 
         try
@@ -1037,11 +1159,12 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
 
         var sites = new List<Site>();
         var processedSiteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visitedPages = new HashSet<string>(StringComparer.Ordinal);
         var encodedSearchQuery = Uri.EscapeDataString(string.IsNullOrWhiteSpace(searchQuery) ? "*" : searchQuery);
         var requestInfo = new RequestInformation
         {
             HttpMethod = Method.GET,
-            URI = new Uri($"https://graph.microsoft.com/v1.0/sites?search={encodedSearchQuery}&$select={string.Join(',', SiteSelectFields)}&$top=999")
+            URI = new Uri($"{GraphBaseUrl}/sites?search={encodedSearchQuery}&$select={string.Join(',', SiteSelectFields)}&$top=999")
         };
         requestInfo.Headers.Add("ConsistencyLevel", "eventual");
 
@@ -1049,6 +1172,10 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         {
             try
             {
+                if (visitedPages.Count >= Microsoft365CoverageOptions.MaxPages || !visitedPages.Add(requestInfo.URI.AbsoluteUri))
+                {
+                    throw new InvalidDataException("Graph site search returned a repeated continuation link.");
+                }
                 using var stream = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(
                     requestInfo,
                     errorMapping: null,
@@ -1056,7 +1183,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
 
                 if (stream == null)
                 {
-                    break;
+                    throw new InvalidDataException("Graph site search response was empty.");
                 }
 
                 using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -1088,6 +1215,10 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                         sites.Add(site);
                     }
                 }
+                else
+                {
+                    throw new InvalidDataException("Graph site search response did not contain an array.");
+                }
 
                 if (!document.RootElement.TryGetProperty("@odata.nextLink", out var nextLinkProperty)
                     || string.IsNullOrWhiteSpace(nextLinkProperty.GetString()))
@@ -1108,6 +1239,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             }
             catch (Exception ex)
             {
+                AddDiscoveryFailure("Graph site search could not be completed; the site inventory is partial.");
                 _logger?.LogWarning(
                     ex,
                     "Error searching SharePoint sites for delegated discovery. Returning {Count} sites discovered so far.",
@@ -1125,7 +1257,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         try
         {
             await ForEachGraphCollectionItemAsync(
-                new Uri($"https://graph.microsoft.com/v1.0/me/followedSites?$select={string.Join(',', SiteSelectFields)}"),
+                new Uri($"{GraphBaseUrl}/me/followedSites?$select={string.Join(',', SiteSelectFields)}"),
                 element =>
                 {
                     var id = GetJsonString(element, "id");
@@ -1151,7 +1283,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         catch (Exception ex)
         {
             const string warning = "Followed Microsoft 365 sites could not be enumerated.";
-            AddDiscoveryWarning(warning);
+            AddDiscoveryFailure(warning);
             _logger?.LogDebug(ex, "{DiscoveryWarning}", warning);
         }
 
@@ -1169,16 +1301,21 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
 
         var sites = new List<Site>();
         var processedSiteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visitedPages = new HashSet<string>(StringComparer.Ordinal);
         var requestInfo = new RequestInformation
         {
             HttpMethod = Method.GET,
-            URI = new Uri($"https://graph.microsoft.com/v1.0/sites/getAllSites?$select={string.Join(',', SiteSelectFields)}")
+            URI = new Uri($"{GraphBaseUrl}/sites/getAllSites?$select={string.Join(',', SiteSelectFields)}")
         };
 
         while (requestInfo != null)
         {
             try
             {
+                if (visitedPages.Count >= Microsoft365CoverageOptions.MaxPages || !visitedPages.Add(requestInfo.URI.AbsoluteUri))
+                {
+                    throw new InvalidDataException("Graph tenant site inventory returned a repeated continuation link.");
+                }
                 using var stream = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(
                     requestInfo,
                     errorMapping: null,
@@ -1186,7 +1323,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
 
                 if (stream == null)
                 {
-                    break;
+                    throw new InvalidDataException("Graph tenant site inventory response was empty.");
                 }
 
                 using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -1218,6 +1355,10 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                         sites.Add(site);
                     }
                 }
+                else
+                {
+                    throw new InvalidDataException("Graph tenant site inventory response did not contain an array.");
+                }
 
                 if (!document.RootElement.TryGetProperty("@odata.nextLink", out var nextLinkProperty)
                     || string.IsNullOrWhiteSpace(nextLinkProperty.GetString()))
@@ -1231,8 +1372,13 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                     URI = new Uri(nextLinkProperty.GetString()!)
                 };
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
+                AddDiscoveryFailure("Tenant site enumeration could not be completed; the site inventory is partial.");
                 _logger?.LogWarning(
                     ex,
                     "Error listing SharePoint sites for tenant {TenantId}. Returning {Count} sites discovered so far.",
@@ -1266,32 +1412,19 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             {
                 if (currentResponse?.Value == null)
                 {
-                    return;
+                    throw new InvalidDataException($"Graph library response was empty for site {site.Id}.");
                 }
 
                 foreach (var drive in currentResponse.Value)
                 {
-                    if (string.IsNullOrEmpty(drive.Name))
+                    if (string.IsNullOrWhiteSpace(drive.Id))
                     {
+                        AddDiscoveryFailure($"Graph returned a library without an ID for site {site.Id}.");
                         continue;
                     }
+                    if (string.IsNullOrWhiteSpace(drive.Name)) drive.Name = drive.Id;
 
-                    if (SystemLibraries.Contains(drive.Name))
-                    {
-                        continue;
-                    }
-
-                    if (!string.IsNullOrEmpty(drive.WebUrl))
-                    {
-                        if (drive.WebUrl.Contains("/_catalogs/masterpage", StringComparison.OrdinalIgnoreCase)
-                            || drive.WebUrl.Contains("/lists/taxonomyhiddenlist", StringComparison.OrdinalIgnoreCase)
-                            || drive.WebUrl.Contains("/sitepages/", StringComparison.OrdinalIgnoreCase)
-                            || drive.WebUrl.Contains("/siteassets/", StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
-                    }
-
+                    if (drive.System != null) AddDiscoveryCount("system libraries", 1);
                     if (type == DatastoreType.OneDrive)
                     {
                         if (drive.Name.Equals("Documents", StringComparison.OrdinalIgnoreCase)
@@ -1311,14 +1444,20 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                             : $"{site.DisplayName} - {drive.Name}";
                     }
 
-                    drives.Add(new SharePointDrive(_graphClient, drive, _tenantId, type));
+                    drives.Add(new SharePointDrive(_graphClient, drive, _tenantId, type, _coverage with
+                    { NativeSiteUrl = Uri.TryCreate(site.WebUrl, UriKind.Absolute, out var nativeSite) ? nativeSite : null }));
                 }
             }
 
             ProcessResponse(response);
 
+            var visitedPages = new HashSet<string>(StringComparer.Ordinal);
             while (response?.OdataNextLink != null)
             {
+                if (visitedPages.Count >= Microsoft365CoverageOptions.MaxPages || !visitedPages.Add(response.OdataNextLink))
+                {
+                    throw new InvalidDataException($"Graph library enumeration returned a repeated continuation link for site {site.Id}.");
+                }
                 var requestInfo = _graphClient.Sites[site.Id].Drives.ToGetRequestInformation();
                 requestInfo.URI = new Uri(response.OdataNextLink);
                 response = await _graphClient.RequestAdapter.SendAsync<DriveCollectionResponse>(
@@ -1328,11 +1467,20 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
                 ProcessResponse(response);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
+            AddDiscoveryFailure($"Libraries could not be fully enumerated for site {site.WebUrl ?? site.Id}.");
             _logger?.LogWarning(ex, "Error listing drives for site {SiteId} ({SiteName})", site.Id, site.DisplayName);
         }
 
+        if ((_coverage.ScanListsAndPages || _coverage.ScanRecycleBin) && site.Id != null
+            && Uri.TryCreate(site.WebUrl, UriKind.Absolute, out var siteUrl))
+            drives.Add(new Microsoft365SiteDataDrive(new Microsoft365GraphReader(_graphClient), _supplementalRestClient,
+                _tenantId, site.Id, siteUrl, _coverage));
         return drives;
     }
 
@@ -1355,7 +1503,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         var rawMode = config.GetValueOrDefault("AuthMode");
         if (string.IsNullOrWhiteSpace(rawMode))
         {
-            return string.IsNullOrWhiteSpace(clientSecret)
+            return string.IsNullOrWhiteSpace(clientSecret) && string.IsNullOrWhiteSpace(config.GetValueOrDefault("CertificatePath"))
                 ? SharePointAuthenticationMode.InteractiveBrowser
                 : SharePointAuthenticationMode.AppOnly;
         }
@@ -1475,7 +1623,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         }
     }
 
-    private InteractiveBrowserCredential CreateInteractiveBrowserCredential(string clientId, Uri authorityHost, string? redirectUri)
+    private TokenCredential CreateInteractiveBrowserCredential(string clientId, Uri authorityHost, string? redirectUri, bool graphLogin = false)
     {
         var options = new InteractiveBrowserCredentialOptions
         {
@@ -1483,19 +1631,25 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             ClientId = clientId,
             AuthorityHost = authorityHost,
             RedirectUri = new Uri(string.IsNullOrWhiteSpace(redirectUri) ? DefaultInteractiveRedirectUri : redirectUri),
+            DisableAutomaticAuthentication = true,
             TokenCachePersistenceOptions = CreateTokenCacheOptions()
         };
 
-        return new InteractiveBrowserCredential(options);
+        var silent = new InteractiveBrowserCredential(options);
+        return new Microsoft365DelegatedCredential(silent,
+            async (context, ct) => { await silent.AuthenticateAsync(context, ct); },
+            graphLogin ? [_cloud.GraphRoot.GetLeftPart(UriPartial.Authority) + "/User.Read"] : null,
+            _workloads.RequestAdditionalPermissions);
     }
 
-    private DeviceCodeCredential CreateDeviceCodeCredential(string clientId, Uri authorityHost)
+    private TokenCredential CreateDeviceCodeCredential(string clientId, Uri authorityHost, bool graphLogin = false)
     {
         var options = new DeviceCodeCredentialOptions
         {
             TenantId = _tenantId,
             ClientId = clientId,
             AuthorityHost = authorityHost,
+            DisableAutomaticAuthentication = true,
             TokenCachePersistenceOptions = CreateTokenCacheOptions(),
             DeviceCodeCallback = (deviceCodeInfo, _) =>
             {
@@ -1504,7 +1658,11 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             }
         };
 
-        return new DeviceCodeCredential(options);
+        var silent = new DeviceCodeCredential(options);
+        return new Microsoft365DelegatedCredential(silent,
+            async (context, ct) => { await silent.AuthenticateAsync(context, ct); },
+            graphLogin ? [_cloud.GraphRoot.GetLeftPart(UriPartial.Authority) + "/User.Read"] : null,
+            _workloads.RequestAdditionalPermissions);
     }
 
     private static TokenCachePersistenceOptions CreateTokenCacheOptions()
@@ -1515,10 +1673,15 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         };
     }
 
-    private static IEnumerable<string> GetDelegatedScopes(IReadOnlyDictionary<string, string> config)
+    internal static IEnumerable<string> GetDelegatedScopes(IReadOnlyDictionary<string, string> config)
     {
         var customScopes = ParseValues(config.GetValueOrDefault("DelegatedScopes") ?? config.GetValueOrDefault("Scopes"), allowCommaSeparator: true);
-        return customScopes.Count == 0 ? DefaultDelegatedScopes : customScopes;
+        var workloads = Microsoft365WorkloadOptions.Parse(config);
+        if (customScopes.Count == 0 && !workloads.RequestAdditionalPermissions)
+            return [Microsoft365Cloud.Resolve(config.GetValueOrDefault("Cloud")).GraphRoot.GetLeftPart(UriPartial.Authority) + "/.default"];
+        return customScopes.Count == 0
+            ? (workloads.ScanStorage ? DefaultDelegatedScopes : ["User.Read"]).Concat(workloads.DelegatedScopes()).Distinct(StringComparer.OrdinalIgnoreCase)
+            : customScopes;
     }
 
     private static bool GetBooleanSetting(IReadOnlyDictionary<string, string> config, string key, bool defaultValue)
@@ -1679,6 +1842,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
         {
             yield return "/" + string.Join('/', segments.Take(length));
         }
+        yield return "/";
     }
 
     private static bool ShouldRestrictToRequestedPath(Uri requestedUri, string siteWebUrl)
@@ -1750,11 +1914,25 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             .ToList();
     }
 
+    private void RecordLibraryCoverage(string? webUrl)
+    {
+        if (Uri.TryCreate(webUrl, UriKind.Absolute, out var uri)
+            && uri.AbsolutePath.TrimEnd('/').EndsWith("/PreservationHoldLibrary", StringComparison.OrdinalIgnoreCase))
+        {
+            AddDiscoveryCount("retained-content libraries", 1);
+            AddDiscoveryWarning("Preservation Hold libraries are included. Findings in these libraries can refer to retained historical copies.");
+        }
+    }
+
     private void ResetDiscoveryReport()
     {
-        _discoverySourceCounts.Clear();
-        _discoveryWarnings.Clear();
-        DiscoveryReport = ConnectorDiscoveryReport.Empty;
+        lock (_discoveryReportLock)
+        {
+            _discoverySourceCounts.Clear();
+            _discoveryWarnings.Clear();
+            _discoveryComplete = true;
+            DiscoveryReport = ConnectorDiscoveryReport.Empty;
+        }
     }
 
     private void AddDiscoveryCount(string source, int count)
@@ -1764,31 +1942,68 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             return;
         }
 
-        _discoverySourceCounts[source] = _discoverySourceCounts.GetValueOrDefault(source) + count;
+        lock (_discoveryReportLock)
+        {
+            _discoverySourceCounts[source] = _discoverySourceCounts.GetValueOrDefault(source) + count;
+        }
     }
 
     private void AddDiscoveryWarning(string warning)
     {
-        if (!string.IsNullOrWhiteSpace(warning)
-            && !_discoveryWarnings.Contains(warning, StringComparer.OrdinalIgnoreCase))
+        lock (_discoveryReportLock)
         {
-            _discoveryWarnings.Add(warning);
+            if (!string.IsNullOrWhiteSpace(warning)
+                && !_discoveryWarnings.Contains(warning, StringComparer.OrdinalIgnoreCase))
+            {
+                _discoveryWarnings.Add(warning);
+            }
+        }
+    }
+
+    private void AddDiscoveryFailure(string warning, int count = 1)
+    {
+        lock (_discoveryReportLock)
+        {
+            _discoveryComplete = false;
+            AddDiscoveryCount("discovery failures", count);
+            AddDiscoveryWarning(warning);
+        }
+    }
+
+    private void AddExpectedDiscoveryFailure(string source)
+    {
+        lock (_discoveryReportLock)
+        {
+            _discoveryComplete = false;
+            AddDiscoveryCount("discovery failures", 1);
+            AddDiscoveryCount(source, 1);
         }
     }
 
     private IReadOnlyList<IRemoteDrive> CompleteDiscoveryReport(string coverage, IReadOnlyList<IRemoteDrive> drives)
     {
-        _discoverySourceCounts["drives"] = drives.Count;
-        DiscoveryReport = new ConnectorDiscoveryReport(
-            coverage,
-            new Dictionary<string, int>(_discoverySourceCounts, StringComparer.OrdinalIgnoreCase),
-            _discoveryWarnings.ToArray());
+        var result = drives.ToList();
+        AddWorkloadDrives(result);
+        drives = result;
+        foreach (var drive in drives) RecordLibraryCoverage(drive.WebUrl);
+        lock (_discoveryReportLock)
+        {
+            _discoverySourceCounts["drives"] = drives.Count;
+            DiscoveryReport = new ConnectorDiscoveryReport(
+                _discoveryComplete ? coverage : $"{coverage} (incomplete)",
+                new Dictionary<string, int>(_discoverySourceCounts, StringComparer.OrdinalIgnoreCase),
+                _discoveryWarnings.ToArray())
+            {
+                IsComplete = _discoveryComplete,
+                CoverageNotes = _unavailableWorkloads.Select(pair => string.Join(", ", pair.Value) + " (" + pair.Key + ")").ToArray()
+            };
+        }
         _logger?.LogInformation(
             "Microsoft 365 discovery completed with coverage {Coverage}, {DriveCount} drives, and {WarningCount} warnings. Sources: {Sources}",
-            coverage,
+            DiscoveryReport.Coverage,
             drives.Count,
-            _discoveryWarnings.Count,
-            string.Join(", ", _discoverySourceCounts.Select(entry => $"{entry.Key}={entry.Value}")));
+            DiscoveryReport.Warnings.Count,
+            string.Join(", ", DiscoveryReport.SourceCounts.Select(entry => $"{entry.Key}={entry.Value}")));
         return drives;
     }
 
@@ -1803,7 +2018,7 @@ public class SharePointConnector : IConnector, IConnectorDiscoveryReportProvider
             foreach (var value in ParseQueryValues(target.Query))
             {
                 if (Uri.TryCreate(value, UriKind.Absolute, out var absoluteValue)
-                    && absoluteValue.Host.EndsWith(".sharepoint.com", StringComparison.OrdinalIgnoreCase))
+                    && Microsoft365Cloud.IsSharePointHost(absoluteValue.Host))
                 {
                     Add(absoluteValue);
                     continue;

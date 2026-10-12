@@ -491,6 +491,8 @@ public class SharePointDelegatedAuthTests
         Assert.Equal("drive-1", drive.Id);
         Assert.Equal(DatastoreType.SharePoint, Assert.IsType<SharePointDrive>(drive).DriveType);
         Assert.Equal(1, handler.GetAttemptCount("teams-forbidden"));
+        Assert.False(connector.DiscoveryReport.IsComplete);
+        Assert.Contains(connector.DiscoveryReport.Warnings, warning => warning.Contains("Teams", StringComparison.Ordinal));
     }
 
     [Fact]

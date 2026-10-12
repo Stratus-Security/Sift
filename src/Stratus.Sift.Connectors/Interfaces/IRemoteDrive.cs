@@ -14,6 +14,7 @@ public interface IRemoteDrive
 
     Task<(IEnumerable<IRemoteFile> Changes, string NewDeltaToken)> GetChangesAsync(string? deltaToken, CancellationToken cancellationToken = default);
 
+    // An empty checkpoint token invalidates saved enumeration state before a resynchronization.
     async Task<string> ProcessChangesAsync(
         string? deltaToken,
         Func<IRemoteFile, Task> onChange,

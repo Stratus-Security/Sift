@@ -50,6 +50,8 @@ internal sealed partial class SmbDiscoveryService
                 cancellationToken, progress),
             FileSystemScanMode.Subnet => DiscoverSubnetRootsAsync(target.Value, dnsServer, cancellationToken, progress),
             FileSystemScanMode.Device => DiscoverDeviceRootsAsync(target.Value, dnsServer, cancellationToken, progress),
+            FileSystemScanMode.TargetsFile => DiscoverSharesForHostsAsync(
+                target.TargetList?.Hosts ?? throw new ArgumentException("Network target file was not loaded."), dnsServer, cancellationToken, progress),
             _ => throw new ArgumentException($"Unsupported discovery mode '{target.Mode}'.", nameof(target))
         };
     }
@@ -140,7 +142,7 @@ internal sealed partial class SmbDiscoveryService
                 try
                 {
                     var connectionHosts = dnsServer is null
-                        ? [(ReachabilityHost: host, UncHost: host)]
+                        ? [(ReachabilityHost: host, UncHost: IPAddress.TryParse(host, out var address) ? FormatUncHost(address) : host)]
                         : (await _dnsResolver.ResolveHostAddressesAsync(host, dnsServer, token).ConfigureAwait(false))
                             .Select(address => (ReachabilityHost: address.ToString(), UncHost: FormatUncHost(address)))
                             .ToArray();
@@ -258,49 +260,9 @@ internal sealed partial class SmbDiscoveryService
 
     internal static IReadOnlyList<string> EnumerateSubnetHosts(string cidr)
     {
-        var trimmed = cidr.Trim();
-        if (IPAddress.TryParse(trimmed, out var singleAddress) && singleAddress.AddressFamily == AddressFamily.InterNetwork)
-        {
-            return [singleAddress.ToString()];
-        }
-
-        var parts = trimmed.Split('/', 2, StringSplitOptions.TrimEntries);
-        if (parts.Length != 2 ||
-            !IPAddress.TryParse(parts[0], out var networkAddress) ||
-            networkAddress.AddressFamily != AddressFamily.InterNetwork ||
-            !int.TryParse(parts[1], out var prefixLength) ||
-            prefixLength < 0 ||
-            prefixLength > 32)
-        {
+        if (!IsValidSubnetOrSingleHost(cidr))
             throw new ArgumentException($"Invalid subnet '{cidr}'. Use CIDR notation like 10.0.0.0/24.");
-        }
-
-        var addressValue = ToUInt32(networkAddress);
-        var mask = prefixLength == 0 ? 0u : uint.MaxValue << (32 - prefixLength);
-        var network = addressValue & mask;
-        var broadcast = network | ~mask;
-
-        var hosts = new List<string>();
-        if (prefixLength >= 31)
-        {
-            for (var current = network; current <= broadcast; current++)
-            {
-                hosts.Add(FromUInt32(current).ToString());
-                if (current == uint.MaxValue)
-                {
-                    break;
-                }
-            }
-
-            return hosts;
-        }
-
-        for (var current = network + 1; current < broadcast; current++)
-        {
-            hosts.Add(FromUInt32(current).ToString());
-        }
-
-        return hosts;
+        return NetworkTargetFile.Parse([cidr], "subnet").Hosts;
     }
 
     internal static bool IsCandidateShare(string shareName, uint shareType)
@@ -506,28 +468,6 @@ internal sealed partial class SmbDiscoveryService
     {
         return GetFileAttributesEx(path, 0, out var attributes)
             && (attributes.FileAttributes & FileAttributeDirectory) == FileAttributeDirectory;
-    }
-
-    private static uint ToUInt32(IPAddress address)
-    {
-        var bytes = address.GetAddressBytes();
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(bytes);
-        }
-
-        return BitConverter.ToUInt32(bytes, 0);
-    }
-
-    private static IPAddress FromUInt32(uint value)
-    {
-        var bytes = BitConverter.GetBytes(value);
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(bytes);
-        }
-
-        return new IPAddress(bytes);
     }
 
     private const uint FileAttributeDirectory = 0x10;

@@ -4,6 +4,9 @@ artifacts/
 .artifacts/
 TestResults/
 coverage/
+# Keep format interoperability fixtures versioned.
+!tests/Stratus.Sift.Cli.Tests/Fixtures/Coverage/
+!tests/Stratus.Sift.Cli.Tests/Fixtures/Coverage/*
 .vs/
 .idea/
 .vscode/

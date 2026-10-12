@@ -91,6 +91,12 @@ $emailPattern = [regex]::new(
 $textExtensions = @(
     '.cs', '.csproj', '.json', '.md', '.props', '.ps1', '.slnx', '.targets', '.txt', '.yml', '.yaml'
 )
+# Preserve reviewed upstream notices verbatim, including their author credits.
+# Only these exact bytes bypass the email check; every other check still applies.
+$upstreamNoticeEmailExceptions = @{
+    'tests/Stratus.Sift.Cli.Tests/Fixtures/LegacyOffice/NOTICE.txt' =
+        'A89FF8B670BCACD3E98EBEE64979E0569181C7942E9AD795F4222B25E5637A61'
+}
 $violations = [System.Collections.Generic.List[string]]::new()
 
 function Get-IdentifierHash([string] $Value) {
@@ -164,7 +170,14 @@ foreach ($relativePath in $trackedFiles) {
         continue
     }
 
-    Test-PublicContent $relativePath ([System.IO.File]::ReadAllText($fullPath))
+    $checkEmail = $true
+    if ($upstreamNoticeEmailExceptions.ContainsKey($relativePath)) {
+        $noticeHash = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash
+        if ($noticeHash -eq $upstreamNoticeEmailExceptions[$relativePath]) {
+            $checkEmail = $false
+        }
+    }
+    Test-PublicContent $relativePath ([System.IO.File]::ReadAllText($fullPath)) $checkEmail
 }
 
 if (-not [string]::IsNullOrWhiteSpace($ArtifactPath)) {

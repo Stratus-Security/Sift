@@ -7,6 +7,12 @@ public class ScanResult
     private HashSet<string>? _matchedClassifiers;
 
     public IEnumerable<ScanFinding> Issues { get; set; } = Array.Empty<ScanFinding>();
+
+    /// <summary>False when archive content could not be inspected because of errors or traversal limits.</summary>
+    public bool IsComplete { get; set; } = true;
+
+    /// <summary>A concise explanation when inspection is incomplete.</summary>
+    public string? IncompleteReason { get; set; }
     
     /// <summary>
     /// List of unique classifier names found in the file, regardless of policy actions.

@@ -45,9 +45,11 @@ public static class MicrosoftGraphClientBuilder
         TimeSpan? timeout,
         HttpMessageHandler? finalHandler,
         RetryHandlerOption? retryOptions,
-        ThrottleNotificationHub? throttleNotifications)
+        ThrottleNotificationHub? throttleNotifications,
+        Uri? serviceRoot = null)
     {
-        return Create(credential, productPrefix, DefaultScopes, timeout, finalHandler, retryOptions, throttleNotifications);
+        var scopes = serviceRoot == null ? DefaultScopes : new[] { serviceRoot.GetLeftPart(UriPartial.Authority) + "/.default" };
+        return Create(credential, productPrefix, scopes, timeout, finalHandler, retryOptions, throttleNotifications, serviceRoot);
     }
 
     internal static GraphServiceClient Create(
@@ -68,18 +70,22 @@ public static class MicrosoftGraphClientBuilder
         TimeSpan? timeout,
         HttpMessageHandler? finalHandler,
         RetryHandlerOption? retryOptions,
-        ThrottleNotificationHub? throttleNotifications)
+        ThrottleNotificationHub? throttleNotifications,
+        Uri? serviceRoot = null)
     {
         var httpClient = CreateHttpClient(productPrefix, timeout, finalHandler, retryOptions, throttleNotifications);
         var requestedScopes = scopes
             .Where(scope => !string.IsNullOrWhiteSpace(scope))
+            .Select(scope => serviceRoot != null && !scope.Contains("://", StringComparison.Ordinal)
+                ? serviceRoot.GetLeftPart(UriPartial.Authority) + "/" + scope : scope)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         return new GraphServiceClient(
             httpClient,
             credential,
-            requestedScopes.Length == 0 ? DefaultScopes : requestedScopes);
+            requestedScopes.Length == 0 ? DefaultScopes : requestedScopes,
+            serviceRoot?.AbsoluteUri);
     }
 
     internal static HttpClient CreateHttpClient(
@@ -103,60 +109,38 @@ public static class MicrosoftGraphClientBuilder
             GraphProductPrefix = productPrefix
         });
 
-        var retryHandler = new RetryHandler(retryOptions ?? CreateRetryOptions(throttleGate, throttleNotifications));
-        var replaced = false;
+        var retryHandler = new RetryHandler(retryOptions ?? CreateRetryOptions());
+        var retryHandlerIndex = -1;
         for (var i = 0; i < handlers.Count; i++)
         {
             if (handlers[i] is RetryHandler)
             {
                 handlers[i] = retryHandler;
-                replaced = true;
+                retryHandlerIndex = i;
                 break;
             }
         }
 
-        if (!replaced)
+        if (retryHandlerIndex < 0)
         {
+            retryHandlerIndex = handlers.Count;
             handlers.Add(retryHandler);
         }
 
-        handlers.Insert(0, new ThrottleGateHandler(throttleGate, throttleNotifications));
+        // The SDK short-circuits ShouldRetry for standard throttle statuses.
+        // Observe responses and wait inside RetryHandler so every attempt honors the shared pause.
+        handlers.Insert(retryHandlerIndex + 1, new ThrottleGateHandler(throttleGate, throttleNotifications));
         return handlers;
     }
 
-    internal static RetryHandlerOption CreateRetryOptions(RequestThrottleGate? throttleGate = null, ThrottleNotificationHub? throttleNotifications = null)
+    internal static RetryHandlerOption CreateRetryOptions()
     {
         return new RetryHandlerOption
         {
             MaxRetry = DefaultMaxRetryCount,
             Delay = DefaultRetryDelaySeconds,
             RetriesTimeLimit = DefaultRetriesTimeLimit,
-            ShouldRetry = (_, _, response) =>
-            {
-                if (response == null || response.IsSuccessStatusCode)
-                {
-                    return false;
-                }
-
-                var shouldRetry = response.StatusCode is HttpStatusCode.TooManyRequests
-                    or HttpStatusCode.ServiceUnavailable
-                    or HttpStatusCode.GatewayTimeout;
-
-                if (shouldRetry)
-                {
-                    var retryDelay = response.Headers.RetryAfter?.Delta;
-                    if ((!retryDelay.HasValue || retryDelay.Value <= TimeSpan.Zero) && response.Headers.RetryAfter?.Date is DateTimeOffset retryAfterDate)
-                    {
-                        retryDelay = retryAfterDate - DateTimeOffset.UtcNow;
-                    }
-
-                    retryDelay ??= TimeSpan.FromSeconds(DefaultRetryDelaySeconds);
-                    var gateDelay = throttleGate?.Observe(response, retryDelay) ?? retryDelay.Value;
-                    throttleNotifications?.Report("Microsoft Graph", response.StatusCode, retryDelay.Value, gateDelay, "graph.microsoft.com");
-                }
-
-                return shouldRetry;
-            }
+            ShouldRetry = (_, _, response) => response != null && RequestThrottleGate.ShouldThrottle(response.StatusCode)
         };
     }
 

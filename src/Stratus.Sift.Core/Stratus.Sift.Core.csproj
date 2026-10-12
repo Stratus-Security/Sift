@@ -23,8 +23,15 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
+    <PackageReference Include="ExcelDataReader" Version="3.8.0" />
+    <PackageReference Include="SharpCompress" Version="0.50.4" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageReference Include="OfficeIMO.Excel" Version="3.4.4" />
+    <PackageReference Include="OfficeIMO.OneNote" Version="3.4.4" />
+    <PackageReference Include="OfficeIMO.PowerPoint" Version="3.4.4" />
+    <PackageReference Include="OfficeIMO.Word" Version="3.4.4" />
+    <PackageReference Include="OpenMcdf" Version="3.3.0" />
     <PackageReference Include="PdfPig" Version="0.1.13" />
     <PackageReference Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
   </ItemGroup>

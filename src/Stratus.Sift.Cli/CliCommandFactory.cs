@@ -290,15 +290,32 @@ internal static class CliCommandFactory
         };
         deviceOption.Aliases.Add("-d");
 
+        var targetsFileOption = new Option<NetworkTargetFile?>("--targets-file")
+        {
+            Description = "File with one IP address, hostname, or CIDR per line. Blank lines and #, ;, or // comments are allowed.",
+            HelpName = "file",
+            Arity = ArgumentArity.ExactlyOne,
+            CustomParser = result =>
+            {
+                if (result.Tokens.Count != 1) { result.AddError("--targets-file requires a file path."); return null; }
+                try { return NetworkTargetFile.Load(result.Tokens[0].Value); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                { result.AddError($"--targets-file: {ex.Message}"); return null; }
+            }
+        };
+        targetsFileOption.Aliases.Add("--target-file");
+        targetsFileOption.Aliases.Add("-t");
+
         var commonOptions = CreateCommonScanOptions();
         var performanceOptions = CreateFilesystemPerformanceOptions();
         var credentialOptions = CreateWindowsCredentialOptions("-a");
         var kerberosOption = CreateKerberosOption();
         var dnsServerOption = CreateDnsServerOption();
-        var command = new Command("network", "Crawl SMB targets on a subnet or a single device. Kerberos is preferred, with per-host NTLM fallback unless --kerberos is specified")
+        var command = new Command("network", "Crawl SMB targets on a subnet, a single device, or from a target file. Kerberos is preferred, with per-host NTLM fallback unless --kerberos is specified")
         {
             subnetOption,
             deviceOption,
+            targetsFileOption,
             commonOptions.Binary,
             commonOptions.EnumOnly,
             commonOptions.LlmValidate,
@@ -332,9 +349,10 @@ internal static class CliCommandFactory
         {
             var hasSubnet = !string.IsNullOrWhiteSpace(result.GetValue(subnetOption));
             var hasDevice = !string.IsNullOrWhiteSpace(result.GetValue(deviceOption));
-            if (hasSubnet == hasDevice)
+            var hasTargetsFile = result.GetResult(targetsFileOption) is { Implicit: false };
+            if ((hasSubnet ? 1 : 0) + (hasDevice ? 1 : 0) + (hasTargetsFile ? 1 : 0) != 1)
             {
-                result.AddError("Specify exactly one of --subnet or --device.");
+                result.AddError("Specify exactly one of --subnet, --device, or --targets-file.");
             }
         });
 
@@ -361,7 +379,7 @@ internal static class CliCommandFactory
                 result.GetValue(credentialOptions.Local),
                 preferDomainAccount: !result.GetValue(credentialOptions.Local),
                 ntHash: ResolveNtHash(result, credentialOptions));
-            var target = FileSystemScanTarget.Parse(null, domain: false, subnet, device);
+            var target = FileSystemScanTarget.Parse(null, domain: false, subnet, device, result.GetValue(targetsFileOption));
             return await ExecuteAsync(() => CliScanRunner.RunScanAsync(
                 target,
                 binary,
@@ -384,7 +402,7 @@ internal static class CliCommandFactory
     private static Command CreateMicrosoft365Command()
     {
         var options = CreateMicrosoft365Options();
-        var command = new Command("m365", "Scan Microsoft 365 content, including SharePoint, OneDrive, and Teams channel files")
+        var command = new Command("m365", "Scan Microsoft 365 storage and all supported service workloads using available access")
         {
             options.Config,
             options.TenantId,
@@ -392,6 +410,7 @@ internal static class CliCommandFactory
             options.ClientSecret,
             options.Interactive,
             options.DeviceCode,
+            options.RequestAdditionalPermissions,
             options.SiteUrls,
             options.SharePointUrl,
             options.DriveIds,
@@ -424,6 +443,8 @@ internal static class CliCommandFactory
                 result.GetValue(options.SiteUrls),
                 result.GetValue(options.SharePointUrl),
                 result.GetValue(options.DriveIds));
+            if (result.GetValue(options.RequestAdditionalPermissions))
+                connectorConfig["RequestAdditionalPermissions"] = "true";
 
             return await ExecuteAsync(() => CliScanRunner.RunConnectorScanAsync(
                 CommonConstants.ConnectorProviders.Microsoft365,
@@ -1126,8 +1147,9 @@ internal static class CliCommandFactory
 
         var configOption = new Option<string[]>("--config")
         {
-            Description = "Configuration key-value pairs. Repeat SiteUrl=..., SeedUrl=..., or DriveId=... to target specific locations. Tenant-wide scans discover SharePoint, OneDrive, followed locations, and Teams channel drives by default; use DiscoverFollowedLocations=false or DiscoverTeamsChannels=false to opt out.",
-            Arity = ArgumentArity.ZeroOrMore
+            Description = "Configuration key-value pairs. Storage and all supported workloads use existing access by default. Use ExcludeWorkloads=... to exclude services, Workloads=... to restrict them, SharedMailbox=... for shared mail, or ScanStorage=false for workload-only scans.",
+            Arity = ArgumentArity.ZeroOrMore,
+            AllowMultipleArgumentsPerToken = true
         };
         configOption.Aliases.Add("-g");
 
@@ -1159,6 +1181,10 @@ internal static class CliCommandFactory
         {
             Description = "Use device code authentication."
         };
+        var requestPermissionsOption = new Option<bool>("--request-additional-permissions")
+        {
+            Description = "Allow requesting additional read permissions through consent. Without this option, workloads use existing grants and skip sources that require new consent."
+        };
 
         var siteUrlOption = new Option<string[]>("--site-url")
         {
@@ -1188,7 +1214,7 @@ internal static class CliCommandFactory
 
         var enumOnlyOption = new Option<bool>("--enum-only")
         {
-            Description = "Enumerate discovered SharePoint, OneDrive, and Teams drives and exit without scanning file content."
+            Description = "List discovered storage and selected workload sources, then exit without reading their content."
         };
         enumOnlyOption.Aliases.Add("-e");
 
@@ -1265,6 +1291,7 @@ internal static class CliCommandFactory
             clientSecretOption,
             interactiveOption,
             deviceCodeOption,
+            requestPermissionsOption,
             siteUrlOption,
             sharePointUrlOption,
             driveIdOption,
@@ -1376,6 +1403,7 @@ internal static class CliCommandFactory
         Option<string> ClientSecret,
         Option<bool> Interactive,
         Option<bool> DeviceCode,
+        Option<bool> RequestAdditionalPermissions,
         Option<string[]> SiteUrls,
         Option<string> SharePointUrl,
         Option<string[]> DriveIds,

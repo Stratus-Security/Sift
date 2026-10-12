@@ -10,6 +10,7 @@
       "Patterns": [
         "(?<![A-Z0-9])[A-Z]{2}[0-9]{2}(?:[ ]?[A-Z0-9]){11,30}(?![A-Z0-9])"
       ],
+      "ExtensionProfile": "Documents",
       "IncludedExtensions": [
         ".txt",
         ".log",

@@ -303,7 +303,7 @@ public class SharePointRestDelegatedTests
         var handler = new SequenceHttpMessageHandler(
             SequenceRoute.Create(
                 "files",
-                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFolderByServerRelativeUrl(", StringComparison.OrdinalIgnoreCase) == true
+                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFolderByServerRelativePath(", StringComparison.OrdinalIgnoreCase) == true
                                   && request.RequestUri.AbsoluteUri.Contains("/Files?", StringComparison.OrdinalIgnoreCase),
                 JsonResponse(
                     HttpStatusCode.OK,
@@ -321,7 +321,7 @@ public class SharePointRestDelegatedTests
                     """)),
             SequenceRoute.Create(
                 "folders",
-                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFolderByServerRelativeUrl(", StringComparison.OrdinalIgnoreCase) == true
+                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFolderByServerRelativePath(", StringComparison.OrdinalIgnoreCase) == true
                                   && request.RequestUri.AbsoluteUri.Contains("/Folders?", StringComparison.OrdinalIgnoreCase),
                 JsonResponse(
                     HttpStatusCode.OK,
@@ -332,7 +332,7 @@ public class SharePointRestDelegatedTests
                     """)),
             SequenceRoute.Create(
                 "content",
-                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFileByServerRelativeUrl(", StringComparison.OrdinalIgnoreCase) == true,
+                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFileByServerRelativePath(", StringComparison.OrdinalIgnoreCase) == true,
                 StreamResponse(HttpStatusCode.OK, "tenant-secret")));
 
         var restClient = CreateRestClient(handler);
@@ -374,7 +374,7 @@ public class SharePointRestDelegatedTests
         var handler = new SequenceHttpMessageHandler(
             SequenceRoute.Create(
                 "blocked-content",
-                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFileByServerRelativeUrl(", StringComparison.OrdinalIgnoreCase) == true,
+                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFileByServerRelativePath(", StringComparison.OrdinalIgnoreCase) == true,
                 XmlResponse(
                     HttpStatusCode.InternalServerError,
                     """
@@ -400,7 +400,7 @@ public class SharePointRestDelegatedTests
         var handler = new SequenceHttpMessageHandler(
             SequenceRoute.Create(
                 "server-error",
-                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFileByServerRelativeUrl(", StringComparison.OrdinalIgnoreCase) == true,
+                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFileByServerRelativePath(", StringComparison.OrdinalIgnoreCase) == true,
                 XmlResponse(HttpStatusCode.InternalServerError, "<error>Temporary backend failure</error>")));
         var file = CreateRestFile(handler);
 
@@ -417,7 +417,7 @@ public class SharePointRestDelegatedTests
         var handler = new SequenceHttpMessageHandler(
             SequenceRoute.Create(
                 "files",
-                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFolderByServerRelativeUrl(", StringComparison.OrdinalIgnoreCase) == true
+                static request => request.RequestUri?.AbsoluteUri.Contains("/GetFolderByServerRelativePath(", StringComparison.OrdinalIgnoreCase) == true
                                   && request.RequestUri.AbsoluteUri.Contains("/Files?", StringComparison.OrdinalIgnoreCase),
                 request => new HttpResponseMessage(HttpStatusCode.NotFound)
                 {

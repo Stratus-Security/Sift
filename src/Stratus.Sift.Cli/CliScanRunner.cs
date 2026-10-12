@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using Stratus.Sift.Connectors.Interfaces;
 using Stratus.Sift.Connectors.Services;
 using Stratus.Sift.FileSystem;
@@ -59,7 +61,7 @@ internal static class CliScanRunner
 
         try
         {
-            await connector.InitializeAsync(config).WaitAsync(cancellationToken);
+            await connector.InitializeAsync(config, cancellationToken).WaitAsync(cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -74,7 +76,7 @@ internal static class CliScanRunner
         List<IRemoteDrive> drives;
         try
         {
-            drives = (await connector.GetDrivesAsync().WaitAsync(cancellationToken)).ToList();
+            drives = (await connector.GetDrivesAsync(cancellationToken).WaitAsync(cancellationToken)).ToList();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -92,6 +94,10 @@ internal static class CliScanRunner
         if (connector is IConnectorDiscoveryReportProvider reportProvider)
         {
             var report = reportProvider.DiscoveryReport;
+            if (!report.IsComplete)
+            {
+                display.IncrementErrors();
+            }
             var counts = string.Join(
                 ", ",
                 report.SourceCounts
@@ -104,34 +110,40 @@ internal static class CliScanRunner
                     : $"Discovery coverage: {report.Coverage} | {counts}.",
                 ConsoleColor.Cyan);
 
-            foreach (var warning in report.Warnings)
+            if (report.CoverageNotes.Count > 0)
+                display.WriteEvent("Coverage unavailable: " + string.Join("; ", report.CoverageNotes) + ".", ConsoleColor.Cyan);
+            foreach (var warning in report.Warnings.Take(8))
             {
                 display.WriteEvent($"Discovery warning: {warning}", ConsoleColor.Yellow);
             }
+            if (report.Warnings.Count > 8)
+                display.WriteEvent($"{report.Warnings.Count - 8:N0} additional discovery warnings were grouped.", ConsoleColor.Yellow);
         }
 
         if (enumerateOnly)
         {
-            display.Complete("Remote enumeration complete");
-            return CliExitCodes.Success;
+            display.Complete(display.ErrorCount > 0 ? "Remote enumeration incomplete" : "Remote enumeration complete");
+            return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
 
         // Discovery normally performs the first authenticated request. Resolve the
         // account-bound checkpoint scope afterwards so interactive connectors can
         // identify the principal without starting authentication during setup.
+        var scanOptions = CreateScanOptions(includeBinary, llmOptions);
+        CliContentOptions.Apply(scanOptions, session.Host.Services.GetRequiredService<IConfiguration>(), config);
         var connectorScope = CliResumeIdentity.CreateConnectorScope(
             providerName,
             config,
             connector is IConnectorCheckpointScopeProvider scopeProvider ? scopeProvider.CheckpointScope : string.Empty,
             session.RuleFingerprint,
             includeBinary,
-            llmOptions);
+            llmOptions,
+            scanOptions);
 
         var llmValidator = await CliLlmValidationSupport.CreateValidatorAsync(session.Host.Services, llmOptions, display, cancellationToken);
         var remoteDriveScanner = session.Host.Services.GetRequiredService<RemoteDriveScanner>();
         display.SetTotalDrives(drives.Count);
         display.SetPhase($"Scanning {connector.ProviderName}");
-        var scanOptions = CreateScanOptions(includeBinary, llmOptions);
 
         if (fullScan)
         {
@@ -187,16 +199,20 @@ internal static class CliScanRunner
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 display.IncrementErrors();
-                display.WriteEvent($"Warning: failed to enumerate drive {drive.Name}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                if (!RemoteScanExceptionClassifier.IsExpectedForEnumeration(ex))
+                    display.WriteEvent($"Warning: failed to enumerate drive {drive.Name}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                session.Host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("RemoteEnumeration")
+                    .LogDebug(ex, "Drive enumeration failed for {DriveName}.", drive.Name);
             }
             finally
             {
+                if (drive is IDisposable disposableDrive) disposableDrive.Dispose();
                 display.ClearCurrentPath();
                 display.MarkDriveCompleted();
             }
         }
 
-        display.Complete("Remote scan complete");
+        display.Complete(display.ErrorCount > 0 ? "Remote scan incomplete" : "Remote scan complete");
         return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
     }
 
@@ -240,6 +256,7 @@ internal static class CliScanRunner
         var standardEnumerator = session.Host.Services.GetRequiredService<StandardFileSystemEnumerator>();
         var resumeStore = session.Host.Services.GetRequiredService<CliResumeStore>();
         var scanOptions = CreateScanOptions(includeBinary, llmOptions, performanceOptions.MaxReadBytesPerSecond, diagnostics.Scanner);
+        CliContentOptions.Apply(scanOptions, session.Host.Services.GetRequiredService<IConfiguration>());
         Stratus.Sift.Core.Validation.ILlmClassifierValidator? llmValidator = null;
 
         if (target.Mode == FileSystemScanMode.Folder)
@@ -415,7 +432,7 @@ internal static class CliScanRunner
 
             display.WriteEvent(
                 usesNtHash
-                    ? "Warning: no readable SMB shares were discovered with the supplied NT hash across the requested subnet."
+                    ? "Warning: no readable SMB shares were discovered with the supplied NT hash across the requested network targets."
                     : allowNtlmFallback
                     ? "Warning: no readable SMB shares were discovered through Kerberos or NTLM fallback."
                     : "Warning: no readable SMB shares were discovered through strict Kerberos authentication.",
@@ -466,7 +483,8 @@ internal static class CliScanRunner
                     llmOptions,
                     credential,
                     strictKerberos: !allowNtlmFallback,
-                    dnsServer);
+                    dnsServer,
+                    scanOptions);
                 var checkpointKey = $"filesystem-smb:{filesystemScope}:{drive.ConnectionId}";
                 if (fullScan)
                 {
@@ -492,7 +510,10 @@ internal static class CliScanRunner
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 display.IncrementErrors();
-                display.WriteEvent($"Warning: failed to scan {drive.Name}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                if (!RemoteScanExceptionClassifier.IsExpectedForEnumeration(ex))
+                    display.WriteEvent($"Warning: failed to scan {drive.Name}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                session.Host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("RemoteEnumeration")
+                    .LogDebug(ex, "Share scan failed for {DriveName}.", drive.Name);
             }
             finally
             {
@@ -502,7 +523,7 @@ internal static class CliScanRunner
             }
         }
 
-        display.Complete("Network crawl complete");
+        display.Complete(display.ErrorCount > 0 ? "Network crawl incomplete" : "Network crawl complete");
         return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
     }
 
@@ -646,7 +667,10 @@ internal static class CliScanRunner
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     display.IncrementErrors();
-                    display.WriteEvent($"Warning: failed to scan {root}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                    if (!RemoteScanExceptionClassifier.IsExpectedForEnumeration(ex))
+                        display.WriteEvent($"Warning: failed to scan {root}: {GetErrorMessage(ex)}", ConsoleColor.Yellow);
+                    session.Host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("RemoteEnumeration")
+                        .LogDebug(ex, "Share scan failed for {SharePath}.", root);
                 }
                 finally
                 {
@@ -654,7 +678,7 @@ internal static class CliScanRunner
                 }
             }
 
-            display.Complete("Network crawl complete");
+            display.Complete(display.ErrorCount > 0 ? "Network crawl incomplete" : "Network crawl complete");
             return display.ErrorCount > 0 ? CliExitCodes.Partial : CliExitCodes.Success;
         }
     }
@@ -715,6 +739,14 @@ internal static class CliScanRunner
             },
             onCheckpointToken: async token =>
             {
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    await display.FlushOutputCheckpointAsync(cancellationToken);
+                    checkpointStore.ClearRemoteDriveToken(checkpointKey);
+                    await resumeSession.ClearAsync(cancellationToken);
+                    sourceCheckpointAge.Restart();
+                    return;
+                }
                 if (sourceCheckpointAge.Elapsed < TimeSpan.FromSeconds(30)) return;
                 await display.FlushOutputCheckpointAsync(cancellationToken);
                 SetDeltaToken(checkpointStore, checkpointKey, token);
@@ -724,6 +756,11 @@ internal static class CliScanRunner
             onNewDeltaToken: async token =>
             {
                 await display.FlushOutputCheckpointAsync(cancellationToken);
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    checkpointStore.ClearRemoteDriveToken(checkpointKey);
+                    return; // Keep target-version records for drives that follow shortcuts.
+                }
                 SetDeltaToken(checkpointStore, checkpointKey, token);
                 finalTokenWritten = !string.IsNullOrWhiteSpace(token);
                 await resumeSession.ClearAsync(cancellationToken);
@@ -748,14 +785,15 @@ internal static class CliScanRunner
                     diagnostics.Workers,
                     diagnostics.QueueCapacity,
                     false),
-            shouldSkipItem: item => resumeSession.ContainsRemote(drive.ConnectionId, item.Id, item.Path, item.Size),
+            shouldSkipItem: item => IsRemoteItemCompleted(resumeSession, drive, item),
             onItemProcessed: (item, token) => resumeSession.MarkRemoteCompletedAsync(
                 drive.ConnectionId,
-                item.Id,
+                item.ResumeIdentity,
                 item.Path,
                 item.Size,
                 display.FlushOutputCheckpointAsync,
-                token),
+                token,
+                item.Version),
             onScanIncomplete: () =>
             {
                 if (scanCompleted) display.IncrementErrors();
@@ -781,6 +819,21 @@ internal static class CliScanRunner
     private static string? GetDeltaToken(CliCheckpointStore checkpointStore, string connectorScope, IRemoteDrive drive)
     {
         return checkpointStore.GetRemoteDriveToken(GetRemoteCheckpointKey(connectorScope, drive));
+    }
+
+    internal static bool IsRemoteItemCompleted(CliResumeSession resumeSession, IRemoteDrive drive, IRemoteFile item)
+    {
+        // Without a server version or file timestamps, these items cannot be proven unchanged.
+        if (drive.DriveType is Stratus.Sift.Core.Enums.DatastoreType.SharePoint
+            or Stratus.Sift.Core.Enums.DatastoreType.OneDrive
+            or Stratus.Sift.Core.Enums.DatastoreType.Teams
+            or Stratus.Sift.Core.Enums.DatastoreType.FileSystem
+            && string.IsNullOrWhiteSpace(item.Version))
+        {
+            return false;
+        }
+
+        return resumeSession.ContainsRemote(drive.ConnectionId, item.ResumeIdentity, item.Path, item.Size, item.Version);
     }
 
     private static string GetRemoteCheckpointKey(string connectorScope, IRemoteDrive drive)
@@ -815,7 +868,8 @@ internal static class CliScanRunner
             llmOptions,
             credential,
             strictKerberos,
-            dnsServer);
+            dnsServer,
+            ContentOptionsForScope(session, includeBinary));
         var resumeSession = resumeStore.OpenSession(scope, resume: !fullScan);
         if (!fullScan && resumeSession.CompletedCount > 0)
         {
@@ -962,7 +1016,13 @@ internal static class CliScanRunner
                         var findings = result.Issues as List<ScanFinding> ?? result.Issues.ToList();
                         var validatedFindings = await ValidateFindingsAsync(findings, llmValidator, llmOptions, cancellationToken);
                         ReportFindings(display, validatedFindings, entry);
-                        completed = true;
+                        completed = result.IsComplete;
+                        if (!completed)
+                        {
+                            display.IncrementErrors();
+                            display.WriteEvent($"Warning: content extraction or archive inspection was incomplete for {entry.Path}; the item remains pending. {result.IncompleteReason}", ConsoleColor.Yellow);
+                        }
+                        else if (!entry.IsDirectory) pendingScanned++;
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -974,11 +1034,6 @@ internal static class CliScanRunner
                     {
                         await resumeSession.MarkCompletedAsync(entry, beforeCheckpoint, cancellationToken);
                     }
-                }
-
-                if (!entry.IsDirectory && !enumerateOnly)
-                {
-                    pendingScanned++;
                 }
 
                 var now = Environment.TickCount64;
@@ -1051,6 +1106,13 @@ internal static class CliScanRunner
             MaxDiskReadBytesPerSecond = maxReadBytesPerSecond,
             Diagnostics = diagnostics
         };
+    }
+
+    private static ScanOptions ContentOptionsForScope(CliScannerSession session, bool includeBinary)
+    {
+        var options = new ScanOptions { EnableBinaryDocuments = includeBinary };
+        CliContentOptions.Apply(options, session.Host.Services.GetRequiredService<IConfiguration>());
+        return options;
     }
 
     private static async Task<List<ScanFinding>> ValidateFindingsAsync(

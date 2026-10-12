@@ -11,10 +11,19 @@ public class ScanOptions
     public List<string> IncludedExtensions { get; set; } = new();
 
     /// <summary>
-    /// Enable scanning of binary documents (PDF, DOCX, XLSX, etc.) via content extraction.
+    /// Enable text extraction from PDF, modern and legacy Office documents, and OneNote files.
     /// Defaults to false.
     /// </summary>
     public bool EnableBinaryDocuments { get; set; } = false;
+    public long MaxBinaryDocumentBytes { get; set; } = 10 * MiB;
+    public int MaxExtractedCharacters { get; set; } = 10 * 1024 * 1024;
+    public bool EnableOcr { get; set; }
+    public string TesseractPath { get; set; } = "tesseract";
+    public string OcrLanguage { get; set; } = "eng";
+    public int OcrTimeoutSeconds { get; set; } = 30;
+    public int MaxOcrPages { get; set; } = 200;
+    public int MaxEmbeddedDocumentDepth { get; set; } = 3;
+    public bool IncludeDocumentHistory { get; set; }
 
     /// <summary>
     /// Skip files that are stored in the cloud (OneDrive, Dropbox, etc.) to prevent hydration.
@@ -41,7 +50,7 @@ public class ScanOptions
     public long MaxDiskReadBytesPerSecond { get; set; }
 
     /// <summary>
-    /// Scan files stored inside ZIP archives. Entries are streamed and are never extracted to disk.
+    /// Scan supported ZIP, RAR, 7z, TAR and compressed-stream archives. Archive-provided paths are never written to disk.
     /// </summary>
     public bool EnableZipArchives { get; set; }
 

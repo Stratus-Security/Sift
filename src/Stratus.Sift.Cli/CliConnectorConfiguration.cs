@@ -63,11 +63,13 @@ internal static class CliConnectorConfiguration
         {
             config["AuthMode"] = "DeviceCode";
         }
-        else if (interactive || (!config.ContainsKey("AuthMode") && string.IsNullOrWhiteSpace(config.GetValueOrDefault("ClientSecret"))))
+        else if (interactive || (!config.ContainsKey("AuthMode") && string.IsNullOrWhiteSpace(config.GetValueOrDefault("ClientSecret"))
+            && string.IsNullOrWhiteSpace(config.GetValueOrDefault("CertificatePath"))))
         {
             config["AuthMode"] = "Interactive";
         }
-        else if (!config.ContainsKey("AuthMode") && !string.IsNullOrWhiteSpace(config.GetValueOrDefault("ClientSecret")))
+        else if (!config.ContainsKey("AuthMode") && (!string.IsNullOrWhiteSpace(config.GetValueOrDefault("ClientSecret"))
+            || !string.IsNullOrWhiteSpace(config.GetValueOrDefault("CertificatePath"))))
         {
             config["AuthMode"] = "AppOnly";
         }

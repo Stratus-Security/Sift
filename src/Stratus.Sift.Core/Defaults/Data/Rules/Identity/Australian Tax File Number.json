@@ -13,6 +13,7 @@
       "Patterns": [
         "(?<![0-9])[0-9]{3}[ -]?[0-9]{3}[ -]?[0-9]{3}(?![0-9])"
       ],
+      "ExtensionProfile": "Documents",
       "IncludedExtensions": [
         ".txt",
         ".log",

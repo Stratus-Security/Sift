@@ -174,8 +174,8 @@ public class CliNetworkScanTests
         var noneSpecified = rootCommand.Parse(["network"]);
         var bothSpecified = rootCommand.Parse(["network", "--subnet", "10.0.0.10", "--device", "10.0.0.10"]);
 
-        Assert.Contains(noneSpecified.Errors, error => error.Message.Contains("Specify exactly one of --subnet or --device.", StringComparison.Ordinal));
-        Assert.Contains(bothSpecified.Errors, error => error.Message.Contains("Specify exactly one of --subnet or --device.", StringComparison.Ordinal));
+        Assert.Contains(noneSpecified.Errors, error => error.Message.Contains("Specify exactly one of --subnet, --device, or --targets-file.", StringComparison.Ordinal));
+        Assert.Contains(bothSpecified.Errors, error => error.Message.Contains("Specify exactly one of --subnet, --device, or --targets-file.", StringComparison.Ordinal));
     }
 
     [Fact]

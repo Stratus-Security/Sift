@@ -4,31 +4,26 @@ namespace Stratus.Sift.Connectors.Services;
 
 internal sealed class RequestThrottleGate
 {
-    private static readonly TimeSpan DefaultMaximumGateDelay = TimeSpan.FromSeconds(15);
-    private readonly TimeSpan _maximumGateDelay;
+    private readonly TimeProvider _timeProvider;
     private long _blockedUntilUtcTicks;
 
-    public RequestThrottleGate()
-        : this(DefaultMaximumGateDelay)
+    public RequestThrottleGate(TimeProvider? timeProvider = null)
     {
-    }
-
-    internal RequestThrottleGate(TimeSpan maximumGateDelay)
-    {
-        _maximumGateDelay = maximumGateDelay <= TimeSpan.Zero ? TimeSpan.FromSeconds(1) : maximumGateDelay;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async ValueTask WaitAsync(CancellationToken cancellationToken)
     {
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var blockedUntilTicks = Interlocked.Read(ref _blockedUntilUtcTicks);
             if (blockedUntilTicks <= 0)
             {
                 return;
             }
 
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
             var blockedUntil = new DateTimeOffset(blockedUntilTicks, TimeSpan.Zero);
             var delay = blockedUntil - now;
             if (delay <= TimeSpan.Zero)
@@ -36,7 +31,8 @@ internal sealed class RequestThrottleGate
                 return;
             }
 
-            await Task.Delay(delay, cancellationToken);
+            // Split very long waits to stay within Task.Delay's supported timer range.
+            await Task.Delay(delay > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : delay, _timeProvider, cancellationToken);
         }
     }
 
@@ -47,13 +43,14 @@ internal sealed class RequestThrottleGate
             return TimeSpan.Zero;
         }
 
-        var delay = response.Headers.RetryAfter?.Delta;
-        if ((!delay.HasValue || delay.Value <= TimeSpan.Zero) && response.Headers.RetryAfter?.Date is DateTimeOffset retryAfterDate)
-        {
-            delay = retryAfterDate - DateTimeOffset.UtcNow;
-        }
-
+        var delay = GetRetryAfterDelay(response, _timeProvider.GetUtcNow());
         return RegisterDelay(delay ?? fallbackDelay ?? TimeSpan.FromSeconds(2));
+    }
+
+    internal static TimeSpan? GetRetryAfterDelay(HttpResponseMessage response, DateTimeOffset now)
+    {
+        if (response.Headers.RetryAfter?.Delta is { } delta) return delta;
+        return response.Headers.RetryAfter?.Date is { } date ? date - now : null;
     }
 
     public TimeSpan RegisterDelay(TimeSpan delay)
@@ -63,12 +60,8 @@ internal sealed class RequestThrottleGate
             delay = TimeSpan.FromSeconds(1);
         }
 
-        if (delay > _maximumGateDelay)
-        {
-            delay = _maximumGateDelay;
-        }
-
-        var blockedUntilTicks = DateTimeOffset.UtcNow.Add(delay).UtcTicks;
+        var nowTicks = _timeProvider.GetUtcNow().UtcTicks;
+        var blockedUntilTicks = nowTicks + Math.Min(delay.Ticks, DateTimeOffset.MaxValue.UtcTicks - nowTicks);
         while (true)
         {
             var currentTicks = Interlocked.Read(ref _blockedUntilUtcTicks);

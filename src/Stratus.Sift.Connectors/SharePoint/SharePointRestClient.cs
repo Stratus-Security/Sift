@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text;
 using System.Text.Json;
@@ -13,7 +14,7 @@ using Stratus.Sift.Core.Enums;
 
 namespace Stratus.Sift.Connectors.SharePoint;
 
-internal sealed class SharePointRestClient
+internal sealed partial class SharePointRestClient
 {
     internal const string SharePointOnlineManagementShellClientId = "9bc3ab49-b65d-410a-85ad-de819febfddc";
 
@@ -65,17 +66,18 @@ internal sealed class SharePointRestClient
         return new Uri(uri.GetLeftPart(UriPartial.Authority).TrimEnd('/') + "/");
     }
 
-    internal async Task<IReadOnlyList<RestSite>> SearchAccessibleSitesAsync(Uri sharePointRootUrl, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyList<RestSite>> SearchAccessibleSitesAsync(Uri sharePointRootUrl, CancellationToken cancellationToken,
+        Action<RestSite>? onSiteDiscovered = null)
     {
         var rootUrl = NormalizeRootUrl(sharePointRootUrl);
         const int rowLimit = 500;
-        var startRow = 0;
+        long? lastDocId = null;
         var sites = new List<RestSite>();
         var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         while (true)
         {
-            var uri = BuildSearchQueryUri(rootUrl, startRow, rowLimit);
+            var uri = BuildSearchQueryUri(rootUrl, lastDocId, rowLimit);
             using var document = await GetJsonDocumentAsync(uri, cancellationToken);
             var rows = ExtractSearchRows(document.RootElement).ToList();
             if (rows.Count == 0)
@@ -108,7 +110,9 @@ internal sealed class SharePointRestClient
                     ? titleValue
                     : siteUri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? siteUri.Host;
 
-                sites.Add(new RestSite(title, new Uri(normalizedUrl)));
+                var site = new RestSite(title, new Uri(normalizedUrl));
+                sites.Add(site);
+                onSiteDiscovered?.Invoke(site);
             }
 
             if (rows.Count < rowLimit)
@@ -116,7 +120,16 @@ internal sealed class SharePointRestClient
                 break;
             }
 
-            startRow += rowLimit;
+            // Seek by the search index identity instead of StartRow, which is capped at 50,000.
+            foreach (var row in rows)
+            {
+                if (!row.TryGetValue("DocId", out var value)
+                    || !long.TryParse(value, System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out var docId)
+                    || (lastDocId.HasValue && docId <= lastDocId.Value))
+                    throw new InvalidDataException("SharePoint search did not return increasing DocId values for continuation.");
+                lastDocId = docId;
+            }
         }
 
         return sites;
@@ -199,13 +212,14 @@ internal sealed class SharePointRestClient
     {
         var requestUri = new Uri(
             site.Url.AbsoluteUri.TrimEnd('/') +
-            "/_api/web/lists?$select=Id,Title,Hidden,BaseTemplate,ItemCount,RootFolder/ServerRelativeUrl,RootFolder/Name&$expand=RootFolder&$filter=BaseTemplate eq 101 and Hidden eq false");
+            "/_api/web/lists?$select=Id,Title,Hidden,BaseType,BaseTemplate,ItemCount,RootFolder/ServerRelativeUrl,RootFolder/Name&$expand=RootFolder&$filter=BaseType eq 1");
 
-        using var document = await GetJsonDocumentAsync(requestUri, cancellationToken);
         var libraries = new List<RestLibrary>();
-        foreach (var element in EnumerateCollection(document.RootElement, "value")
-                     .Concat(EnumerateCollection(document.RootElement, "d", "results")))
+        await foreach (var element in EnumeratePagedCollectionAsync(requestUri, false, cancellationToken))
         {
+            // BaseType identifies every file-backed library, including pictures, forms,
+            // pages, catalogs and custom templates. Generic lists remain a separate workload.
+            if (TryGetInt32Property(element, "BaseType") is int baseType && baseType != 1) continue;
             var listId = TryGetStringProperty(element, "Id");
             var title = TryGetStringProperty(element, "Title");
             var rootFolder = TryGetNestedStringProperty(element, "RootFolder", "ServerRelativeUrl");
@@ -214,7 +228,7 @@ internal sealed class SharePointRestClient
                 continue;
             }
 
-            var webUrl = new Uri(NormalizeRootUrl(site.Url), rootFolder);
+            var webUrl = BuildWebUrl(site.Url, rootFolder);
             libraries.Add(new RestLibrary(
                 NormalizeGuid(listId),
                     title,
@@ -343,6 +357,65 @@ internal sealed class SharePointRestClient
         return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
     }
 
+    private async IAsyncEnumerable<JsonElement> EnumeratePagedCollectionAsync(
+        Uri initialUri,
+        bool allowMissing,
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        Action? onMissing = null)
+    {
+        Uri? requestUri = initialUri;
+        var visitedPages = new HashSet<string>(StringComparer.Ordinal);
+        while (requestUri != null)
+        {
+            if (visitedPages.Count >= Microsoft365CoverageOptions.MaxPages || !visitedPages.Add(requestUri.AbsoluteUri))
+            {
+                throw new InvalidDataException("SharePoint returned a repeated collection continuation link.");
+            }
+
+            using var document = allowMissing
+                ? await TryGetJsonDocumentAsync(requestUri, cancellationToken)
+                : await GetJsonDocumentAsync(requestUri, cancellationToken);
+            if (document == null)
+            {
+                if (visitedPages.Count > 1)
+                {
+                    throw new InvalidDataException("A SharePoint collection continuation page was unavailable.");
+                }
+                onMissing?.Invoke();
+                yield break;
+            }
+
+            var root = document.RootElement;
+            if (!(TryGetNestedProperty(root, out var collection, "value")
+                  || TryGetNestedProperty(root, out collection, "d", "results"))
+                || collection.ValueKind != JsonValueKind.Array)
+            {
+                throw new InvalidDataException("SharePoint collection response did not contain an array.");
+            }
+
+            foreach (var element in collection.EnumerateArray())
+            {
+                yield return element;
+            }
+
+            var nextLink = TryGetStringProperty(root, "@odata.nextLink")
+                ?? TryGetStringProperty(root, "odata.nextLink")
+                ?? TryGetNestedStringProperty(root, "d", "__next");
+            if (string.IsNullOrWhiteSpace(nextLink))
+            {
+                yield break;
+            }
+
+            var nextUri = new Uri(requestUri, nextLink);
+            if (nextUri.Scheme != initialUri.Scheme
+                || !nextUri.Authority.Equals(initialUri.Authority, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("SharePoint returned a collection continuation link outside the requested host.");
+            }
+            requestUri = nextUri;
+        }
+    }
+
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
         Uri requestUri,
@@ -390,16 +463,21 @@ internal sealed class SharePointRestClient
                 continue;
             }
 
-            if (!ShouldRetry(response.StatusCode)
-                || attempt >= DefaultMaxRetryCount
-                || DateTimeOffset.UtcNow - startTime >= DefaultRetriesTimeLimit)
+            if (!ShouldRetry(response.StatusCode))
             {
                 return response;
             }
 
-            var retryDelay = GetRetryDelay(attempt, response.Headers.RetryAfter?.Delta);
+            // Share the pause even when this request has exhausted its retry budget.
+            var retryDelay = GetRetryDelay(attempt, RequestThrottleGate.GetRetryAfterDelay(response, DateTimeOffset.UtcNow));
             var gateDelay = _throttleGate.Observe(response, retryDelay);
             _throttleNotifications?.Report("SharePoint", response.StatusCode, retryDelay, gateDelay, requestUri.Authority);
+
+            if (attempt >= DefaultMaxRetryCount
+                || DateTimeOffset.UtcNow - startTime >= DefaultRetriesTimeLimit)
+            {
+                return response;
+            }
 
             _logger?.LogDebug(
                 "Retrying SharePoint REST request {Method} {Uri} after HTTP {StatusCode} (attempt {Attempt}).",
@@ -427,13 +505,14 @@ internal sealed class SharePointRestClient
         return accessToken.Token;
     }
 
-    private static Uri BuildSearchQueryUri(Uri rootUrl, int startRow, int rowLimit)
+    private static Uri BuildSearchQueryUri(Uri rootUrl, long? lastDocId, int rowLimit)
     {
-        var queryText = Uri.EscapeDataString("'(contentclass:STS_Site OR contentclass:STS_Web)'");
-        var selectProperties = Uri.EscapeDataString("'Title,Path,SPWebUrl,SPSiteUrl,SiteName'");
+        var restriction = lastDocId.HasValue ? $"IndexDocId>{lastDocId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)} AND " : string.Empty;
+        var queryText = Uri.EscapeDataString($"'{restriction}(contentclass:STS_Site OR contentclass:STS_Web)'");
+        var selectProperties = Uri.EscapeDataString("'Title,Path,SPWebUrl,SPSiteUrl,SiteName,DocId'");
         return new Uri(
             rootUrl.AbsoluteUri.TrimEnd('/') +
-            $"/_api/search/query?querytext={queryText}&trimduplicates=false&rowlimit={rowLimit}&startrow={startRow}&selectproperties={selectProperties}");
+            $"/_api/search/query?querytext={queryText}&trimduplicates=false&rowlimit={rowLimit}&sortlist='docid:ascending'&selectproperties={selectProperties}");
     }
 
     private static Uri BuildSiteMetadataUri(Uri rootUrl, string candidatePath)
@@ -452,7 +531,7 @@ internal sealed class SharePointRestClient
 
         return new Uri(
             siteUrl.AbsoluteUri.TrimEnd('/') +
-            $"/_api/web/GetFileByServerRelativeUrl('{escapedServerRelativeUrl}')/$value");
+            $"/_api/web/GetFileByServerRelativePath(decodedUrl='{escapedServerRelativeUrl}')/$value");
     }
 
     private static Uri BuildFolderFilesUri(Uri siteUrl, string serverRelativeUrl)
@@ -460,7 +539,7 @@ internal sealed class SharePointRestClient
         var escapedServerRelativeUrl = EscapeODataStringLiteral(serverRelativeUrl);
         return new Uri(
             siteUrl.AbsoluteUri.TrimEnd('/') +
-            $"/_api/web/GetFolderByServerRelativeUrl('{escapedServerRelativeUrl}')/Files?$select=Name,ServerRelativeUrl,UniqueId,Length");
+            $"/_api/web/GetFolderByServerRelativePath(decodedUrl='{escapedServerRelativeUrl}')/Files?$select=Name,ServerRelativeUrl,UniqueId,Length,ETag,TimeLastModified");
     }
 
     private static Uri BuildFolderFoldersUri(Uri siteUrl, string serverRelativeUrl)
@@ -468,7 +547,15 @@ internal sealed class SharePointRestClient
         var escapedServerRelativeUrl = EscapeODataStringLiteral(serverRelativeUrl);
         return new Uri(
             siteUrl.AbsoluteUri.TrimEnd('/') +
-            $"/_api/web/GetFolderByServerRelativeUrl('{escapedServerRelativeUrl}')/Folders?$select=Name,ServerRelativeUrl");
+            $"/_api/web/GetFolderByServerRelativePath(decodedUrl='{escapedServerRelativeUrl}')/Folders?$select=Name,ServerRelativeUrl");
+    }
+
+    internal static Uri BuildWebUrl(Uri siteUrl, string decodedServerRelativeUrl)
+    {
+        // ServerRelativeUrl is decoded; Uri otherwise interprets '#' as a fragment
+        // and literal percent escapes as already encoded characters.
+        var encodedPath = string.Join('/', decodedServerRelativeUrl.Split('/').Select(Uri.EscapeDataString));
+        return new Uri(NormalizeRootUrl(siteUrl), encodedPath);
     }
 
     private static string BuildListItemChangesPayload(RestLibrary library, string? changeToken, string? pagingToken)
@@ -494,7 +581,7 @@ internal sealed class SharePointRestClient
             ["QueryOptions"] = queryOptions.ToString(),
             ["RowLimit"] = ListChangeRowLimit.ToString(),
             ["Contains"] = "<Contains />",
-            ["ViewFields"] = "<ViewFields><FieldRef Name=\"UniqueId\" /><FieldRef Name=\"FileRef\" /><FieldRef Name=\"FileLeafRef\" /><FieldRef Name=\"FSObjType\" /><FieldRef Name=\"File_x0020_Size\" /><FieldRef Name=\"HTML_x0020_File_x0020_Type\" /></ViewFields>"
+            ["ViewFields"] = "<ViewFields><FieldRef Name=\"UniqueId\" /><FieldRef Name=\"FileRef\" /><FieldRef Name=\"FileLeafRef\" /><FieldRef Name=\"FSObjType\" /><FieldRef Name=\"File_x0020_Size\" /><FieldRef Name=\"HTML_x0020_File_x0020_Type\" /><FieldRef Name=\"owshiddenversion\" /><FieldRef Name=\"Modified\" /></ViewFields>"
         };
 
         query["ChangeToken"] = string.IsNullOrWhiteSpace(changeToken) ? null : changeToken;
@@ -517,52 +604,43 @@ internal sealed class SharePointRestClient
             return;
         }
 
-        using (var filesDocument = await TryGetJsonDocumentAsync(BuildFolderFilesUri(library.Site.Url, folderServerRelativeUrl), cancellationToken))
+        var missingFolder = false;
+        await foreach (var element in EnumeratePagedCollectionAsync(
+                           BuildFolderFilesUri(library.Site.Url, folderServerRelativeUrl), true, cancellationToken,
+                           () => missingFolder = true))
         {
-            if (filesDocument == null)
+            var serverRelativeUrl = TryGetStringProperty(element, "ServerRelativeUrl");
+            var name = TryGetStringProperty(element, "Name");
+            if (string.IsNullOrWhiteSpace(serverRelativeUrl) || string.IsNullOrWhiteSpace(name))
             {
-                return;
+                continue;
             }
 
-            foreach (var element in EnumerateCollection(filesDocument.RootElement, "value")
-                         .Concat(EnumerateCollection(filesDocument.RootElement, "d", "results")))
-            {
-                var serverRelativeUrl = TryGetStringProperty(element, "ServerRelativeUrl");
-                var name = TryGetStringProperty(element, "Name");
-                if (string.IsNullOrWhiteSpace(serverRelativeUrl) || string.IsNullOrWhiteSpace(name))
-                {
-                    continue;
-                }
+            var id = TryGetStringProperty(element, "UniqueId") ?? name;
+            var lengthValue = TryGetStringProperty(element, "Length");
+            long? size = long.TryParse(lengthValue, out var parsedSize) ? parsedSize : null;
+            var webUrl = BuildWebUrl(library.Site.Url, serverRelativeUrl);
 
-                var id = TryGetStringProperty(element, "UniqueId") ?? name;
-                var lengthValue = TryGetStringProperty(element, "Length");
-                long? size = long.TryParse(lengthValue, out var parsedSize) ? parsedSize : null;
-                var webUrl = new Uri(NormalizeRootUrl(library.Site.Url), serverRelativeUrl);
-
-                await onFile(new RestFileItem(
-                    id,
-                    name,
-                    serverRelativeUrl,
-                    webUrl,
-                    false,
-                    false,
-                    size));
-            }
+            await onFile(new RestFileItem(
+                id,
+                name,
+                serverRelativeUrl,
+                webUrl,
+                false,
+                false,
+                size,
+                TryGetStringProperty(element, "ETag") ?? TryGetStringProperty(element, "TimeLastModified")));
         }
 
-        using var foldersDocument = await TryGetJsonDocumentAsync(BuildFolderFoldersUri(library.Site.Url, folderServerRelativeUrl), cancellationToken);
-        if (foldersDocument == null)
-        {
-            return;
-        }
+        if (missingFolder) return;
 
-        foreach (var element in EnumerateCollection(foldersDocument.RootElement, "value")
-                     .Concat(EnumerateCollection(foldersDocument.RootElement, "d", "results")))
+        await foreach (var element in EnumeratePagedCollectionAsync(
+                           BuildFolderFoldersUri(library.Site.Url, folderServerRelativeUrl), true, cancellationToken))
         {
             var childFolderUrl = TryGetStringProperty(element, "ServerRelativeUrl");
             if (string.IsNullOrWhiteSpace(childFolderUrl)
                 || childFolderUrl.Equals(folderServerRelativeUrl, StringComparison.OrdinalIgnoreCase)
-                || childFolderUrl.Contains("/Forms", StringComparison.OrdinalIgnoreCase))
+                || IsSystemFormsPath(library, childFolderUrl))
             {
                 continue;
             }
@@ -590,7 +668,18 @@ internal sealed class SharePointRestClient
 
         if (!string.IsNullOrWhiteSpace(body))
         {
-            var trimmedBody = body.Length > 512 ? body[..512] + "..." : body;
+            var detail = body;
+            try
+            {
+                using var error = JsonDocument.Parse(body);
+                // Decode the service message, including escaped field names, so
+                // diagnostics and narrowly scoped schema fallbacks see the same text.
+                detail = TryGetNestedStringProperty(error.RootElement, "odata.error", "message", "value")
+                    ?? TryGetNestedStringProperty(error.RootElement, "error", "message", "value")
+                    ?? TryGetNestedStringProperty(error.RootElement, "error", "message") ?? body;
+            }
+            catch (JsonException) { /* Non-JSON errors retain the bounded response body. */ }
+            var trimmedBody = detail.Length > 512 ? detail[..512] + "..." : detail;
             throw new HttpRequestException(
                 $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}). Body: {trimmedBody}",
                 null,
@@ -609,6 +698,13 @@ internal sealed class SharePointRestClient
             .Replace("%2F", "/", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsSystemFormsPath(RestLibrary library, string serverRelativeUrl)
+    {
+        var formsRoot = library.RootFolderServerRelativeUrl.TrimEnd('/') + "/Forms";
+        return serverRelativeUrl.TrimEnd('/').Equals(formsRoot, StringComparison.OrdinalIgnoreCase)
+            || serverRelativeUrl.StartsWith(formsRoot + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static IReadOnlyList<RestFileItem> ParseChangedItems(XDocument document, RestLibrary library)
     {
         var items = new List<RestFileItem>();
@@ -619,7 +715,7 @@ internal sealed class SharePointRestClient
             if (string.IsNullOrWhiteSpace(serverRelativeUrl)
                 || !serverRelativeUrl.StartsWith(library.RootFolderServerRelativeUrl, StringComparison.OrdinalIgnoreCase)
                 || serverRelativeUrl.Equals(library.RootFolderServerRelativeUrl, StringComparison.OrdinalIgnoreCase)
-                || serverRelativeUrl.Contains("/Forms/", StringComparison.OrdinalIgnoreCase))
+                || IsSystemFormsPath(library, serverRelativeUrl))
             {
                 continue;
             }
@@ -637,7 +733,7 @@ internal sealed class SharePointRestClient
             var isDirectory = string.Equals(fsObjType, "1", StringComparison.OrdinalIgnoreCase);
             var sizeValue = ExtractLookupValue(GetAttributeValue(row, "File_x0020_Size"));
             long? size = long.TryParse(sizeValue, out var parsedSize) ? parsedSize : null;
-            var webUrl = new Uri(NormalizeRootUrl(library.Site.Url), serverRelativeUrl);
+            var webUrl = BuildWebUrl(library.Site.Url, serverRelativeUrl);
 
             items.Add(new RestFileItem(
                 id,
@@ -646,7 +742,9 @@ internal sealed class SharePointRestClient
                 webUrl,
                 isDirectory,
                 false,
-                size));
+                size,
+                ExtractLookupValue(GetAttributeValue(row, "owshiddenversion"))
+                    ?? ExtractLookupValue(GetAttributeValue(row, "Modified"))));
         }
 
         return items;
@@ -654,13 +752,20 @@ internal sealed class SharePointRestClient
 
     private static IEnumerable<Dictionary<string, string>> ExtractSearchRows(JsonElement root)
     {
-        var rows = EnumerateCollection(root, "PrimaryQueryResult", "RelevantResults", "Table", "Rows")
-            .Concat(EnumerateCollection(root, "d", "query", "PrimaryQueryResult", "RelevantResults", "Table", "Rows"));
+        if (!(TryGetCollection(root, out var rows, "PrimaryQueryResult", "RelevantResults", "Table", "Rows")
+              || TryGetCollection(root, out rows, "d", "query", "PrimaryQueryResult", "RelevantResults", "Table", "Rows")))
+        {
+            throw new InvalidDataException("SharePoint search response did not contain a result row collection.");
+        }
 
-        foreach (var row in rows)
+        foreach (var row in rows.EnumerateArray())
         {
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var cell in EnumerateCollection(row, "Cells"))
+            if (!TryGetCollection(row, out var cells, "Cells"))
+            {
+                throw new InvalidDataException("SharePoint search result row did not contain a cell collection.");
+            }
+            foreach (var cell in cells.EnumerateArray())
             {
                 var key = TryGetStringProperty(cell, "Key");
                 var value = TryGetStringProperty(cell, "Value");
@@ -681,30 +786,24 @@ internal sealed class SharePointRestClient
 
     private static IEnumerable<JsonElement> EnumerateCollection(JsonElement element, params string[] path)
     {
-        if (!TryGetNestedProperty(element, out var target, path))
+        if (!TryGetCollection(element, out var collection, path))
         {
             yield break;
         }
 
-        if (target.ValueKind == JsonValueKind.Array)
+        foreach (var item in collection.EnumerateArray())
         {
-            foreach (var item in target.EnumerateArray())
-            {
-                yield return item;
-            }
-
-            yield break;
+            yield return item;
         }
+    }
 
-        if (target.ValueKind == JsonValueKind.Object
-            && TryGetProperty(target, "results", out var resultsElement)
-            && resultsElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in resultsElement.EnumerateArray())
-            {
-                yield return item;
-            }
-        }
+    private static bool TryGetCollection(JsonElement element, out JsonElement collection, params string[] path)
+    {
+        if (!TryGetNestedProperty(element, out collection, path)) return false;
+        if (collection.ValueKind == JsonValueKind.Array) return true;
+        return collection.ValueKind == JsonValueKind.Object
+            && TryGetProperty(collection, "results", out collection)
+            && collection.ValueKind == JsonValueKind.Array;
     }
 
     private static bool TryGetNestedProperty(JsonElement element, out JsonElement value, params string[] path)
@@ -764,6 +863,7 @@ internal sealed class SharePointRestClient
         {
             yield return "/" + string.Join('/', segments.Take(length));
         }
+        yield return "/";
     }
 
     private static string NormalizeGuid(string value)
@@ -874,7 +974,8 @@ internal sealed class SharePointRestClient
         Uri WebUrl,
         bool IsDirectory,
         bool IsDeleted,
-        long? Size);
+        long? Size,
+        string? Version = null);
 
     internal sealed record RestChangeSet(
         IReadOnlyList<RestFileItem> Items,

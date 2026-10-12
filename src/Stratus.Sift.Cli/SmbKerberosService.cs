@@ -295,10 +295,18 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 .ToArray();
         }
 
+        return GetNetworkHostTargets(target);
+    }
+
+    internal static IReadOnlyList<SmbHostTarget> GetNetworkHostTargets(FileSystemScanTarget target)
+    {
         return target.Mode switch
         {
             FileSystemScanMode.Device => [ParseDeviceTarget(target.Value)],
             FileSystemScanMode.Subnet => SmbDiscoveryService.EnumerateSubnetHosts(target.Value)
+                .Select(host => new SmbHostTarget(host, null))
+                .ToArray(),
+            FileSystemScanMode.TargetsFile => (target.TargetList?.Hosts ?? throw new ArgumentException("Network target file was not loaded."))
                 .Select(host => new SmbHostTarget(host, null))
                 .ToArray(),
             _ => throw new ArgumentException($"Kerberos SMB discovery does not support target mode '{target.Mode}'.")
@@ -459,13 +467,16 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
 
     internal static string FormatStatus(NTStatus status) => $"{status} (0x{(uint)status:X8})";
 
-    internal static Exception CreateFileOpenException(string path, NTStatus status)
+    internal static Exception CreateFileOpenException(string path, NTStatus status, bool directory = false)
     {
-        var message = $"Could not open remote file '{path}': {FormatStatus(status)}.";
+        var message = $"Could not open remote {(directory ? "directory" : "file")} '{path}': {FormatStatus(status)}.";
         return status switch
         {
             NTStatus.STATUS_ACCESS_DENIED => new UnauthorizedAccessException(message),
-            NTStatus.STATUS_SHARING_VIOLATION => new RemoteContentUnavailableException(
+            NTStatus.STATUS_OBJECT_NAME_NOT_FOUND or NTStatus.STATUS_NO_SUCH_FILE or NTStatus.STATUS_DELETE_PENDING
+                => new FileNotFoundException(message, path),
+            NTStatus.STATUS_OBJECT_PATH_NOT_FOUND => new DirectoryNotFoundException(message),
+            NTStatus.STATUS_SHARING_VIOLATION or NTStatus.STATUS_LOCK_NOT_GRANTED => new RemoteContentUnavailableException(
                 message,
                 shouldRetry: false,
                 isExpected: true),
@@ -474,7 +485,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         };
     }
 
-    private sealed record SmbHostTarget(string Host, string? Share);
+    internal sealed record SmbHostTarget(string Host, string? Share);
 
     private readonly record struct KdcLookupKey(string Realm, IPAddress? DnsServer);
 }
@@ -510,9 +521,10 @@ internal sealed class SmbKerberosDrive(
     SmbKerberosConnection connection,
     string shareName,
     Func<string, bool>? shouldPruneDirectory,
-    Action<string>? onCurrentPath) : IRemoteDrive, IDisposable
+    Action<string>? onCurrentPath) : IRemoteDrive, IRemoteDriveEnumerationReportProvider, IDisposable
 {
     private readonly SmbKerberosSessionPool _contentSessions = new(connection, shareName);
+    private readonly List<RemoteDriveEnumerationFailure> _enumerationFailures = [];
 
     public string Id => $"{connection.KerberosHostName}/{shareName}";
     public string Name => $@"\\{connection.DisplayHost}\{shareName}";
@@ -522,6 +534,8 @@ internal sealed class SmbKerberosDrive(
     public long? TotalSize => null;
     public long? UsedSize => null;
     internal SmbAuthenticationProtocol AuthenticationProtocol => connection.AuthenticationProtocol;
+    public long EnumerationFailureCount { get; private set; }
+    public IReadOnlyList<RemoteDriveEnumerationFailure> EnumerationFailures => _enumerationFailures;
 
     public async Task<(IEnumerable<IRemoteFile> Changes, string NewDeltaToken)> GetChangesAsync(
         string? deltaToken,
@@ -544,6 +558,18 @@ internal sealed class SmbKerberosDrive(
     {
         using var session = SmbKerberosSession.Connect(connection);
         using var store = session.ConnectShare(shareName);
+        return await ProcessDirectoriesAsync(store.ListDirectory, deltaToken, onChange, onCheckpoint, cancellationToken);
+    }
+
+    internal async Task<string> ProcessDirectoriesAsync(
+        Func<string, IReadOnlyList<FileDirectoryInformation>> listDirectory,
+        string? deltaToken,
+        Func<IRemoteFile, Task> onChange,
+        Func<string, Task>? onCheckpoint = null,
+        CancellationToken cancellationToken = default)
+    {
+        EnumerationFailureCount = 0;
+        _enumerationFailures.Clear();
         var pending = ParseCheckpoint(deltaToken);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { string.Empty };
         if (pending.Count == 0)
@@ -569,7 +595,23 @@ internal sealed class SmbKerberosDrive(
                 ? $@"\\{connection.DisplayHost}\{shareName}"
                 : $@"\\{connection.DisplayHost}\{shareName}\{directory}";
             onCurrentPath?.Invoke(directoryPath);
-            var entries = store.ListDirectory(directory, throwOnFailure: directory.Length == 0);
+            IReadOnlyList<FileDirectoryInformation> entries;
+            try
+            {
+                entries = listDirectory(directory);
+            }
+            catch (Exception exception) when (directory.Length > 0 && exception is not OperationCanceledException)
+            {
+                // Attempt each folder once this run. Keep crawling siblings, but do not
+                // save a stack that has discarded an unvisited subtree.
+                EnumerationFailureCount++;
+                var failure = new RemoteDriveEnumerationFailure(directoryPath, exception);
+                if (_enumerationFailures.Count < 8) _enumerationFailures.Add(failure);
+                else if (!RemoteScanExceptionClassifier.IsExpectedForEnumeration(exception)
+                    && _enumerationFailures.All(sample => RemoteScanExceptionClassifier.IsExpectedForEnumeration(sample.Exception)))
+                    _enumerationFailures[^1] = failure;
+                continue;
+            }
             foreach (var entry in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -597,6 +639,7 @@ internal sealed class SmbKerberosDrive(
 
             directoriesSinceCheckpoint++;
             if (pending.Count > 0
+                && EnumerationFailureCount == 0
                 && onCheckpoint != null
                 && (directoriesSinceCheckpoint >= 64 || lastCheckpointAt.Elapsed >= TimeSpan.FromSeconds(30)))
             {
@@ -610,11 +653,13 @@ internal sealed class SmbKerberosDrive(
     }
 
     internal static string CreateCheckpoint(Stack<string> pending)
-        => "sift-smb-v2:" + string.Join('.', pending.Select(Encode));
+        => "sift-smb-v3:" + string.Join('.', pending.Select(Encode));
 
     internal static Stack<string> ParseCheckpoint(string? token)
     {
-        const string prefix = "sift-smb-v2:";
+        // Older stacks may already have discarded folders whose listing failed.
+        // Restart those crawls so the new failure accounting can retry them.
+        const string prefix = "sift-smb-v3:";
         if (string.IsNullOrWhiteSpace(token) || !token.StartsWith(prefix, StringComparison.Ordinal))
         {
             return new Stack<string>();
@@ -660,6 +705,7 @@ internal sealed class SmbKerberosRemoteFile(
     bool isDirectory,
     SmbKerberosSessionPool contentSessions) : IRemoteFile
 {
+    private static readonly long FileTimeEpochTicks = new DateTime(1601, 1, 1).Ticks;
     private readonly string _uncPath = $@"\\{connection.DisplayHost}\{shareName}\{relativePath}";
 
     public string Id => $"{connection.KerberosHostName}/{shareName}/{relativePath}";
@@ -667,6 +713,11 @@ internal sealed class SmbKerberosRemoteFile(
     public string Path => _uncPath;
     public string WebUrl => _uncPath;
     public long? Size => isDirectory ? null : information.EndOfFile;
+    public string? Version => isDirectory
+        || information.LastWriteTime.Ticks <= FileTimeEpochTicks
+        && information.ChangeTime.Ticks <= FileTimeEpochTicks
+        ? null
+        : FormattableString.Invariant($"{information.CreationTime.Ticks:X16}:{information.LastWriteTime.Ticks:X16}:{information.ChangeTime.Ticks:X16}");
     public string? ContentType => null;
     public bool IsDeleted => false;
     public bool IsDirectory => isDirectory;
@@ -929,7 +980,7 @@ internal sealed class SmbKerberosStore(ISMBFileStore store) : IDisposable
 {
     internal ISMBFileStore Inner => store;
 
-    internal IReadOnlyList<FileDirectoryInformation> ListDirectory(string path, bool throwOnFailure)
+    internal IReadOnlyList<FileDirectoryInformation> ListDirectory(string path)
     {
         object? handle = null;
         try
@@ -946,23 +997,13 @@ internal sealed class SmbKerberosStore(ISMBFileStore store) : IDisposable
                 null);
             if (status != NTStatus.STATUS_SUCCESS || handle == null)
             {
-                if (throwOnFailure)
-                {
-                    throw new InvalidOperationException($"Could not open directory '{path}': {SmbKerberosService.FormatStatus(status)}.");
-                }
-
-                return [];
+                throw SmbKerberosService.CreateFileOpenException(path, status, directory: true);
             }
 
             status = store.QueryDirectory(out var entries, handle, "*", FileInformationClass.FileDirectoryInformation);
             if (status != NTStatus.STATUS_SUCCESS && status != NTStatus.STATUS_NO_MORE_FILES)
             {
-                if (throwOnFailure)
-                {
-                    throw new InvalidOperationException($"Could not enumerate directory '{path}': {SmbKerberosService.FormatStatus(status)}.");
-                }
-
-                return [];
+                throw SmbKerberosService.CreateFileOpenException(path, status, directory: true);
             }
 
             return entries.OfType<FileDirectoryInformation>().ToArray();

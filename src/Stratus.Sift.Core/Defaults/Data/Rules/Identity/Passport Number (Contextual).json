@@ -14,6 +14,7 @@
       "Patterns": [
         "(?:passport[_ ]?(?:number|no))\\s*[:=]\\s*[\"']?[A-Z0-9]{6,12}[\"']?"
       ],
+      "ExtensionProfile": "Documents",
       "IncludedExtensions": [
         ".txt",
         ".log",

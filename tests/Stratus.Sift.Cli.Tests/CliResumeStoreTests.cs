@@ -9,6 +9,74 @@ namespace Stratus.Sift.Cli.Tests;
 
 public sealed class CliResumeStoreTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentResumeLookups_NeverLoseCompletedEntriesWhileJournalGrows(bool remote)
+    {
+        var directory = CreateTemporaryDirectory();
+        var store = CreateStore(directory);
+        var modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        const int seedCount = 1000;
+        const int totalCount = 120_000;
+        var candidates = Enumerable.Range(0, seedCount).Select(index =>
+            new FileScanCandidate($"C:\\Data\\{index}.txt", $"{index}.txt", false, 42, modified)).ToArray();
+        try
+        {
+            await using var session = store.OpenSession("concurrent-lookups", resume: false);
+            async ValueTask Mark(int index)
+            {
+                if (remote) await session.MarkRemoteCompletedAsync("drive", index.ToString(), "file", 42,
+                    _ => Task.CompletedTask, CancellationToken.None, "v1");
+                else await session.MarkCompletedAsync(new FileScanCandidate($"C:\\Data\\{index}.txt", $"{index}.txt", false, 42, modified),
+                    _ => Task.CompletedTask, CancellationToken.None);
+            }
+            for (var index = 0; index < seedCount; index++) await Mark(index);
+            var finished = 0;
+            var started = 0;
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            long falseMisses = 0;
+            long lookups = 0;
+            var readers = Enumerable.Range(0, 2).Select(reader => Task.Factory.StartNew(() =>
+            {
+                if (Interlocked.Increment(ref started) == 2) ready.TrySetResult();
+                var index = reader;
+                while (Volatile.Read(ref finished) == 0)
+                {
+                    var candidate = index++ % seedCount;
+                    var contains = remote
+                        ? session.ContainsRemote("drive", candidate.ToString(), "file", 42, "v1")
+                        : session.Contains(candidates[candidate]);
+                    if (!contains) Interlocked.Increment(ref falseMisses);
+                    Interlocked.Increment(ref lookups);
+                    _ = session.CompletedCount;
+                }
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            try
+            {
+                await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                for (var index = seedCount; index < totalCount; index++) await Mark(index);
+            }
+            finally
+            {
+                Volatile.Write(ref finished, 1);
+                await Task.WhenAll(readers);
+            }
+
+            Assert.True(lookups > 0);
+            Assert.Equal(0, falseMisses);
+            Assert.Equal(totalCount, session.CompletedCount);
+            await session.ClearAsync();
+            Assert.Equal(0, session.CompletedCount);
+            Assert.False(session.ContainsRemote("drive", "0", "file", 42, "v1"));
+            Assert.False(session.Contains(candidates[0]));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task CompletedItem_IsReloadedOnlyForTheSameScanAndUnchangedFile()
     {
@@ -302,6 +370,49 @@ public sealed class CliResumeStoreTests
         Assert.NotEqual(first, CliResumeIdentity.CreateConnectorScope("Test", config, "account-a", "rules-b", false, null));
         Assert.NotEqual(first, CliResumeIdentity.CreateConnectorScope("Test", config, "account-a", "rules-a", true, null));
         Assert.DoesNotContain("secret-token", first, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Microsoft365Scope_InvalidatesCheckpointsThatCouldHaveMissedMetadataFindings()
+    {
+        // Recorded with connector-m365-v4, before filename and oversized-document metadata fixes.
+        const string oldScope = "4ebdff1b7b5b2a6e4912177bd9732a3a75048bf3d2a57199889a011437837fad";
+        var scope = CliResumeIdentity.CreateConnectorScope(Stratus.Sift.Core.CommonConstants.ConnectorProviders.Microsoft365,
+            new Dictionary<string, string>(), "account-a", "rules-a", false, null);
+
+        Assert.NotEqual(oldScope, scope);
+    }
+
+    [Fact]
+    public void Microsoft365Scope_InvalidatesCheckpointsThatCouldHaveSkippedZipContents()
+    {
+        // Recorded with connector-m365-v5, before archive eligibility and library discovery fixes.
+        const string oldScope = "197cb482386ba49ca75a305869dbac3f9f6106dbd79f54f0454c6411d3464b22";
+        var scope = CliResumeIdentity.CreateConnectorScope(Stratus.Sift.Core.CommonConstants.ConnectorProviders.Microsoft365,
+            new Dictionary<string, string>(), "account-a", "rules-a", false, null);
+
+        Assert.NotEqual(oldScope, scope);
+    }
+
+    [Fact]
+    public void BinaryExtractionScope_InvalidatesOlderBinaryEnabledCheckpoints()
+    {
+        // Recorded before PowerPoint, OneNote, and legacy Office extraction was available.
+        const string oldScope = "56f197847a680e21cebd0522d8a8b4ae2fd8177e5f10fdfdd885d8b232695230";
+        var scope = CliResumeIdentity.CreateConnectorScope(Stratus.Sift.Core.CommonConstants.ConnectorProviders.Microsoft365,
+            new Dictionary<string, string>(), "account-a", "rules-a", true, null);
+        Assert.NotEqual(oldScope, scope);
+    }
+
+    [Theory]
+    [InlineData(false, "bc81ca987a5cb5257997e092bb8274cbdce5b5fda45fc11be5f08d91ef0d4220")]
+    [InlineData(true, "001726bec5a0142d4957fb348b3d0f0fa47b2794081117af57743a65e458b361")]
+    public void Microsoft365Scope_InvalidatesCheckpointsBeforeShortcutAndEmbeddedAttachmentFixes(bool binary, string previousScope)
+    {
+        // Recorded with connector-m365-v6 and binary-extraction-v2.
+        var scope = CliResumeIdentity.CreateConnectorScope(Stratus.Sift.Core.CommonConstants.ConnectorProviders.Microsoft365,
+            new Dictionary<string, string>(), "account-a", "rules-a", binary, null);
+        Assert.NotEqual(previousScope, scope);
     }
 
     private static CliResumeStore CreateStore(

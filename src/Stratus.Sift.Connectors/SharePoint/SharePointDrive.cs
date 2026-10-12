@@ -1,6 +1,7 @@
 using Microsoft.Graph;
 using Microsoft.Graph.Drives.Item.Items.Item.Delta;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions;
 using Stratus.Sift.Connectors.Interfaces;
 using Stratus.Sift.Core.Enums;
 
@@ -9,7 +10,7 @@ namespace Stratus.Sift.Connectors.SharePoint;
 public class SharePointDrive : IRemoteDrive
 {
     private const int DeltaPageSize = 999;
-    private static readonly string[] DeltaSelectFields = ["id", "name", "webUrl", "size", "file", "folder", "deleted", "remoteItem"];
+    private static readonly string[] DeltaSelectFields = ["id", "name", "webUrl", "size", "file", "folder", "deleted", "remoteItem", "eTag", "cTag", "lastModifiedDateTime", "createdBy", "parentReference", "sharepointIds", "shared"];
 
     private readonly GraphServiceClient _graphClient;
     private readonly Drive _drive;
@@ -17,6 +18,7 @@ public class SharePointDrive : IRemoteDrive
     private readonly string? _rootItemId;
     private readonly string? _nameOverride;
     private readonly string? _webUrlOverride;
+    private readonly Microsoft365CoverageOptions _coverage = Microsoft365CoverageOptions.Disabled;
 
     public DatastoreType DriveType { get; }
 
@@ -38,6 +40,10 @@ public class SharePointDrive : IRemoteDrive
         DriveType = driveType;
     }
 
+    internal SharePointDrive(GraphServiceClient client, Drive drive, string tenantId, DatastoreType type,
+        Microsoft365CoverageOptions coverage, string? rootItemId = null, string? name = null, string? webUrl = null)
+        : this(client, drive, tenantId, type, rootItemId, name, webUrl) => _coverage = coverage;
+
     public string Id => _drive.Id ?? string.Empty;
     public string Name => !string.IsNullOrWhiteSpace(_nameOverride) ? _nameOverride : _drive.Name ?? "Unknown Drive";
     public string ConnectionId => string.IsNullOrWhiteSpace(_rootItemId)
@@ -55,6 +61,7 @@ public class SharePointDrive : IRemoteDrive
             _drive,
             _tenantId,
             driveType,
+            _coverage,
             _rootItemId,
             name ?? _nameOverride,
             _webUrlOverride);
@@ -81,7 +88,38 @@ public class SharePointDrive : IRemoteDrive
         Func<string, Task>? onCheckpoint = null,
         CancellationToken cancellationToken = default)
     {
+        // Changes to group membership and historical content need not appear in the source delta.
+        // Re-enumerate metadata while the item journal skips unchanged content downloads.
+        var refreshCoverage = _coverage.ReadSharing || _coverage.ScanLibraryFields || _coverage.ScanVersions;
+        try
+        {
+            var token = await ProcessDeltaPagesAsync(refreshCoverage ? null : deltaToken, onChange,
+                refreshCoverage ? null : onCheckpoint, cancellationToken);
+            return refreshCoverage ? string.Empty : token;
+        }
+        catch (ApiException ex) when (ex.ResponseStatusCode == 410)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Invalidate both the source token and the item journal before a fresh crawl.
+            // Recovery is attempted once; a second 410 propagates as an incomplete scan.
+            if (onCheckpoint != null)
+            {
+                await onCheckpoint(string.Empty);
+            }
+            var token = await ProcessDeltaPagesAsync(null, onChange, refreshCoverage ? null : onCheckpoint, cancellationToken);
+            return refreshCoverage ? string.Empty : token;
+        }
+    }
+
+    private async Task<string> ProcessDeltaPagesAsync(
+        string? deltaToken,
+        Func<IRemoteFile, Task> onChange,
+        Func<string, Task>? onCheckpoint,
+        CancellationToken cancellationToken)
+    {
         string currentLink = deltaToken ?? string.Empty;
+        var visitedLinks = new HashSet<string>(StringComparer.Ordinal);
+        if (!string.IsNullOrEmpty(currentLink)) visitedLinks.Add(currentLink);
         DeltaGetResponse? response;
 
         var deltaRequest = _graphClient.Drives[Id].Items[_rootItemId ?? "root"].Delta;
@@ -105,17 +143,25 @@ public class SharePointDrive : IRemoteDrive
 
         while (response != null)
         {
-            if (response.Value != null)
+            if (response.Value == null)
             {
-                foreach (var item in response.Value)
-                {
-                    await onChange(new SharePointFile(_graphClient, Id, item, _tenantId));
-                }
+                throw new InvalidDataException("Graph delta response did not contain an item collection.");
+            }
+            foreach (var item in response.Value)
+            {
+                await onChange(new SharePointFile(_graphClient, Id, item, _tenantId, false, _coverage));
             }
 
             if (string.IsNullOrEmpty(response.OdataNextLink))
             {
-                break;
+                return !string.IsNullOrWhiteSpace(response.OdataDeltaLink)
+                    ? response.OdataDeltaLink
+                    : throw new InvalidDataException("Graph delta enumeration ended without a final delta token.");
+            }
+
+            if (!visitedLinks.Add(response.OdataNextLink))
+            {
+                throw new InvalidDataException("Graph delta enumeration returned a repeated continuation link.");
             }
 
             if (onCheckpoint != null)
@@ -131,6 +177,6 @@ public class SharePointDrive : IRemoteDrive
                 cancellationToken: cancellationToken);
         }
 
-        return response?.OdataDeltaLink ?? string.Empty;
+        throw new InvalidDataException("Graph delta response was empty.");
     }
 }

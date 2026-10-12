@@ -21,7 +21,7 @@ internal sealed class CliResumeStore
     private readonly TimeSpan _retention;
     private readonly long _maxJournalBytes;
     private readonly long _maxDirectoryBytes;
-    private readonly object _cleanupLock = new();
+    private readonly System.Threading.Lock _cleanupLock = new();
     private DateTime _nextCleanupAtUtc;
 
     public CliResumeStore(IConfiguration configuration, ILogger<CliResumeStore> logger)
@@ -152,6 +152,7 @@ internal sealed class CliResumeSession : IAsyncDisposable
 
     private readonly FileStream _stream;
     private readonly HashSet<CliResumeFingerprint> _completed;
+    private readonly System.Threading.Lock _completedLock = new();
     private readonly List<CliResumeFingerprint> _pending = new(StageRecordThreshold);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Stopwatch _sinceCommit = Stopwatch.StartNew();
@@ -180,7 +181,10 @@ internal sealed class CliResumeSession : IAsyncDisposable
         _logger = logger;
     }
 
-    public int CompletedCount => _completed.Count;
+    public int CompletedCount
+    {
+        get { lock (_completedLock) return _completed.Count; }
+    }
 
     internal static CliResumeSession Open(string path, bool resume, long maxJournalBytes, ILogger logger)
     {
@@ -244,10 +248,35 @@ internal sealed class CliResumeSession : IAsyncDisposable
     }
 
     public bool Contains(FileScanCandidate candidate)
-        => _completed.Contains(CliResumeIdentity.ForFile(candidate));
+        => ContainsFingerprint(CliResumeIdentity.ForFile(candidate));
 
-    public bool ContainsRemote(string driveConnectionId, string itemId, string path, long? size)
-        => _completed.Contains(CliResumeIdentity.ForRemoteItem(driveConnectionId, itemId, path, size));
+    public bool ContainsRemote(string driveConnectionId, string itemId, string path, long? size, string? version = null)
+        => ContainsFingerprint(CliResumeIdentity.ForRemoteItem(driveConnectionId, itemId, path, size, version));
+
+    private bool ContainsFingerprint(CliResumeFingerprint fingerprint)
+    {
+        lock (_completedLock) return _completed.Contains(fingerprint);
+    }
+
+    // System.Threading.Lock scopes must stay in synchronous methods.
+    private bool TryAddCompletedFingerprint(CliResumeFingerprint fingerprint, out bool capacityExceeded)
+    {
+        lock (_completedLock)
+        {
+            capacityExceeded = false;
+            if (!_completed.Add(fingerprint)) return false;
+            if (_completed.Count <= _maxRecords) return true;
+
+            _completed.Remove(fingerprint);
+            capacityExceeded = true;
+            return false;
+        }
+    }
+
+    private void ClearCompletedFingerprints()
+    {
+        lock (_completedLock) _completed.Clear();
+    }
 
     public ValueTask MarkCompletedAsync(
         FileScanCandidate candidate,
@@ -261,9 +290,10 @@ internal sealed class CliResumeSession : IAsyncDisposable
         string path,
         long? size,
         Func<CancellationToken, Task> beforeCommit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? version = null)
         => MarkCompletedAsync(
-            CliResumeIdentity.ForRemoteItem(driveConnectionId, itemId, path, size),
+            CliResumeIdentity.ForRemoteItem(driveConnectionId, itemId, path, size, version),
             beforeCommit,
             cancellationToken);
 
@@ -287,7 +317,7 @@ internal sealed class CliResumeSession : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            _completed.Clear();
+            ClearCompletedFingerprints();
             _pending.Clear();
             _committedRecords = 0;
             _stagedRecords = 0;
@@ -322,15 +352,9 @@ internal sealed class CliResumeSession : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (!_completed.Add(fingerprint))
+            if (!TryAddCompletedFingerprint(fingerprint, out var capacityExceeded))
             {
-                return;
-            }
-
-            if (_completed.Count > _maxRecords)
-            {
-                _completed.Remove(fingerprint);
-                if (!_capacityWarningWritten)
+                if (capacityExceeded && !_capacityWarningWritten)
                 {
                     _capacityWarningWritten = true;
                     _logger.LogWarning(
@@ -604,8 +628,10 @@ internal static class CliResumeIdentity
         string driveConnectionId,
         string itemId,
         string path,
-        long? size)
-        => CreateFingerprint(driveConnectionId, itemId, size ?? -1, 0, path);
+        long? size,
+        string? version = null)
+        => CreateFingerprint(driveConnectionId, itemId, size ?? -1, 0,
+            version is null ? path : $"{path}\0{version}");
 
     internal static string CreateRuleFingerprint(string? rulesPath)
     {
@@ -634,7 +660,8 @@ internal static class CliResumeIdentity
         CliLlmOptions? llmOptions,
         CliWindowsCredential? credential,
         bool strictKerberos,
-        IPAddress? dnsServer)
+        IPAddress? dnsServer,
+        Stratus.Sift.Scanner.Models.ScanOptions? contentOptions = null)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Append(hash, "filesystem-v2");
@@ -642,6 +669,7 @@ internal static class CliResumeIdentity
         Append(hash, Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         Append(hash, ruleFingerprint);
         Append(hash, includeBinary.ToString());
+        if (includeBinary) { Append(hash, "binary-extraction-v4"); Append(hash, CliContentOptions.Fingerprint(contentOptions)); }
         Append(hash, strictKerberos.ToString());
         Append(hash, dnsServer?.ToString() ?? "system-dns");
         Append(hash, llmOptions?.Enabled == true ? "llm" : "no-llm");
@@ -660,14 +688,18 @@ internal static class CliResumeIdentity
         string runtimeIdentity,
         string ruleFingerprint,
         bool includeBinary,
-        CliLlmOptions? llmOptions)
+        CliLlmOptions? llmOptions,
+        Stratus.Sift.Scanner.Models.ScanOptions? contentOptions = null)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, "connector-v2");
+        Append(hash, providerName.Equals(Stratus.Sift.Core.CommonConstants.ConnectorProviders.Microsoft365, StringComparison.OrdinalIgnoreCase)
+            ? "connector-m365-v10"
+            : "connector-v2");
         Append(hash, providerName);
         Append(hash, runtimeIdentity);
         Append(hash, ruleFingerprint);
         Append(hash, includeBinary.ToString());
+        if (includeBinary) { Append(hash, "binary-extraction-v4"); Append(hash, CliContentOptions.Fingerprint(contentOptions)); }
         Append(hash, llmOptions?.Enabled == true ? "llm" : "no-llm");
         Append(hash, llmOptions?.SensitiveOnly == true ? "sensitive-only" : "all-findings");
         Append(hash, llmOptions?.OllamaModel ?? string.Empty);

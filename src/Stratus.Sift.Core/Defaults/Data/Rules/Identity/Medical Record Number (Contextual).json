@@ -15,6 +15,7 @@
       "Patterns": [
         "(?:medical[_ ]?record[_ ]?(?:number|no)|MRN|patient_id)\\s*[:=]\\s*[\"']?[A-Z0-9-]{5,32}[\"']?"
       ],
+      "ExtensionProfile": "Documents",
       "IncludedExtensions": [
         ".txt",
         ".log",
