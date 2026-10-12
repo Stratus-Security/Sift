@@ -325,10 +325,11 @@ public partial class FileScanner : IScanner
             {
                 try
                 {
-                    var extraction = _contentExtractor.ExtractWithResult(filePath, options);
+                    var extraction = _contentExtractor.ExtractWithResult(filePath, options, cancellationToken);
                     result.IsComplete = extraction.IsComplete;
-                    if (!extraction.IsComplete)
-                        _logger.LogWarning("Could not fully extract {Path}: {Reason}", filePath, extraction.Error);
+                    result.IncompleteReason = extraction.Error;
+                    result.HasUnexpectedInspectionFailure = extraction.HasUnexpectedFailure;
+                    LogIncompleteExtraction(filePath, extraction);
                     string extractedText = extraction.Text;
                     if (!string.IsNullOrWhiteSpace(extractedText))
                     {
@@ -340,6 +341,8 @@ public partial class FileScanner : IScanner
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     result.IsComplete = false;
+                    result.IncompleteReason = ex.Message;
+                    result.HasUnexpectedInspectionFailure = true;
                     _logger.LogWarning(ex, "Failed to extract content from file: {Path}", filePath);
                 }
                 result.Issues = AggregateIssues(issues, policyNameLookup);
@@ -554,7 +557,7 @@ public partial class FileScanner : IScanner
         if (!TryReadZipDirectoryInfo(stream, out var declaredEntries, out var centralDirectoryBytes)
             || !budget.TryReserveArchive(declaredEntries, centralDirectoryBytes))
         {
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "ZIP archive {ArchivePath} has an invalid central directory or exceeded the shared archive-tree safety limits and was not inspected.",
                 archivePath);
             options.Diagnostics?.RecordFileSkipped();
@@ -577,7 +580,7 @@ public partial class FileScanner : IScanner
                 entriesSeen++;
                 if ((ulong)entriesSeen > declaredEntries)
                 {
-                    _logger.LogWarning(
+                    _logger.LogDebug(
                         "Stopped inspecting ZIP archive {ArchivePath} because it contained more entries than its central directory declared.",
                         archivePath);
                     result.IsComplete = false;
@@ -697,9 +700,9 @@ public partial class FileScanner : IScanner
         {
             throw;
         }
-        catch (InvalidDataException)
+        catch (InvalidDataException exception)
         {
-            _logger.LogWarning("ZIP archive {ArchivePath} is invalid, encrypted, or unsupported.", archivePath);
+            _logger.LogDebug(exception, "ZIP archive {ArchivePath} is invalid, encrypted, or unsupported.", archivePath);
             options.Diagnostics?.RecordFileSkipped();
             result.IsComplete = false;
         }
@@ -716,7 +719,7 @@ public partial class FileScanner : IScanner
         if (unsafeEntries > 0 || unreadableEntries > 0)
         {
             result.IsComplete = false;
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "Skipped {UnsafeEntries:N0} unsafe and {UnreadableEntries:N0} unreadable entries in ZIP archive {ArchivePath}.",
                 unsafeEntries,
                 unreadableEntries,
@@ -774,7 +777,7 @@ public partial class FileScanner : IScanner
                 if (bytesRead > maximumBytes - totalBytes
                     || !budget.TryReserveBuffered(bytesRead))
                 {
-                    _logger.LogWarning(
+                    _logger.LogDebug(
                         "ZIP archive {ArchivePath} exceeded the {MaximumBytes:N0}-byte buffering limit and was not inspected.",
                         archivePath,
                         maximumBytes);
@@ -919,6 +922,9 @@ public partial class FileScanner : IScanner
 
             var extraction = _contentExtractor.ExtractWithResult(stream, extension, options, cancellationToken);
             result.IsComplete = extraction.IsComplete;
+            result.IncompleteReason = extraction.Error;
+            result.HasUnexpectedInspectionFailure = extraction.HasUnexpectedFailure;
+            LogIncompleteExtraction(virtualPath, extraction);
             var extractedText = extraction.Text;
             if (!string.IsNullOrWhiteSpace(extractedText))
             {
@@ -1134,6 +1140,7 @@ public partial class FileScanner : IScanner
         ScanResult source)
     {
         target.IsComplete &= source.IsComplete;
+        target.HasUnexpectedInspectionFailure |= source.HasUnexpectedInspectionFailure;
         target.IncompleteReason ??= source.IncompleteReason;
         foreach (var issue in source.Issues)
         {
@@ -1383,14 +1390,15 @@ public partial class FileScanner : IScanner
                     diagnostics: options.Diagnostics);
 
             var extraction = _contentExtractor.ExtractWithResult(measuredStream, ext, options, cancellationToken);
-            if (!extraction.IsComplete)
-                _logger.LogWarning("Could not fully extract {Path}: {Reason}", fileName, extraction.Error);
+            LogIncompleteExtraction(fileName, extraction);
             using var textStream = new MemoryStream(Encoding.UTF8.GetBytes(extraction.Text));
             var result = await ScanStreamInternalAsync(textStream, plan.Optimizer, scopedPolicyMap,
                 fileName, ext, name, exposure, owner, aclEntries, cancellationToken,
                 ruleStats, ignoreRules: plan.IgnoreRules, policyLookup: plan.PolicyNameLookup,
                 diagnostics: options.Diagnostics);
             result.IsComplete &= extraction.IsComplete;
+            result.IncompleteReason ??= extraction.Error;
+            result.HasUnexpectedInspectionFailure |= extraction.HasUnexpectedFailure;
             return result;
         }
 
@@ -1737,6 +1745,14 @@ public partial class FileScanner : IScanner
             }
         }
         return false;
+    }
+
+    private void LogIncompleteExtraction(string path, ContentExtractionResult extraction)
+    {
+        if (extraction.IsComplete) return;
+        _logger.LogDebug(extraction.FailureException, "Could not fully extract {Path}: {Reason}", path, extraction.Error);
+        if (extraction.HasUnexpectedFailure)
+            _logger.LogWarning("Unexpected content extraction failure for {Path}: {Reason}", path, extraction.Error);
     }
 
     private static bool PathsReferToSameScope(string left, string right)

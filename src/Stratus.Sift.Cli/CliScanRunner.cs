@@ -1020,7 +1020,8 @@ internal static class CliScanRunner
                         if (!completed)
                         {
                             display.IncrementErrors();
-                            display.WriteEvent($"Warning: content extraction or archive inspection was incomplete for {entry.Path}; the item remains pending. {result.IncompleteReason}", ConsoleColor.Yellow);
+                            if (result.HasUnexpectedInspectionFailure)
+                                display.WriteEvent($"Warning: content extraction or archive inspection was incomplete for {entry.Path}; the item remains pending. {result.IncompleteReason}", ConsoleColor.Yellow);
                         }
                         else if (!entry.IsDirectory) pendingScanned++;
                     }

@@ -33,7 +33,8 @@ public partial class ContentExtractor
                     complete &= result.IsComplete;
                     if (!AppendBounded(text, result.Text, true)) return Truncated(text);
                 }
-                catch (Exception ex) when (!(ex is OperationCanceledException && state.Cancellation.IsCancellationRequested)) { complete = false; }
+                catch (Exception ex) when (!(ex is OperationCanceledException && state.Cancellation.IsCancellationRequested))
+                { RecordExtractionException(ex); complete = false; }
             }
         }
         return new(text.ToString(), complete, complete ? null : "Some PDF images or pages could not be inspected with OCR.");
@@ -68,15 +69,24 @@ public partial class ContentExtractor
                 Task.WhenAll(process.WaitForExitAsync(timeout.Token), output, errors).GetAwaiter().GetResult();
                 return process.ExitCode == 0 ? new(output.Result, true) : Failure("OCR runtime could not inspect the image.");
             }
-            catch
+            catch (Exception ex)
             {
                 try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
                 state.Cancellation.ThrowIfCancellationRequested();
+                if (ex is not OperationCanceledException) RecordExtractionException(ex);
                 return Failure("OCR timed out or exceeded its output limit.");
             }
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && state.Cancellation.IsCancellationRequested))
-        { return Failure("OCR is unavailable or failed: " + ex.Message); }
+        {
+            // A missing/unusable executable is an expected OCR availability problem.
+            if (ex is System.ComponentModel.Win32Exception)
+            {
+                RecordExtractionException(ex, expected: true);
+                return Failure("OCR is unavailable or failed: " + ex.Message);
+            }
+            return Failure(ex, "OCR is unavailable or failed: " + ex.Message);
+        }
         finally
         {
             // This generated directory contains only the input written above. No archive names enter it.

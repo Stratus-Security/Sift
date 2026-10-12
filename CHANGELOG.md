@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Binary scan diagnostics
+
+- Keep expected PDF OCR, malformed/encrypted Office document, embedded-content and archive-limit failures at debug level, including the remote scanner's follow-up diagnostics. Preserve extracted-text findings, incomplete counts, exit code 3 and pending resume entries.
+- Preserve exception details for debug logging and distinguish unexpected extraction faults, including faults inside embedded content, so scanner bugs still produce warnings.
+- Handle empty or very short PDFs before the parser's header search, avoiding an out-of-range seek reported as a scanner fault.
+- Native Windows CLI proof: 21 unreadable synthetic documents produced no default warnings, retained a valid text finding and returned exit code 3; debug logging exposed all 21 reasons and available exception stacks.
+
 ### Microsoft 365 coverage
 
 - Scan storage and all nine implemented service adapters by default using existing access: Teams, Planner, To Do, OneNote, shared mail, SharePoint Embedded, Viva Engage, Power BI and Power Platform. Only additional permission consent requires `--request-additional-permissions`; Global Administrator is not required for content already accessible through a suitably consented application.
@@ -40,7 +47,7 @@
 
 ### Validation and limits
 
-- 1,102 regression tests passed. Windows x64 Native AOT publication, executable smoke checks and public-boundary verification passed.
+- 1,117 regression tests passed. Windows x64 Native AOT publication, executable smoke checks and public-boundary verification passed.
 - Bounded read-only tenant checks returned 60 successful baseline API responses and 21 successful production-reader rechecks. Sampled storage, Teams, OneNote, Planner, To Do list and shared-mail content requests succeeded. Current Loop/Whiteboard conversion and Loop history also passed with existing delegated access.
 - Live checks do not establish an entire tenant inventory or equivalent permissions for every app registration. Empty collections verify request acceptance only. Power BI, Viva Engage, Power Apps/Dataverse and Embedded APIs remain unverified live where grants or targets were unavailable; app-only and sovereign-cloud modes were not exercised live.
 - An older sampled Whiteboard version remained unreadable as converted text, and an unresolved directory sharing group remained unknown/incomplete. These conditions preserve other findings and prevent false completion.

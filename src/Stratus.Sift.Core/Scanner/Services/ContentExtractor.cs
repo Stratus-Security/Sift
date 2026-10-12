@@ -44,7 +44,7 @@ public partial class ContentExtractor
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            return Failure(ex.Message);
+            return Failure(ex);
         }
     }
 
@@ -54,8 +54,18 @@ public partial class ContentExtractor
     public ContentExtractionResult ExtractWithResult(Stream stream, string extension, ScanOptions? options = null, CancellationToken cancellationToken = default)
     {
         var previous = CurrentExtraction.Value;
-        CurrentExtraction.Value = new ExtractionState(options ?? new ScanOptions(), cancellationToken);
-        try { return ExtractDocument(stream, extension); }
+        var state = new ExtractionState(options ?? new ScanOptions(), cancellationToken);
+        CurrentExtraction.Value = state;
+        try
+        {
+            var result = ExtractDocument(stream, extension);
+            return result with
+            {
+                IsComplete = result.IsComplete && !state.HasUnexpectedFailure,
+                FailureException = state.FailureException,
+                HasUnexpectedFailure = state.HasUnexpectedFailure
+            };
+        }
         finally { CurrentExtraction.Value = previous; }
     }
 
@@ -102,7 +112,7 @@ public partial class ContentExtractor
         catch (OperationCanceledException) when (CurrentExtraction.Value?.Cancellation.IsCancellationRequested == true) { throw; }
         catch (Exception ex)
         {
-            return Failure(ex.Message);
+            return Failure(ex);
         }
         finally
         {
@@ -112,6 +122,8 @@ public partial class ContentExtractor
 
     private static ContentExtractionResult ExtractPdf(Stream stream)
     {
+        // PdfPig's lenient header search can seek before the start of very short files.
+        if (stream.Length < 8) return Failure("PDF is empty or truncated; no complete header could be read.");
         using var document = PdfDocument.Open(stream);
         var sb = new StringBuilder();
         foreach (var page in document.GetPages())
@@ -212,6 +224,41 @@ public partial class ContentExtractor
     }
 
     private static ContentExtractionResult Failure(string error) => new(string.Empty, false, error);
+
+    private static ContentExtractionResult Failure(Exception exception, string? error = null)
+    {
+        RecordExtractionException(exception);
+        return new(string.Empty, false, error ?? exception.Message)
+        {
+            FailureException = exception,
+            HasUnexpectedFailure = !IsExpectedExtractionException(exception)
+        };
+    }
+
+    private static void RecordExtractionException(Exception exception, bool? expected = null)
+    {
+        if (CurrentExtraction.Value is not { } state) return;
+        var unexpected = !(expected ?? IsExpectedExtractionException(exception));
+        // Keep an unexpected fault even if a later attachment has an expected failure.
+        if (state.FailureException == null || unexpected) state.FailureException = exception;
+        state.HasUnexpectedFailure |= unexpected;
+    }
+
+    internal static bool IsExpectedExtractionException(Exception exception) => exception switch
+    {
+        AggregateException aggregate => aggregate.InnerExceptions.Count > 0
+            && aggregate.InnerExceptions.All(IsExpectedExtractionException),
+        IOException or InvalidDataException or UnauthorizedAccessException or FormatException
+            or System.Xml.XmlException or System.Security.Cryptography.CryptographicException
+            or OpenXmlPackageException or OpenMcdf.FileFormatException
+            or ExcelDataReader.Exceptions.ExcelReaderException
+            or UglyToad.PdfPig.Core.PdfDocumentFormatException
+            or UglyToad.PdfPig.Exceptions.PdfDocumentEncryptedException
+            or UglyToad.PdfPig.Fonts.CorruptCompressedDataException
+            or UglyToad.PdfPig.Fonts.InvalidFontFormatException
+            or SharpCompress.Common.InvalidFormatException => true,
+        _ => false
+    };
 
     private static ContentExtractionResult Truncated(StringBuilder text)
         => new(text.ToString(), false, "Document exceeds the extracted text limit.");

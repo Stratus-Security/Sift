@@ -24,6 +24,8 @@ public partial class ContentExtractor
         internal long ExpandedBytes;
         internal HashSet<string> Attachments { get; } = new(StringComparer.Ordinal);
         internal Stopwatch Elapsed { get; } = Stopwatch.StartNew();
+        internal Exception? FailureException;
+        internal bool HasUnexpectedFailure;
     }
 
     private static ContentExtractionResult ExtractBinaryWorkbook(Stream source)
@@ -126,7 +128,7 @@ public partial class ContentExtractor
     {
         try { return ExtractAttachmentCore(input, extension); }
         catch (Exception ex) when (!(ex is OperationCanceledException && CurrentExtraction.Value?.Cancellation.IsCancellationRequested == true))
-        { return Failure(ex.Message); }
+        { return Failure(ex); }
     }
 
     private static ContentExtractionResult ExtractAttachmentCore(Stream input, string extension)
@@ -180,7 +182,7 @@ public partial class ContentExtractor
             }
             return Failure("Embedded content format is unsupported.");
         }
-        catch (Exception ex) when (!(ex is OperationCanceledException && state.Cancellation.IsCancellationRequested)) { return Failure(ex.Message); }
+        catch (Exception ex) when (!(ex is OperationCanceledException && state.Cancellation.IsCancellationRequested)) { return Failure(ex); }
         finally { state.Depth--; }
     }
 

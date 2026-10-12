@@ -525,7 +525,8 @@ public class RemoteDriveScanner
 
                 if (!scanResult.IsComplete)
                 {
-                    failureLog.Record("Content extraction or archive inspection was incomplete for", item.Path, detail: scanResult.IncompleteReason);
+                    failureLog.Record("Content extraction or archive inspection was incomplete for", item.Path,
+                        expected: !scanResult.HasUnexpectedInspectionFailure, detail: scanResult.IncompleteReason);
                     return RemoteScanOutcome.Failed;
                 }
                 return RemoteScanOutcome.Completed;

@@ -192,7 +192,7 @@ public sealed class ZipArchiveScannerTests : IDisposable
         Assert.Empty(result.Issues);
         Assert.Contains(
             logger.Entries,
-            entry => entry.Level == LogLevel.Warning
+            entry => entry.Level == LogLevel.Debug
                 && entry.Message.Contains("Skipped 1 unsafe", StringComparison.Ordinal));
     }
 
@@ -216,7 +216,7 @@ public sealed class ZipArchiveScannerTests : IDisposable
         Assert.Empty(result.Issues);
         Assert.Contains(
             logger.Entries,
-            entry => entry.Level == LogLevel.Warning
+            entry => entry.Level == LogLevel.Debug
                 && entry.Message.Contains("central directory", StringComparison.Ordinal));
     }
 
@@ -333,7 +333,7 @@ public sealed class ZipArchiveScannerTests : IDisposable
         Assert.Empty(result.Issues);
         Assert.Contains(
             logger.Entries,
-            entry => entry.Level == LogLevel.Warning
+            entry => entry.Level == LogLevel.Debug
                 && entry.Message.Contains("shared archive-tree safety limits", StringComparison.Ordinal));
     }
 
@@ -357,7 +357,7 @@ public sealed class ZipArchiveScannerTests : IDisposable
         Assert.Empty(result.Issues);
         Assert.Contains(
             logger.Entries,
-            entry => entry.Level == LogLevel.Warning
+            entry => entry.Level == LogLevel.Debug
                 && entry.Message.Contains("Skipped 1 unsafe", StringComparison.Ordinal));
     }
 
@@ -380,7 +380,7 @@ public sealed class ZipArchiveScannerTests : IDisposable
         Assert.Empty(result.Issues);
         Assert.Contains(
             logger.Entries,
-            entry => entry.Level == LogLevel.Warning
+            entry => entry.Level == LogLevel.Debug
                 && entry.Message.Contains("shared archive-tree safety limits", StringComparison.Ordinal));
     }
 
@@ -407,7 +407,7 @@ public sealed class ZipArchiveScannerTests : IDisposable
         Assert.Empty(result.Issues);
         Assert.Contains(
             logger.Entries,
-            entry => entry.Level == LogLevel.Warning
+            entry => entry.Level == LogLevel.Debug
                 && entry.Message.Contains("buffering limit", StringComparison.Ordinal));
     }
 
@@ -469,7 +469,7 @@ public sealed class ZipArchiveScannerTests : IDisposable
         Assert.Empty(result.Issues);
         Assert.Contains(
             logger.Entries,
-            entry => entry.Level == LogLevel.Warning
+            entry => entry.Level == LogLevel.Debug
                 && entry.Message.Contains("buffering limit", StringComparison.Ordinal));
     }
 

@@ -39,7 +39,7 @@ public partial class ContentExtractor
             }
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && CurrentExtraction.Value!.Cancellation.IsCancellationRequested))
-        { return new(text.ToString(), false, ex.Message); }
+        { RecordExtractionException(ex); return new(text.ToString(), false, ex.Message); }
         finally { reader?.Dispose(); archive?.Dispose(); }
         return new(text.ToString(), complete, complete ? null : "Some embedded archive entries could not be inspected.");
     }

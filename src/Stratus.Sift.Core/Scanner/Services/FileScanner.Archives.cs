@@ -79,6 +79,7 @@ public partial class FileScanner
             // exception in diagnostics and return a useful reason without a stack.
             _logger.LogDebug(ex, "Could not completely inspect archive {ArchivePath}.", archivePath);
             result.IsComplete = false;
+            result.HasUnexpectedInspectionFailure |= !ContentExtractor.IsExpectedExtractionException(ex);
             result.IncompleteReason = ex is SharpCompress.Common.InvalidFormatException
                 ? "The file contents were not recognized as a supported archive. The extension is a hint; the file may be empty, truncated, mislabeled, or use an unsupported archive variant."
                 : "Archive inspection failed: " + ex.Message.Replace('\r', ' ').Replace('\n', ' ');

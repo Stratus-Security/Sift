@@ -8,8 +8,11 @@ public class ScanResult
 
     public IEnumerable<ScanFinding> Issues { get; set; } = Array.Empty<ScanFinding>();
 
-    /// <summary>False when archive content could not be inspected because of errors or traversal limits.</summary>
+    /// <summary>False when document or archive content could not be fully inspected.</summary>
     public bool IsComplete { get; set; } = true;
+
+    /// <summary>True when incomplete inspection includes an unexpected scanner failure.</summary>
+    public bool HasUnexpectedInspectionFailure { get; set; }
 
     /// <summary>A concise explanation when inspection is incomplete.</summary>
     public string? IncompleteReason { get; set; }
