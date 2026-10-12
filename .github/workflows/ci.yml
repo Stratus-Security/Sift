@@ -217,9 +217,18 @@ jobs:
         run: |
           $tag = "v$env:RELEASE_VERSION"
           $assets = @(Get-ChildItem 'artifacts/release' -File | Sort-Object Name | ForEach-Object FullName)
+          $changes = [System.IO.File]::ReadAllText('CHANGELOG.md')
+          $unreleased = [regex]::Match($changes, '(?ms)^## Unreleased[ \t]*\r?\n(?<notes>.*?)(?=^## |\z)')
+          if (-not $unreleased.Success -or [string]::IsNullOrWhiteSpace($unreleased.Groups['notes'].Value)) {
+            throw 'CHANGELOG.md must contain non-empty Unreleased notes.'
+          }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'sift-release-notes.md'
+          $notes = $unreleased.Groups['notes'].Value.Trim() + "`n`nFull change history: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CHANGELOG.md`n"
+          [System.IO.File]::WriteAllText($notesPath, $notes, [System.Text.UTF8Encoding]::new($false))
           if (gh release view $tag 2>$null) {
             gh release upload $tag @assets --clobber
+            gh release edit $tag --notes-file $notesPath
           }
           else {
-            gh release create $tag @assets --target $env:GITHUB_SHA --generate-notes --title "Stratus Sift $env:RELEASE_VERSION"
+            gh release create $tag @assets --target $env:GITHUB_SHA --generate-notes --notes-file $notesPath --title "Stratus Sift $env:RELEASE_VERSION"
           }

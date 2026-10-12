@@ -13,6 +13,8 @@ dotnet test .\Stratus.Sift.slnx --configuration Release --no-build
 
 By contributing, you confirm that you have the right to submit the work under the repository's AGPL-3.0-only licence.
 
+Record user-visible upgrades and fixes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md), and update the relevant README examples or coverage limits. The release workflow includes those notes in GitHub release descriptions. Build outputs, local scan results and tenant-validation logs belong in Git-ignored local directories such as `artifacts/`; keep required, licensed test fixtures under `tests/`.
+
 ## How to add a connector
 To add a connector, simply add a folder under src/Status.Sift.Connectors for the service, keep all your code in there and implement the interfaces: IConnector, IConnectorDiscoveryReportProvider, IConnectorCheckpointScopeProvider.
 

@@ -18,20 +18,22 @@ The quickest way, if you're familiar with Snaffler, is:
 
 For more advanced commands, check out the [how to](#how-do) section below. It's worth a look.
 
+Recent upgrades expand Microsoft 365 service coverage, Office and archive extraction, network target files, and reliable resume handling. See the [changelog](CHANGELOG.md) for the complete upgrade summary and validation limits. Normal scans do not require Ollama; local LLM filtering runs only when explicitly enabled.
+
 ## Why make this? Is this Snaffler?
 Like most things we make, Sift is a tool developed out of frustration. For a while we used a custom fork of Snaffler like many in the industry, but ultimately it became harder to continue maintaining the fork than it was to just make it from scratch.
 
 Sift was made with performance and extensibility in mind, to name a few great improvements over existing solutions:
 - Self-contained Native AOT executables with no separate .NET runtime installation.
-- Fewer false positives: Custom code-based validators and LLM filtering mean far fewer false positives.
-- Connector flexibility: It's modular to allow scanning anything with a small adapter (currently supports local drives, local networks and subnets, AD, SharePoint, Slack and Atlassian (Jira and Confluence)). Suggestions for more are welcome, also see the [contribution docs](/CONTRIBUTING.md)!
+- Fewer false positives: Code-based validators refine matches, with optional local LLM filtering.
+- Connector flexibility: Scan local files, network target lists and subnets, AD, Microsoft 365 storage and service workloads, Slack, Jira and Confluence. See [Microsoft 365 coverage](#additional-microsoft-365-workloads) for supported services and access requirements, or the [contribution docs](/CONTRIBUTING.md) to add a connector.
 - Resumability: Every scan command can continue from durable checkpoints, so an interrupted scan only repeats a small amount of work.
 - Deeper inspection: The tool checks both the head and tail of the document instead of just a smaller head.
 - Performance: Local and SMB scans use a bounded high-throughput pipeline with compiled rules and reusable scan state. See [Benchmarks](#benchmarks) for the test method and measured results.
 - Explicit authentication: Use the current identity, a password, Kerberos, or an NT hash for targeted SMB scans. Kerberos is preferred for domain accounts, with controlled NTLM fallback and a strict Kerberos mode.
 - Safety features: Dodges unsynced OneDrive files instead of filling up a server's drives by accessing them all... hypothetically.
     - If you're worried about coverage, OneDrive is backed by SharePoint, so scanning SharePoint is better than scanning local drives :D
-- File support: You can optionally include binary files such as Word documents. Support isn't perfect yet, but you can't have everything!
+- File support: Enable `--binary` for PDF, Word, Excel, PowerPoint, OneNote and supported legacy Office documents, including embedded content. See [binary documents](#binary-documents) for formats, limits and OCR requirements.
 - AI: We love some AI, but we also love privacy. And cake. The data gathered by Sift is extremely sensitive, so AI filtering uses only local LLMs to remove false positives.
 - Cross-platform: The tool works on macOS, Windows and Linux (with varying feature support, of course!).
 - Throttling: The pentesting CLI uses the available machine by default. Use `--threads` and `--max-read-mib-per-second` when scanning a sensitive production target.
@@ -52,7 +54,7 @@ Commands:
   local      Scan a local folder
   domain     Crawl the current Active Directory domain by auto-discovering accessible SMB shares.
   network    Crawl SMB targets on a subnet, a single device, or from a target file.
-  m365       Scan Microsoft 365 content, including SharePoint, OneDrive, and Teams channel files
+  m365       Scan Microsoft 365 storage and all supported service workloads using available access
   slack      Scan accessible Slack channel messages and attachments
   atlassian  Scan accessible Jira projects and Confluence pages, blog posts, comments, and attachments
   analyze    Replay saved JSON findings and optionally re-run LLM validation offline
@@ -209,9 +211,9 @@ Sift includes commands for:
 
 - Local files and folders.
 - Mounted filesystems, mapped drives, and Windows UNC shares.
-- Host and subnet-based SMB discovery, with Kerberos, password-based NTLM, and NTLMv2 pass-the-hash support.
+- Host, subnet and line-delimited target-file SMB discovery, with Kerberos, password-based NTLM, and NTLMv2 pass-the-hash support.
 - Active Directory discovery on Windows and Linux.
-- Microsoft 365 content in SharePoint, OneDrive and Teams channel files.
+- Microsoft 365 storage and service content, including SharePoint, OneDrive, Teams, Planner, To Do, OneNote, targeted shared mailboxes, SharePoint Embedded, Viva Engage, Power BI and Dataverse-backed Power Platform sources. Available APIs and access determine coverage; personal email is excluded.
 - Slack messages and attachments.
 - Atlassian Cloud content in Jira and Confluence.
 
@@ -248,6 +250,8 @@ Unseeded delegated scans discover the signed-in user's OneDrive and supplement s
 
 Sharing inspection records permission identities, roles, inheritance, author/creator identity, and `Public`, `External`, `Organization`, `Restricted`, or `Unknown` exposure. Directory users and transitive group members are checked for guest access; SharePoint groups use native membership APIs. Delegated Graph permission responses can be limited to grants visible to the caller, so restricted exposure requires native permission reconciliation. Unavailable permissions preserve content findings but leave items incomplete. Sharing and field/version sources are re-enumerated on resume, while content/version fingerprints avoid downloading unchanged files again.
 
+Unavailable Graph directory principals do not stop native permission reconciliation when that reconciliation is required and available. Sharing remains unknown/incomplete if native access cannot resolve the assessment. Graph's current file version is scanned through the main file; supplemental history includes only earlier versions, avoiding the API's rejected current-version download. Native change feeds normalize CAML paths and finish rowset continuation pages before advancing change checkpoints.
+
 The built-in SharePoint-native popup login can read SharePoint content and native permissions, but cannot request the Microsoft Graph directory permissions needed to inspect Entra group members. Sharing through those groups remains `Unknown` and incomplete with that login; signing in again does not expand its permissions. `ReadSharing=false` disables sharing inspection when validating content alone, so a successful run with that setting does not establish complete sharing coverage.
 
 Expected access denials, disappeared files, and locked SMB files use debug diagnostics instead of per-item warnings. Incomplete work still produces a partial scan result and remains eligible for retry; skipped checkpoint boundaries do not generate repeated warnings. Unexpected item failures produce at most eight warning samples per drive plus a summary. The scanned counter includes completed content processing even when sharing inspection is unavailable, while the resume journal records only fully completed items. Native generic-list scanning excludes document libraries because their file-backed drives already scan those files and fields.
@@ -266,7 +270,7 @@ Microsoft 365 resume records use server file versions to detect same-size edits.
 
 ### Additional Microsoft 365 workloads
 
-The m365 command attempts storage and every implemented service adapter by default, using the signed-in user's or application's existing access. No workload opt-in is required. Use ExcludeWorkloads through --config to omit services, or Workloads=storage for storage alone. Workloads can also restrict the scan to a comma-separated list from teams,planner,todo,onenote,sharedmail,embedded,engage,powerbi,powerplatform. Set ScanStorage=false for a workload-only run. File/site targets limit storage discovery; workload targets are configured separately.
+The `m365` command attempts storage and every implemented service adapter by default, using the signed-in user's or application's existing access. No workload opt-in is required. Use `ExcludeWorkloads` through `--config` to omit services, or `Workloads=storage` for storage alone. `Workloads` can also restrict the scan to a comma-separated list from `teams,planner,todo,onenote,sharedmail,embedded,engage,powerbi,powerplatform`. Set `ScanStorage=false` for a workload-only run. File/site targets limit storage discovery; workload targets are configured separately.
 
 | Workload | Content inspected | Scope limits |
 | --- | --- | --- |
