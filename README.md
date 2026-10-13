@@ -364,7 +364,7 @@ Pass a rule directory to any scan command with `--rules`:
 
 Sift reads every `.json` file below that directory. A file may contain one rule or an array of rules. File and folder names are only for organisation. Comments, trailing commas and case-insensitive property names are accepted.
 
-The custom directory is the complete catalogue for that scan. It replaces the bundled rules rather than adding to them. Include every sifting rule and ignore rule that you want to use. If Sift cannot load any sifting rules, it falls back to the bundled catalogue.
+The custom directory is the complete catalogue for that scan. It replaces the bundled rules rather than adding to them. Include every sifting rule and ignore rule that you want to use. If Sift cannot load any sifting rules, it uses the bundled sifting rules and retains any custom ignore rules.
 
 ### Example custom rule
 

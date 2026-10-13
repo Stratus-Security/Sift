@@ -299,6 +299,12 @@ internal sealed partial class SmbDiscoveryService
         return shares;
     }
 
+    internal static bool ShouldIncludeShare(
+        string host,
+        string shareName,
+        Func<string, bool>? shouldPruneDirectory)
+        => !(shouldPruneDirectory?.Invoke($@"\\{host}\{shareName}") ?? false);
+
     internal Task<IReadOnlyList<string>> EnumerateDomainHostsForScanAsync(
         CliWindowsCredential? credential,
         bool strictKerberos,

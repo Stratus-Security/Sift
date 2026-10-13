@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Stratus.Sift.FileSystem;
 using Stratus.Sift.Core.Enums;
 using Stratus.Sift.Core.Models;
+using Stratus.Sift.Scanner.Services;
 using Stratus.Sift.Connectors.Interfaces;
 using Stratus.Sift.Connectors.Atlassian;
 using Stratus.Sift.Connectors.Services;
@@ -1252,6 +1253,21 @@ public class CliNetworkScanTests
         var selected = SmbDiscoveryService.SelectSharesForCoverage(["ADMIN$", "C$", "Shared"]);
 
         Assert.Equal(["C$", "Shared"], selected);
+    }
+
+    [Fact]
+    public void ShouldIncludeShare_ExcludesIgnoredShareRootsBeforeSmbDiscovery()
+    {
+        var ignoreRules = new List<IgnoreRule>
+        {
+            new() { Pattern = "C$", MatchTarget = RuleTarget.ShareName },
+            new() { Pattern = "ADMIN$", MatchTarget = RuleTarget.ShareName }
+        };
+        bool ShouldPrune(string path) => IgnoreRuleEvaluator.ShouldPruneDirectory(path, ignoreRules);
+
+        Assert.False(SmbDiscoveryService.ShouldIncludeShare("server", "C$", ShouldPrune));
+        Assert.False(SmbDiscoveryService.ShouldIncludeShare("server", "ADMIN$", ShouldPrune));
+        Assert.True(SmbDiscoveryService.ShouldIncludeShare("server", "Shared", ShouldPrune));
     }
 
     [Fact]

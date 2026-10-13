@@ -20,6 +20,27 @@ public sealed class UnifiedRuleTests : IDisposable
     }
 
     [Fact]
+    public async Task IgnoreOnlyDirectory_RetainsCustomIgnoresWithBundledSiftingRules()
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(_directory, "ignore-shares.json"),
+            """
+            [
+              { "Pattern": "C$", "MatchTarget": "ShareName", "IsEnabled": true },
+              { "Pattern": "ADMIN$", "MatchTarget": "ShareName", "IsEnabled": true }
+            ]
+            """);
+
+        var catalog = await CliRuleCatalogLoader.LoadAsync(_directory, NullLogger.Instance);
+
+        Assert.NotEmpty(catalog.Classifiers);
+        Assert.Contains(catalog.IgnoreRules, rule => rule.Pattern == "C$");
+        Assert.Contains(catalog.IgnoreRules, rule => rule.Pattern == "ADMIN$");
+        Assert.True(IgnoreRuleEvaluator.ShouldPruneDirectory(@"\\server\C$", catalog.IgnoreRules));
+        Assert.True(IgnoreRuleEvaluator.ShouldPruneDirectory(@"\\server\ADMIN$", catalog.IgnoreRules));
+    }
+
+    [Fact]
     public async Task UnifiedRule_LoadsDetectionAndReportingSettingsTogether()
     {
         await File.WriteAllTextAsync(

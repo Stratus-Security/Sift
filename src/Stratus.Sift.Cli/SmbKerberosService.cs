@@ -185,6 +185,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         var candidateShares = shareNames
             .Where(name => SmbDiscoveryService.IsCandidateShare(name, 0))
             .Where(name => hostTarget.Share is null || name.Equals(hostTarget.Share, StringComparison.OrdinalIgnoreCase))
+            .Where(name => SmbDiscoveryService.ShouldIncludeShare(connection.DisplayHost, name, shouldPruneDirectory))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         result.SharesListed += candidateShares.Length;

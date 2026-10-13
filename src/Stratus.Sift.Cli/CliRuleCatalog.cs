@@ -60,9 +60,14 @@ internal static class CliRuleCatalogLoader
                 "It remains supported for compatibility; new rules should use the unified SiftingRule format.");
         }
 
-        return catalog.Classifiers.Count == 0
-            ? await LoadBundledDefaultsAsync(logger, cancellationToken)
-            : catalog;
+        if (catalog.Classifiers.Count == 0)
+        {
+            var bundledCatalog = await LoadBundledDefaultsAsync(logger, cancellationToken);
+            bundledCatalog.IgnoreRules.AddRange(catalog.IgnoreRules);
+            return bundledCatalog;
+        }
+
+        return catalog;
     }
 
     private static async Task<CliRuleCatalog> LoadBundledDefaultsAsync(

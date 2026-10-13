@@ -593,6 +593,10 @@ internal static class CliScanRunner
                 return CliExitCodes.Failed;
             }
 
+            roots = roots
+                .Where(root => !IgnoreRuleEvaluator.ShouldPruneDirectory(root, session.IgnoreRules))
+                .ToArray();
+
             if (discoveryProgress.TimedOutServers > 0)
             {
                 display.IncrementErrors();
