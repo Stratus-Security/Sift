@@ -19,7 +19,7 @@ public class CliOutputCaptureTests
             capture.RecordFinding(new ScanFinding
             {
                 RuleName = "Example",
-                Owner = "alice@example.test",
+                Owner = @"STRATUS\alice",
                 LastEditedAtUtc = edited
             }, "https://example.test/file", null);
             await capture.WriteAsync(Summary(filesScanned: 1));
@@ -31,7 +31,7 @@ public class CliOutputCaptureTests
             Assert.False(finding.TryGetProperty("LastEditedAtUtc", out _));
             if (verbose)
             {
-                Assert.Equal("alice@example.test", finding.GetProperty("Owner").GetString());
+                Assert.Equal(@"STRATUS\alice", finding.GetProperty("Owner").GetString());
                 Assert.Equal(edited.ToLocalTime(), finding.GetProperty("LastEditedAtLocal").GetDateTimeOffset());
             }
         }
