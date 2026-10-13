@@ -62,13 +62,13 @@ internal sealed class CliSnafflerFormatter
         return FormatInfo(summary, timestampUtc);
     }
 
-    internal CliRenderedLine FormatFinding(ScanFinding finding, string resourcePath, CliFindingDisplayContext? context = null, DateTimeOffset? timestampUtc = null)
+    internal CliRenderedLine FormatFinding(ScanFinding finding, string resourcePath, CliFindingDisplayContext? context = null, DateTimeOffset? timestampUtc = null, bool verbose = false)
     {
         var kind = InferResultKind(resourcePath, context);
         var triage = GetTriage(finding);
         var timestamp = timestampUtc ?? DateTimeOffset.UtcNow;
 
-        return kind switch
+        var rendered = kind switch
         {
             CliSnafflerResultKind.Share => FormatShareLikeResult(
                 CliSnafflerLogKind.Share,
@@ -83,6 +83,9 @@ internal sealed class CliSnafflerFormatter
                 timestamp),
             _ => FormatFileResult(finding, resourcePath, context, triage, timestamp),
         };
+        if (!verbose) return rendered;
+        var suffix = $" Owner: {NormalizeInline(finding.Owner)} | Last edit (local): {finding.LastEditedAtUtc?.ToLocalTime().ToString("O") ?? "Unknown"}";
+        return new CliRenderedLine(rendered.PlainText + suffix, [.. rendered.Segments, new CliStyledSegment(suffix)]);
     }
 
     private CliRenderedLine FormatMessage(CliSnafflerLogKind kind, string message, DateTimeOffset? timestampUtc)
@@ -328,7 +331,9 @@ internal sealed class CliSnafflerFormatter
 
     private static string FormatTimestamp(DateTime? timestampUtc)
     {
-        return timestampUtc.HasValue ? timestampUtc.Value.ToUniversalTime().ToString("u") : "?";
+        return timestampUtc.HasValue
+            ? timestampUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:sszzz")
+            : "?";
     }
 
     private static string NormalizeInline(string? value)

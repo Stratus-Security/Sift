@@ -79,6 +79,7 @@ Options:
   -r, --rules <rules>                           Path to a folder containing sifting rules (JSON). If not provided, bundled defaults are used.
   -o, --output <output>                         Write scan output to a file. Resumed scans append; new scans replace it.
   -f, --output-format <output-format>           Output file format. Supported values: cli, json.
+      --verbose                                 Include owner and last edit time in findings (CLI text and JSON).
   --resume                                      Continue from durable checkpoints saved by an earlier scan with the same target, credentials, rules, and scan settings.
   -u, --username <username>                     Windows username for SMB/LDAP impersonation. Accepts user, domain\user, or user@domain.
   -p, --password <password>                     Windows password for SMB/LDAP impersonation.
@@ -195,6 +196,8 @@ Analyze results in a terminal without rescanning, translating to snafflers outpu
 ```powershell
 .\sift.exe analyze --input findings.json --snaffler
 ```
+
+Add `--verbose` to include owner and last edit in findings. CLI text shows the machine's local time and UTC offset; Snaffler-style timestamps also use local time. JSON uses `LastEditedAtLocal`; `analyze` can still read older results with `LastEditedAtUtc`. An unavailable last edit is shown as `Unknown` in CLI text and omitted from JSON.
 
 Continue a previous or incomplete scan:
 ```powershell

@@ -19,6 +19,7 @@ internal sealed class CliOutputCapture
 
     private readonly string _path;
     private readonly CliOutputFormat _format;
+    private readonly bool _verbose;
     private readonly string _title;
     private readonly string _temporaryPath;
     private readonly string _eventSpoolPath;
@@ -34,10 +35,11 @@ internal sealed class CliOutputCapture
         });
     private readonly Task _writerTask;
 
-    internal CliOutputCapture(string path, CliOutputFormat format, CliOutputStyle style, string title, bool append = false)
+    internal CliOutputCapture(string path, CliOutputFormat format, CliOutputStyle style, string title, bool append = false, bool verbose = false)
     {
         _path = path;
         _format = format;
+        _verbose = verbose;
         _title = title;
         var suffix = $".{Environment.ProcessId}.{Guid.NewGuid():N}";
         _temporaryPath = path + suffix + ".partial";
@@ -90,7 +92,8 @@ internal sealed class CliOutputCapture
                 Severity = finding.Severity.ToString(),
                 ConfidenceLevel = finding.ConfidenceLevel.ToString(),
                 Exposure = finding.Exposure,
-                Owner = finding.Owner,
+                Owner = _verbose ? finding.Owner : null,
+                LastEditedAtLocal = _verbose ? finding.LastEditedAtUtc?.ToLocalTime() : null,
                 IsMetadata = CliFindingFormatter.IsMetadataFinding(finding),
                 Evidence = evidence,
                 RedactedValue = finding.RedactedValue,
@@ -440,4 +443,4 @@ internal enum CliOutputStyle
     Snaffler
 }
 
-internal sealed record CliOutputOptions(string? Path, CliOutputFormat Format, CliOutputStyle Style, bool Append = false);
+internal sealed record CliOutputOptions(string? Path, CliOutputFormat Format, CliOutputStyle Style, bool Append = false, bool Verbose = false);

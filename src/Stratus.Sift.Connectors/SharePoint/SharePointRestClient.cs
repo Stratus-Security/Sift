@@ -629,7 +629,8 @@ internal sealed partial class SharePointRestClient
                 false,
                 false,
                 size,
-                TryGetStringProperty(element, "ETag") ?? TryGetStringProperty(element, "TimeLastModified")));
+                TryGetStringProperty(element, "ETag") ?? TryGetStringProperty(element, "TimeLastModified"),
+                TryGetStringProperty(element, "TimeLastModified")));
         }
 
         if (missingFolder) return;
@@ -747,7 +748,8 @@ internal sealed partial class SharePointRestClient
                 false,
                 size,
                 ExtractLookupValue(GetAttributeValue(row, "owshiddenversion"))
-                    ?? ExtractLookupValue(GetAttributeValue(row, "Modified"))));
+                    ?? ExtractLookupValue(GetAttributeValue(row, "Modified")),
+                ExtractLookupValue(GetAttributeValue(row, "Modified"))));
         }
 
         return items;
@@ -978,7 +980,8 @@ internal sealed partial class SharePointRestClient
         bool IsDirectory,
         bool IsDeleted,
         long? Size,
-        string? Version = null);
+        string? Version = null,
+        string? LastModified = null);
 
     internal sealed record RestChangeSet(
         IReadOnlyList<RestFileItem> Items,

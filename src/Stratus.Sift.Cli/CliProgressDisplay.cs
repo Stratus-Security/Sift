@@ -15,6 +15,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
     private readonly Task? _renderTask;
     private readonly string _title;
     private readonly CliOutputStyle _style;
+    private readonly bool _verbose;
     private readonly bool _showBanner;
     private readonly CliOutputCapture? _outputCapture;
     private readonly CliSnafflerFormatter _snafflerFormatter = new();
@@ -42,6 +43,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
     private DateTimeOffset _lastPlainStatusRenderUtc = DateTimeOffset.MinValue;
     private CliDiscoverySnapshot? _discoverySnapshot;
     private bool _discoveryActive;
+    internal bool Verbose => _verbose;
     private int _discoveryWarnings;
     private string _lastPlainPhase = string.Empty;
 
@@ -52,6 +54,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
     {
         _title = title;
         _style = outputOptions?.Style ?? CliOutputStyle.Default;
+        _verbose = outputOptions?.Verbose ?? false;
         _showBanner = showBanner;
         if (!string.IsNullOrWhiteSpace(outputOptions?.Path))
         {
@@ -60,7 +63,8 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
                 outputOptions.Format,
                 _style,
                 title,
-                outputOptions.Append);
+                outputOptions.Append,
+                _verbose);
         }
 
         _renderCts = new CancellationTokenSource();
@@ -278,7 +282,7 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
                 ? null
                 : CliFindingFormatter.FormatFindingEvidence(finding, resourcePath);
             _outputCapture?.RecordFinding(finding, resourcePath, evidence);
-            WriteRenderedLine(_snafflerFormatter.FormatFinding(finding, resourcePath, context), "finding");
+            WriteRenderedLine(_snafflerFormatter.FormatFinding(finding, resourcePath, context, verbose: _verbose), "finding");
             return;
         }
 
@@ -312,6 +316,13 @@ internal sealed class CliProgressDisplay : IAsyncDisposable
             }
 
             lines = [.. findingLines];
+        }
+
+        if (_verbose)
+        {
+            lines = [.. lines,
+                $"  Owner: {finding.Owner}",
+                $"  Last edit (local): {finding.LastEditedAtUtc?.ToLocalTime().ToString("O") ?? "Unknown"}"];
         }
 
         _outputCapture?.RecordFinding(finding, resourcePath, evidenceText);

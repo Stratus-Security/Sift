@@ -54,6 +54,7 @@ internal static class CliCommandFactory
             Description = "Render console and CLI text output in Snaffler's logging style."
         };
         snafflerModeOption.Aliases.Add("--snaffler");
+        var verboseOption = new Option<bool>("--verbose") { Description = "Include owner and last edit time in findings." };
 
         var llmValidateOption = new Option<bool>("--llm-validate")
         {
@@ -98,6 +99,7 @@ internal static class CliCommandFactory
             ollamaModelOption,
             llmTimeoutSecondsOption,
             snafflerModeOption,
+            verboseOption,
             outputOption,
             outputFormatOption
         };
@@ -108,7 +110,7 @@ internal static class CliCommandFactory
                 result.GetValue(inputOption)!,
                 result.GetValue(sensitiveOnlyOption),
                 BuildAnalyzeLlmOptions(result, llmValidateOption, sensitiveOnlyOption, ollamaUrlOption, ollamaModelOption, llmTimeoutSecondsOption),
-                BuildOutputOptions(result, outputOption, outputFormatOption, snafflerModeOption),
+                BuildOutputOptions(result, outputOption, outputFormatOption, snafflerModeOption, verboseOption),
                 cancellationToken), cancellationToken);
         });
 
@@ -137,6 +139,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
             commonOptions.SnafflerMode,
+            commonOptions.Verbose,
             commonOptions.NoBanner,
             commonOptions.Rules,
             commonOptions.Output,
@@ -202,6 +205,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
             commonOptions.SnafflerMode,
+            commonOptions.Verbose,
             commonOptions.NoBanner,
             commonOptions.Rules,
             commonOptions.Output,
@@ -324,6 +328,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
             commonOptions.SnafflerMode,
+            commonOptions.Verbose,
             commonOptions.NoBanner,
             commonOptions.Rules,
             commonOptions.Output,
@@ -422,6 +427,7 @@ internal static class CliCommandFactory
             options.OllamaModel,
             options.LlmTimeoutSeconds,
             options.SnafflerMode,
+            options.Verbose,
             options.NoBanner,
             options.Rules,
             options.Output,
@@ -453,7 +459,7 @@ internal static class CliCommandFactory
                 result.GetValue(options.EnumOnly),
                 result.GetValue(options.Rules),
                 BuildLlmOptions(result, options.LlmValidate, options.LlmSensitiveOnly, options.OllamaUrl, options.OllamaModel, options.LlmTimeoutSeconds),
-                BuildOutputOptions(result, options.Output, options.OutputFormat, options.SnafflerMode),
+                BuildOutputOptions(result, options.Output, options.OutputFormat, options.SnafflerMode, options.Verbose),
                 fullScan: !result.GetValue(options.Resume),
                 cancellationToken: cancellationToken,
                 showBanner: !result.GetValue(options.NoBanner)), cancellationToken);
@@ -526,7 +532,7 @@ internal static class CliCommandFactory
         {
             tokenOption, browserOption, workspaceUrlOption, browserChannelOption, channelOption, fullScanOption, configOption, common.Resume,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
-            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode,
+            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode, common.Verbose,
             common.NoBanner, common.Rules, common.Output, common.OutputFormat
         };
         AddResumeValidator(command, common.Resume, common.EnumOnly);
@@ -649,7 +655,7 @@ internal static class CliCommandFactory
             urlOption, emailOption, cloudIdOption, tokenOption, projectOption, spaceOption, jqlOption,
             fullScanOption, common.Resume, configOption,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
-            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode,
+            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode, common.Verbose,
             common.NoBanner, common.Rules, common.Output, common.OutputFormat
         };
         AddResumeValidator(command, common.Resume, common.EnumOnly);
@@ -789,6 +795,7 @@ internal static class CliCommandFactory
             Description = "Render console and CLI text output in Snaffler's logging style."
         };
         snafflerModeOption.Aliases.Add("--snaffler");
+        var verboseOption = new Option<bool>("--verbose") { Description = "Include owner and last edit time in findings." };
 
         var noBannerOption = new Option<bool>("--no-banner")
         {
@@ -818,6 +825,7 @@ internal static class CliCommandFactory
             ollamaModelOption,
             llmTimeoutSecondsOption,
             snafflerModeOption,
+            verboseOption,
             noBannerOption,
             rulesOption,
             outputOption,
@@ -1264,6 +1272,7 @@ internal static class CliCommandFactory
             Description = "Render console and CLI text output in Snaffler's logging style."
         };
         snafflerModeOption.Aliases.Add("--snaffler");
+        var verboseOption = new Option<bool>("--verbose") { Description = "Include owner and last edit time in findings." };
 
         var noBannerOption = new Option<bool>("--no-banner")
         {
@@ -1303,6 +1312,7 @@ internal static class CliCommandFactory
             ollamaModelOption,
             llmTimeoutSecondsOption,
             snafflerModeOption,
+            verboseOption,
             noBannerOption,
             rulesOption,
             outputOption,
@@ -1312,7 +1322,7 @@ internal static class CliCommandFactory
 
     private static CliOutputOptions? BuildOutputOptions(ParseResult result, CommonScanOptions options)
     {
-        return BuildOutputOptions(result, options.Output, options.OutputFormat, options.SnafflerMode);
+        return BuildOutputOptions(result, options.Output, options.OutputFormat, options.SnafflerMode, options.Verbose);
     }
 
     private static bool IsValidOutputFormat(string value)
@@ -1321,7 +1331,7 @@ internal static class CliCommandFactory
                string.Equals(value, "json", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static CliOutputOptions? BuildOutputOptions(ParseResult result, Option<string> outputOption, Option<string> outputFormatOption, Option<bool> snafflerModeOption)
+    private static CliOutputOptions? BuildOutputOptions(ParseResult result, Option<string> outputOption, Option<string> outputFormatOption, Option<bool> snafflerModeOption, Option<bool> verboseOption)
     {
         var outputPath = result.GetValue(outputOption);
         var formatValue = result.GetValue(outputFormatOption);
@@ -1332,7 +1342,7 @@ internal static class CliCommandFactory
             ? CliOutputStyle.Snaffler
             : CliOutputStyle.Default;
 
-        return new CliOutputOptions(outputPath, format, style);
+        return new CliOutputOptions(outputPath, format, style, Verbose: result.GetValue(verboseOption));
     }
 
     private static CliLlmOptions? BuildLlmOptions(ParseResult result, CommonScanOptions options)
@@ -1379,6 +1389,7 @@ internal static class CliCommandFactory
         Option<string> OllamaModel,
         Option<int> LlmTimeoutSeconds,
         Option<bool> SnafflerMode,
+        Option<bool> Verbose,
         Option<bool> NoBanner,
         Option<string> Rules,
         Option<string> Output,
@@ -1415,6 +1426,7 @@ internal static class CliCommandFactory
         Option<string> OllamaModel,
         Option<int> LlmTimeoutSeconds,
         Option<bool> SnafflerMode,
+        Option<bool> Verbose,
         Option<bool> NoBanner,
         Option<string> Rules,
         Option<string> Output,

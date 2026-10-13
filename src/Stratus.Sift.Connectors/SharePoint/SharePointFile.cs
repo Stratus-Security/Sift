@@ -41,6 +41,7 @@ public partial class SharePointFile : IRemoteFile, IRemoteFileTraversal, IRemote
     public string WebUrl => _item.WebUrl ?? string.Empty;
     public long? Size => ConvertContent ? null : _item.Size;
     public string? Version => ServerVersion is null ? null : ServerVersion + _sharingVersion + (ConvertContent ? Microsoft365ContentProjection.VersionSuffix : "");
+    public DateTimeOffset? LastEditedAtUtc => _item.LastModifiedDateTime;
     private string? ServerVersion => _item.ETag ?? _item.CTag
         ?? _item.LastModifiedDateTime?.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
     public string? ContentType => _item.File?.MimeType;

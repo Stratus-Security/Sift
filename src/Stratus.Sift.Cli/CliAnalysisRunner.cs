@@ -182,7 +182,8 @@ internal static class CliAnalysisRunner
             Severity = Enum.TryParse<Severity>(finding.Severity, ignoreCase: true, out var severity) ? severity : Severity.Medium,
             ConfidenceLevel = Enum.TryParse<ConfidenceLevel>(finding.ConfidenceLevel, ignoreCase: true, out var confidenceLevel) ? confidenceLevel : ConfidenceLevel.Medium,
             Exposure = finding.Exposure,
-            Owner = finding.Owner,
+            Owner = finding.Owner ?? "Unknown",
+            LastEditedAtUtc = (finding.LastEditedAtLocal ?? finding.LastEditedAtUtc)?.ToUniversalTime(),
             RedactedValue = finding.RedactedValue,
             Snippet = finding.Snippet,
             DetectedAt = finding.DetectedAtUtc,
@@ -373,6 +374,26 @@ internal static class CliAnalysisRunner
             return;
         }
 
+        if (line.StartsWith("Owner: ", StringComparison.Ordinal))
+        {
+            finding.Owner = line["Owner: ".Length..].Trim();
+            return;
+        }
+
+        if (line.StartsWith("Last edit (local): ", StringComparison.Ordinal))
+        {
+            if (DateTimeOffset.TryParse(line["Last edit (local): ".Length..].Trim(), out var lastEdited))
+                finding.LastEditedAtLocal = lastEdited;
+            return;
+        }
+
+        if (line.StartsWith("Last edit (UTC): ", StringComparison.Ordinal))
+        {
+            if (DateTimeOffset.TryParse(line["Last edit (UTC): ".Length..].Trim(), out var lastEdited))
+                finding.LastEditedAtUtc = lastEdited.ToUniversalTime();
+            return;
+        }
+
         if (line.StartsWith("LLM: ", StringComparison.Ordinal))
         {
             ParseDefaultCliLlmLine(line["LLM: ".Length..].Trim(), finding);
@@ -474,6 +495,24 @@ internal static class CliAnalysisRunner
         var matchedValue = parts[2].Trim();
         var resourcePath = line[(pathStart + 1)..pathEnd].Trim();
         var snippet = pathEnd + 1 < line.Length ? line[(pathEnd + 1)..].Trim() : string.Empty;
+        string? owner = null;
+        DateTimeOffset? lastEditedAtUtc = null;
+        const string ownerMarker = " Owner: ";
+        const string localEditMarker = " | Last edit (local): ";
+        const string utcEditMarker = " | Last edit (UTC): ";
+        var editMarker = snippet.Contains(localEditMarker, StringComparison.Ordinal) ? localEditMarker : utcEditMarker;
+        var editIndex = snippet.LastIndexOf(editMarker, StringComparison.Ordinal);
+        if (editIndex >= 0)
+        {
+            var ownerIndex = snippet.LastIndexOf(ownerMarker, editIndex, StringComparison.Ordinal);
+            if (ownerIndex >= 0)
+            {
+                owner = snippet[(ownerIndex + ownerMarker.Length)..editIndex].Trim();
+                if (DateTimeOffset.TryParse(snippet[(editIndex + editMarker.Length)..].Trim(), out var parsed))
+                    lastEditedAtUtc = parsed.ToUniversalTime();
+                snippet = snippet[..ownerIndex].Trim();
+            }
+        }
         if (string.IsNullOrWhiteSpace(classifierName) || string.IsNullOrWhiteSpace(resourcePath))
         {
             return false;
@@ -487,7 +526,9 @@ internal static class CliAnalysisRunner
             Severity = MapSnafflerTriageToSeverity(triage),
             ConfidenceLevel = ConfidenceLevel.Medium.ToString(),
             Exposure = "Unknown",
-            Owner = "Unknown",
+            Owner = owner ?? "Unknown",
+            LastEditedAtLocal = editMarker == localEditMarker ? lastEditedAtUtc?.ToLocalTime() : null,
+            LastEditedAtUtc = editMarker == utcEditMarker ? lastEditedAtUtc : null,
             IsMetadata = string.IsNullOrWhiteSpace(snippet),
             Evidence = string.IsNullOrWhiteSpace(snippet) ? null : snippet,
             RedactedValue = string.IsNullOrWhiteSpace(matchedValue) ? string.Empty : matchedValue,
@@ -531,7 +572,9 @@ internal static class CliAnalysisRunner
         }
 
         var timestampText = line[(hostEnd + 2)..tagStart].Trim();
-        return DateTime.TryParse(timestampText, out detectedAtUtc);
+        if (!DateTimeOffset.TryParse(timestampText, out var detectedAt)) return false;
+        detectedAtUtc = detectedAt.UtcDateTime;
+        return true;
     }
 
     private static List<string> SplitLines(string content)

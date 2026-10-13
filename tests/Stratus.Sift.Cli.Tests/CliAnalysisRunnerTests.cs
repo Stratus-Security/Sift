@@ -89,6 +89,44 @@ public sealed class CliAnalysisRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadAsync_PreservesVerboseCliMetadata()
+    {
+        var inputPath = Path.Combine(_tempDirectory, "verbose.cli");
+        await File.WriteAllTextAsync(inputPath, """
+            Saved scan
+            Finding: Example
+              Risk: Medium
+              Path: /repo/file.txt
+              Owner: alice
+              Last edit (UTC): 2026-10-01T12:30:00.0000000+00:00
+            """);
+
+        var finding = Assert.Single((await CliAnalysisRunner.LoadAsync(inputPath)).FindingsList);
+        Assert.Equal("alice", finding.Owner);
+        Assert.Equal(new DateTimeOffset(2026, 10, 1, 12, 30, 0, TimeSpan.Zero), finding.LastEditedAtUtc);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ReadsLocalVerboseCliMetadata()
+    {
+        var inputPath = Path.Combine(_tempDirectory, "local-verbose.cli");
+        var edited = new DateTimeOffset(2026, 10, 1, 23, 30, 0, TimeSpan.FromHours(11));
+        await File.WriteAllTextAsync(inputPath, $"""
+            Saved scan
+            Finding: Example
+              Risk: Medium
+              Path: /repo/file.txt
+              Owner: alice
+              Last edit (local): {edited:O}
+            """);
+
+        var finding = Assert.Single((await CliAnalysisRunner.LoadAsync(inputPath)).FindingsList);
+        Assert.Equal("alice", finding.Owner);
+        Assert.Equal(edited, finding.LastEditedAtLocal);
+        Assert.Equal(edited.UtcDateTime, CliAnalysisRunner.ToIssue(finding).LastEditedAtUtc?.UtcDateTime);
+    }
+
+    [Fact]
     public async Task RunAnalyzeAsync_SensitiveFinding_ReplaysDedicatedSensitiveReasonLine()
     {
         var inputPath = Path.Combine(_tempDirectory, "input.json");

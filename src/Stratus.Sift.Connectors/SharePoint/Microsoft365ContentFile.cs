@@ -34,6 +34,8 @@ internal sealed class Microsoft365ContentFile : IRemoteFile, IRemoteFileInspecti
     public string WebUrl { get; }
     public long? Size { get; }
     public string? Version => _version == null ? null : _version + _sharingVersion;
+    public DateTimeOffset? LastEditedAtUtc => DateTimeOffset.TryParse(_version, out var modified)
+        ? modified.ToUniversalTime() : null;
     public string? ContentType => null;
     public bool IsDeleted => false;
     public bool IsDirectory => false;

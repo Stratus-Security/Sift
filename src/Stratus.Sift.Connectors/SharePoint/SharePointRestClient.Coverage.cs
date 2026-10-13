@@ -46,7 +46,8 @@ internal sealed partial class SharePointRestClient
                     var identity = String(value, "UniqueId") ?? throw new InvalidDataException("Search file has no stable identity.");
                     var size = long.TryParse(String(value, "Length"), out var bytes) ? bytes : (long?)null;
                     var version = String(value, "ETag") ?? String(value, "TimeLastModified");
-                    result = (site, new(identity, name, decoded, BuildWebUrl(site, decoded), false, false, size, version));
+                    result = (site, new(identity, name, decoded, BuildWebUrl(site, decoded), false, false, size, version,
+                        String(value, "TimeLastModified")));
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested)) { failures++; }
                 if (result.HasValue) yield return result.Value;

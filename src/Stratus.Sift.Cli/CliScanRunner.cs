@@ -1019,6 +1019,8 @@ internal static class CliScanRunner
 
                         var findings = result.Issues as List<ScanFinding> ?? result.Issues.ToList();
                         var validatedFindings = await ValidateFindingsAsync(findings, llmValidator, llmOptions, cancellationToken);
+                        foreach (var finding in validatedFindings)
+                            finding.LastEditedAtUtc = new DateTimeOffset(DateTime.SpecifyKind(entry.Modified, DateTimeKind.Utc));
                         ReportFindings(display, validatedFindings, entry);
                         completed = result.IsComplete;
                         if (!completed)
@@ -1076,6 +1078,13 @@ internal static class CliScanRunner
         }
 
         display.AddFindings(findings.Count);
+        if (display.Verbose)
+        {
+            var owner = new StandardFileSystemEnumerator(Microsoft.Extensions.Logging.Abstractions.NullLogger<StandardFileSystemEnumerator>.Instance)
+                .GetSingleEntry(entry.Path)?.Owner;
+            if (!string.IsNullOrWhiteSpace(owner))
+                foreach (var finding in findings) finding.Owner = owner;
+        }
         var kind = entry.IsDirectory
             ? (entry.Path.StartsWith(@"\\", StringComparison.Ordinal) && IsUncShareRoot(entry.Path)
                 ? CliSnafflerFormatter.CliSnafflerResultKind.Share

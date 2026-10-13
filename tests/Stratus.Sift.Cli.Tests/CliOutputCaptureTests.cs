@@ -1,10 +1,46 @@
 using System.Text.Json;
 using Stratus.Sift.Cli;
+using Stratus.Sift.Core.Models;
 
 namespace Stratus.Sift.Cli.Tests;
 
 public class CliOutputCaptureTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task JsonOutput_OnlyIncludesOwnerAndLastEditWhenVerbose(bool verbose)
+    {
+        var path = CreateTemporaryPath("json");
+        try
+        {
+            var edited = new DateTimeOffset(2026, 10, 1, 12, 30, 0, TimeSpan.Zero);
+            var capture = new CliOutputCapture(path, CliOutputFormat.Json, CliOutputStyle.Default, "Scan", verbose: verbose);
+            capture.RecordFinding(new ScanFinding
+            {
+                RuleName = "Example",
+                Owner = "alice@example.test",
+                LastEditedAtUtc = edited
+            }, "https://example.test/file", null);
+            await capture.WriteAsync(Summary(filesScanned: 1));
+
+            using var json = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+            var finding = json.RootElement.GetProperty("FindingsList")[0];
+            Assert.Equal(verbose, finding.TryGetProperty("Owner", out _));
+            Assert.Equal(verbose, finding.TryGetProperty("LastEditedAtLocal", out _));
+            Assert.False(finding.TryGetProperty("LastEditedAtUtc", out _));
+            if (verbose)
+            {
+                Assert.Equal("alice@example.test", finding.GetProperty("Owner").GetString());
+                Assert.Equal(edited.ToLocalTime(), finding.GetProperty("LastEditedAtLocal").GetDateTimeOffset());
+            }
+        }
+        finally
+        {
+            DeleteOutputFiles(path);
+        }
+    }
+
     [Fact]
     public async Task CliOutput_ResumeAppendsWithoutRemovingExistingContent()
     {

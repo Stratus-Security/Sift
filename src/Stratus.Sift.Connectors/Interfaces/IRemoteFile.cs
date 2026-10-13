@@ -15,6 +15,7 @@ public interface IRemoteFile
     long? Size { get; }
     /// <summary>An opaque server version used to distinguish same-size edits during resume.</summary>
     string? Version => null;
+    DateTimeOffset? LastEditedAtUtc => null;
     /// <summary>False when the API can expose metadata but cannot supply the complete requested content.</summary>
     bool IsContentComplete => true;
     bool SampleLargeContent => true;

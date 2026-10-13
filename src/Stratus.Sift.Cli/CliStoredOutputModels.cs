@@ -1,4 +1,5 @@
 using Stratus.Sift.Core.Enums;
+using System.Text.Json.Serialization;
 
 namespace Stratus.Sift.Cli;
 
@@ -39,7 +40,12 @@ internal sealed class CliOutputFindingRecord
     public string Severity { get; set; } = string.Empty;
     public string ConfidenceLevel { get; set; } = string.Empty;
     public string Exposure { get; set; } = string.Empty;
-    public string Owner { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Owner { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? LastEditedAtUtc { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? LastEditedAtLocal { get; set; }
     public bool IsMetadata { get; set; }
     public string? Evidence { get; set; }
     public string RedactedValue { get; set; } = string.Empty;

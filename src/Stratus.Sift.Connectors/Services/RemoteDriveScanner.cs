@@ -406,6 +406,11 @@ public class RemoteDriveScanner
         CancellationToken cancellationToken)
     {
         var item = scanItem.Item;
+        async Task EmitIssueAsync(ScanFinding issue)
+        {
+            issue.LastEditedAtUtc = item.LastEditedAtUtc;
+            await onIssueFound(issue);
+        }
         var metadataHandled = false;
         async Task ReportFallbackMetadata()
         {
@@ -414,7 +419,7 @@ public class RemoteDriveScanner
             var inspection = item as IRemoteFileInspection;
             await ReportMetadataIssuesAsync(scanItem.MetadataMatches, ScopePolicyMap(item.Path, policyMap),
                 inspection?.Exposure ?? (item.IsExternal ? "External" : "Internal"), GetFindingResourcePath(item),
-                onIssueFound, inspection?.Owner ?? "Cloud", inspection?.AclEntries.ToList());
+                EmitIssueAsync, inspection?.Owner ?? "Cloud", inspection?.AclEntries.ToList());
         }
         try
         {
@@ -491,7 +496,7 @@ public class RemoteDriveScanner
                     foreach (var issue in headScanResult.Issues)
                     {
                         issue.ResourcePath = findingResourcePath;
-                        await onIssueFound(issue);
+                        await EmitIssueAsync(issue);
                     }
 
                     return RemoteScanOutcome.Completed;
@@ -520,7 +525,7 @@ public class RemoteDriveScanner
                 foreach (var issue in scanResult.Issues)
                 {
                     issue.ResourcePath = GetScanFindingResourcePath(item, issue.ResourcePath);
-                    await onIssueFound(issue);
+                    await EmitIssueAsync(issue);
                 }
 
                 if (!scanResult.IsComplete)

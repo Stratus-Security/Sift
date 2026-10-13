@@ -828,7 +828,25 @@ public class CliNetworkScanTests
             context,
             new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero));
 
-        Assert.Equal("[alice@HOST] 2026-03-20 04:05:06Z [File] {Red}<Azure Client Secret|R|client_secret|128B|2026-03-20 01:02:03Z>(C:\\temp\\secret.txt) client_secret = value", line.PlainText);
+        var logged = LocalTimestamp(new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero));
+        var modified = LocalTimestamp(new DateTimeOffset(2026, 3, 20, 1, 2, 3, TimeSpan.Zero));
+        Assert.Equal($"[alice@HOST] {logged} [File] {{Red}}<Azure Client Secret|R|client_secret|128B|{modified}>(C:\\temp\\secret.txt) client_secret = value", line.PlainText);
+    }
+
+    [Fact]
+    public void CliSnafflerFormatter_VerboseFindingIncludesOwnerAndLastEdit()
+    {
+        var edited = new DateTimeOffset(2026, 10, 1, 12, 30, 0, TimeSpan.Zero);
+        var finding = new ScanFinding
+        {
+            RuleName = "Example",
+            Owner = "alice",
+            LastEditedAtUtc = edited
+        };
+        var line = new CliSnafflerFormatter("[alice@HOST]").FormatFinding(
+            finding, @"C:\temp\file.txt", verbose: true);
+
+        Assert.EndsWith($"Owner: alice | Last edit (local): {edited.ToLocalTime():O}", line.PlainText);
     }
 
     [Fact]
@@ -871,7 +889,7 @@ public class CliNetworkScanTests
             null,
             new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero));
 
-        Assert.Equal("[alice@HOST] 2026-03-20 04:05:06Z [Share] {Green}<\\\\server\\C$>(R)", line.PlainText);
+        Assert.Equal($"[alice@HOST] {LocalTimestamp(new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero))} [Share] {{Green}}<\\\\server\\C$>(R)", line.PlainText);
     }
 
     [Fact]
@@ -883,7 +901,7 @@ public class CliNetworkScanTests
             @"C:\Data",
             new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero));
 
-        Assert.Equal("[alice@HOST] 2026-03-20 04:05:06Z [Dir] {Green}(C:\\Data)", line.PlainText);
+        Assert.Equal($"[alice@HOST] {LocalTimestamp(new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero))} [Dir] {{Green}}(C:\\Data)", line.PlainText);
     }
 
     [Fact]
@@ -898,7 +916,7 @@ public class CliNetworkScanTests
             "https://contoso.sharepoint.com/sites/Finance",
             new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero));
 
-        Assert.Equal("[alice@HOST] 2026-03-20 04:05:06Z [Info] Discovered drive: Finance (drive-1) [SharePoint] - https://contoso.sharepoint.com/sites/Finance", line.PlainText);
+        Assert.Equal($"[alice@HOST] {LocalTimestamp(new DateTimeOffset(2026, 3, 20, 4, 5, 6, TimeSpan.Zero))} [Info] Discovered drive: Finance (drive-1) [SharePoint] - https://contoso.sharepoint.com/sites/Finance", line.PlainText);
     }
 
     [Fact]
@@ -1477,6 +1495,9 @@ public class CliNetworkScanTests
         public Task<Stream> DownloadAsync(Uri uri, long? rangeStart, long? rangeEnd, CancellationToken cancellationToken)
             => throw new NotSupportedException();
     }
+
+    private static string LocalTimestamp(DateTimeOffset value) =>
+        value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:sszzz");
 
     private sealed record SlackBrowserCall(string Method, IReadOnlyDictionary<string, string?> Parameters);
 }

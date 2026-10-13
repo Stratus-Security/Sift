@@ -32,6 +32,8 @@ internal sealed partial class SharePointRestFile : IRemoteFile, IRemoteFileInspe
     public string WebUrl => _item.WebUrl.AbsoluteUri;
     public long? Size => ConvertContent ? null : _item.Size;
     public string? Version => _item.Version == null ? null : _item.Version + _sharingVersion + (ConvertContent ? Microsoft365ContentProjection.VersionSuffix : "");
+    public DateTimeOffset? LastEditedAtUtc => DateTimeOffset.TryParse(_item.LastModified, out var modified)
+        ? modified.ToUniversalTime() : null;
     public string? ContentType => null;
     public bool IsDeleted => _item.IsDeleted;
     public bool IsDirectory => _item.IsDirectory;
