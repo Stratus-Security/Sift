@@ -130,6 +130,47 @@ internal static partial class CliConsoleFormat
         return $"{before}[[{match}]]{after}";
     }
 
+    internal static bool TryReadHighlight(string value, out string plainText, out int start, out int length, bool requireSingleRange = true)
+    {
+        plainText = value;
+        start = value.IndexOf("[[", StringComparison.Ordinal);
+        length = 0;
+        if (start < 0)
+        {
+            return false;
+        }
+
+        var depth = 1;
+        for (var index = start + 2; index + 1 < value.Length; index++)
+        {
+            if (value.AsSpan(index).StartsWith("[[", StringComparison.Ordinal))
+            {
+                depth++;
+                index++;
+            }
+            else if (value.AsSpan(index).StartsWith("]]", StringComparison.Ordinal))
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    length = index - start - 2;
+                    // Multiple marked ranges are ambiguous in a saved text log.
+                    if (length == 0 || (requireSingleRange && value.IndexOf("[[", index + 2, StringComparison.Ordinal) >= 0))
+                    {
+                        return false;
+                    }
+
+                    plainText = value[..start] + value.Substring(start + 2, length) + value[(index + 2)..];
+                    return true;
+                }
+
+                index++;
+            }
+        }
+
+        return false;
+    }
+
     internal static string StripAnsi(string? value)
     {
         if (string.IsNullOrEmpty(value))

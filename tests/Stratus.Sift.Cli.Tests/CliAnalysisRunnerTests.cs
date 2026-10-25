@@ -463,6 +463,135 @@ public sealed class CliAnalysisRunnerTests : IDisposable
         Assert.Equal("Interactive model selection was canceled.", exception.Message);
     }
 
+    [Fact]
+    public async Task RunAnalyzeAsync_PreservesMarkedOccurrenceAcrossTextAndJsonReplays()
+    {
+        const string evidence = "token=same before actual=[[same]] after";
+        const string snippet = "token=same before actual=same after";
+        const int matchStart = 25;
+        var input = Path.Combine(_tempDirectory, "marked.cli");
+        await File.WriteAllTextAsync(input, $"""
+            Saved scan
+            Finding: Credential
+              Risk: High
+              Path: /synthetic/settings.txt
+              Evidence: {evidence}
+            """);
+
+        for (var iteration = 0; iteration < 3; iteration++)
+        {
+            var output = Path.Combine(_tempDirectory, $"replay-{iteration}.cli");
+            await CliAnalysisRunner.RunAnalyzeAsync(input, false,
+                outputOptions: new CliOutputOptions(output, CliOutputFormat.Cli, CliOutputStyle.Default));
+            var evidenceLine = Assert.Single(await File.ReadAllLinesAsync(output), line => line.StartsWith("  Evidence: "));
+            Assert.Equal($"  Evidence: {evidence}", evidenceLine);
+            var finding = Assert.Single((await CliAnalysisRunner.LoadAsync(output)).FindingsList);
+            Assert.Equal(snippet, finding.Snippet);
+            Assert.Equal("same", finding.RedactedValue);
+            Assert.Equal(matchStart, finding.SnippetMatchStart);
+            input = output;
+        }
+
+        var json = Path.Combine(_tempDirectory, "replay.json");
+        await CliAnalysisRunner.RunAnalyzeAsync(input, false,
+            outputOptions: new CliOutputOptions(json, CliOutputFormat.Json, CliOutputStyle.Default));
+        var stored = Assert.Single((await CliAnalysisRunner.LoadAsync(json)).FindingsList);
+        Assert.Equal(matchStart, stored.SnippetMatchStart);
+        var issue = CliAnalysisRunner.ToIssue(stored);
+        Assert.Equal(evidence, CliFindingFormatter.FormatFindingEvidence(issue, issue.ResourcePath));
+        CliAnalysisRunner.PopulateReplayValidationPayload(issue, stored);
+        Assert.Equal("same", issue.LlmValidationCandidate);
+        Assert.Equal(snippet, issue.LlmValidationContext);
+    }
+
+    [Theory]
+    [InlineData("password=TopSecret42; ordinary context ordinary context ordinary context ordinary context")]
+    [InlineData("password=TopSecret42; literal [[unclosed bracket")]
+    [InlineData("first=[[one]] second=[[two]]")]
+    public async Task RunAnalyzeAsync_UnknownMatchLocationDoesNotInventHighlights(string evidence)
+    {
+        var input = Path.Combine(_tempDirectory, "unknown.cli");
+        var output = Path.Combine(_tempDirectory, "unknown-replay.cli");
+        await File.WriteAllTextAsync(input, $"""
+            Saved scan
+            Finding: Credential
+              Risk: High
+              Path: /synthetic/settings.txt
+              Evidence: {evidence}
+            """);
+
+        await CliAnalysisRunner.RunAnalyzeAsync(input, false,
+            outputOptions: new CliOutputOptions(output, CliOutputFormat.Cli, CliOutputStyle.Default));
+
+        var evidenceLine = Assert.Single(await File.ReadAllLinesAsync(output), line => line.StartsWith("  Evidence: "));
+        Assert.Equal($"  Evidence: {evidence}", evidenceLine);
+        var stored = Assert.Single((await CliAnalysisRunner.LoadAsync(output)).FindingsList);
+        Assert.Equal(evidence, stored.Snippet);
+        Assert.Empty(stored.RedactedValue);
+        Assert.Null(stored.SnippetMatchStart);
+    }
+
+    [Theory]
+    [InlineData("/synthetic/passwords.txt")]
+    [InlineData("/synthetic/[[literal]].txt")]
+    [InlineData("/synthetic/[[folder]]/passwords.txt")]
+    [InlineData("/synthetic/[[literal]]")]
+    [InlineData("https://example.test/[[folder]]/passwords.txt?tag=[[literal]]")]
+    public async Task RunAnalyzeAsync_MetadataReplaysPreserveRawPathsAndLiteralBrackets(string path)
+    {
+        var input = Path.Combine(_tempDirectory, "metadata.json");
+        await File.WriteAllTextAsync(input, JsonSerializer.Serialize(new CliJsonOutputDocument
+        {
+            FindingsList =
+            [
+                new CliOutputFindingRecord
+                {
+                    RuleName = "Credential filename", ClassifierName = "Credential filename", ResourcePath = path,
+                    IsMetadata = true, RedactedValue = "[METADATA MATCH]"
+                }
+            ]
+        }));
+        string? firstPathLine = null;
+        for (var iteration = 0; iteration < 3; iteration++)
+        {
+            var output = Path.Combine(_tempDirectory, $"metadata-{iteration}.cli");
+            await CliAnalysisRunner.RunAnalyzeAsync(input, false,
+                outputOptions: new CliOutputOptions(output, CliOutputFormat.Cli, CliOutputStyle.Default));
+            var pathLine = Assert.Single(await File.ReadAllLinesAsync(output), line => line.StartsWith("  Path: "));
+            firstPathLine ??= pathLine;
+            Assert.Equal(firstPathLine, pathLine);
+            var stored = Assert.Single((await CliAnalysisRunner.LoadAsync(output)).FindingsList);
+            Assert.True(stored.IsMetadata);
+            Assert.Equal(path, stored.ResourcePath);
+            Assert.Equal("[METADATA MATCH]", stored.RedactedValue);
+            input = output;
+        }
+
+        var json = Path.Combine(_tempDirectory, "metadata-replay.json");
+        await CliAnalysisRunner.RunAnalyzeAsync(input, false,
+            outputOptions: new CliOutputOptions(json, CliOutputFormat.Json, CliOutputStyle.Default));
+        Assert.Equal(path, Assert.Single((await CliAnalysisRunner.LoadAsync(json)).FindingsList).ResourcePath);
+    }
+
+    [Fact]
+    public async Task LoadAsync_PreservesLiteralBracketPairsInsideMarkedValue()
+    {
+        var input = Path.Combine(_tempDirectory, "literal-brackets.cli");
+        await File.WriteAllTextAsync(input, """
+            Saved scan
+            Finding: Credential
+              Risk: High
+              Path: /synthetic/settings.txt
+              Evidence: password=[[[[literal]]]] end
+            """);
+
+        var stored = Assert.Single((await CliAnalysisRunner.LoadAsync(input)).FindingsList);
+
+        Assert.Equal("password=[[literal]] end", stored.Snippet);
+        Assert.Equal("[[literal]]", stored.RedactedValue);
+        Assert.Equal(9, stored.SnippetMatchStart);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDirectory))

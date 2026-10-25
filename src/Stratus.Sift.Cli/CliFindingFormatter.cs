@@ -9,6 +9,34 @@ internal static class CliFindingFormatter
         return FormatMetadataEvidence(resourcePath);
     }
 
+    internal static string ParseMetadataPath(string resourcePath)
+    {
+        var path = CliConsoleFormat.StripAnsi(resourcePath);
+        for (var index = path.IndexOf("[[", StringComparison.Ordinal);
+             index >= 0;
+             index = path.IndexOf("[[", index + 2, StringComparison.Ordinal))
+        {
+            if (!CliConsoleFormat.TryReadHighlight(path[index..], out var tail, out var start, out var length, requireSingleRange: false))
+            {
+                continue;
+            }
+
+            var plainPath = path[..index] + tail;
+            if (!TryGetHighlightRangeFromPath(plainPath, out var expectedStart, out var expectedLength))
+            {
+                expectedStart = 0;
+                expectedLength = plainPath.Length;
+            }
+
+            if (index + start == expectedStart && length == expectedLength)
+            {
+                return plainPath;
+            }
+        }
+
+        return path;
+    }
+
     internal static string FormatFindingEvidence(ScanFinding finding, string resourcePath)
     {
         if (IsMetadataFinding(finding))
@@ -19,7 +47,7 @@ internal static class CliFindingFormatter
         var snippet = CliConsoleFormat.NormalizeEvidenceText(finding.Snippet);
         if (!string.IsNullOrWhiteSpace(snippet))
         {
-            return HighlightContentEvidence(snippet, finding.RedactedValue);
+            return HighlightContentEvidence(snippet, finding.RedactedValue, finding.SnippetMatchStart);
         }
 
         var extractedValue = ExtractDisplayMatchValue(finding, resourcePath);
@@ -47,9 +75,9 @@ internal static class CliFindingFormatter
 
         var snippet = CliConsoleFormat.NormalizeEvidenceText(finding.Snippet);
         if (!string.IsNullOrWhiteSpace(snippet) &&
-            TryExtractRawSnippetMatch(snippet, finding.RedactedValue, out var rawMatch))
+            TryLocateSnippetMatch(snippet, finding.RedactedValue, finding.SnippetMatchStart, out var start, out var length))
         {
-            return rawMatch;
+            return snippet.Substring(start, length);
         }
 
         var normalizedRedactedValue = CliConsoleFormat.NormalizeEvidenceText(finding.RedactedValue);
@@ -84,19 +112,17 @@ internal static class CliFindingFormatter
         return CliConsoleFormat.ApplyHighlight(displayPath, 0, displayPath.Length);
     }
 
-    private static string HighlightContentEvidence(string snippet, string redactedValue)
+    private static string HighlightContentEvidence(string snippet, string redactedValue, int? knownStart)
     {
-        if (TryLocateSnippetMatch(snippet, redactedValue, out var start, out var length))
+        if (TryLocateSnippetMatch(snippet, redactedValue, knownStart, out var start, out var length))
         {
             return CliConsoleFormat.ApplyHighlight(snippet, start, length);
         }
 
-        var fallbackLength = GetFallbackHighlightLength(redactedValue, snippet);
-        var fallbackStart = Math.Max(0, Math.Min(50, snippet.Length - fallbackLength));
-        return CliConsoleFormat.ApplyHighlight(snippet, fallbackStart, fallbackLength);
+        return snippet;
     }
 
-    private static bool TryLocateSnippetMatch(string snippet, string redactedValue, out int start, out int length)
+    private static bool TryLocateSnippetMatch(string snippet, string redactedValue, int? knownStart, out int start, out int length)
     {
         start = 0;
         length = 0;
@@ -107,20 +133,20 @@ internal static class CliFindingFormatter
             return false;
         }
 
-        var prefixEnd = normalizedRedactedValue.IndexOf('*');
-        if (prefixEnd > 0)
+        if (knownStart is int offset && offset >= 0 && offset <= snippet.Length - normalizedRedactedValue.Length &&
+            snippet.AsSpan(offset, normalizedRedactedValue.Length).SequenceEqual(normalizedRedactedValue.AsSpan()))
         {
-            var prefix = normalizedRedactedValue[..prefixEnd];
-            var index = snippet.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
-            if (index >= 0)
-            {
-                start = index;
-                length = Math.Min(normalizedRedactedValue.Length, snippet.Length - index);
-                return length > 0;
-            }
+            start = offset;
+            length = normalizedRedactedValue.Length;
+            return true;
         }
 
-        var exactIndex = snippet.IndexOf(normalizedRedactedValue, StringComparison.OrdinalIgnoreCase);
+        var exactIndex = snippet.IndexOf(normalizedRedactedValue, StringComparison.Ordinal);
+        if (exactIndex < 0)
+        {
+            exactIndex = snippet.IndexOf(normalizedRedactedValue, StringComparison.OrdinalIgnoreCase);
+        }
+
         if (exactIndex >= 0)
         {
             start = exactIndex;
@@ -128,49 +154,54 @@ internal static class CliFindingFormatter
             return true;
         }
 
-        return false;
-    }
-
-    private static bool TryExtractRawSnippetMatch(string snippet, string redactedValue, out string rawMatch)
-    {
-        rawMatch = string.Empty;
-        var normalizedRedactedValue = CliConsoleFormat.NormalizeEvidenceText(redactedValue);
-        if (string.IsNullOrWhiteSpace(normalizedRedactedValue))
+        // Legacy masks retain the first two characters and replace the rest with '*'.
+        // An asterisk elsewhere in a raw value does not indicate a mask.
+        if (normalizedRedactedValue.Length <= 2 || normalizedRedactedValue.IndexOf('*') != 2 ||
+            normalizedRedactedValue.AsSpan(2).IndexOfAnyExcept('*') >= 0)
         {
             return false;
         }
 
-        if (!normalizedRedactedValue.Contains('*', StringComparison.Ordinal))
+        var prefix = normalizedRedactedValue[..2];
+        var candidateStart = -1;
+        var candidateLength = 0;
+        for (var index = snippet.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+             index >= 0;
+             index = snippet.IndexOf(prefix, index + prefix.Length, StringComparison.OrdinalIgnoreCase))
         {
-            rawMatch = normalizedRedactedValue;
-            return true;
+            if (index > 0 && !IsTokenBoundary(snippet[index - 1]))
+            {
+                continue;
+            }
+
+            var end = index + prefix.Length;
+            while (end < snippet.Length && !IsTokenBoundary(snippet[end]))
+            {
+                end++;
+            }
+
+            if (end == index + prefix.Length)
+            {
+                continue;
+            }
+
+            if (candidateStart >= 0)
+            {
+                return false;
+            }
+
+            candidateStart = index;
+            candidateLength = end - index;
         }
 
-        var prefix = normalizedRedactedValue[..normalizedRedactedValue.IndexOf('*')];
-        if (string.IsNullOrWhiteSpace(prefix))
+        if (candidateStart < 0)
         {
             return false;
         }
 
-        var index = snippet.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
-        if (index < 0)
-        {
-            return false;
-        }
-
-        rawMatch = ExpandToken(snippet, index, prefix.Length);
-        return !string.IsNullOrWhiteSpace(rawMatch);
-    }
-
-    private static int GetFallbackHighlightLength(string redactedValue, string snippet)
-    {
-        var normalizedRedactedValue = CliConsoleFormat.NormalizeEvidenceText(redactedValue);
-        if (!string.IsNullOrWhiteSpace(normalizedRedactedValue))
-        {
-            return Math.Min(normalizedRedactedValue.Length, snippet.Length);
-        }
-
-        return Math.Min(24, snippet.Length);
+        start = candidateStart;
+        length = candidateLength;
+        return true;
     }
 
     private static bool TryGetHighlightRangeFromPath(string resourcePath, out int start, out int length)
@@ -226,23 +257,6 @@ internal static class CliFindingFormatter
         }
 
         return false;
-    }
-
-    private static string ExpandToken(string value, int start, int length)
-    {
-        var tokenStart = start;
-        while (tokenStart > 0 && !IsTokenBoundary(value[tokenStart - 1]))
-        {
-            tokenStart--;
-        }
-
-        var tokenEnd = start + length;
-        while (tokenEnd < value.Length && !IsTokenBoundary(value[tokenEnd]))
-        {
-            tokenEnd++;
-        }
-
-        return value[tokenStart..tokenEnd].Trim();
     }
 
     private static bool IsTokenBoundary(char value)

@@ -186,6 +186,7 @@ internal static class CliAnalysisRunner
             LastEditedAtUtc = (finding.LastEditedAtLocal ?? finding.LastEditedAtUtc)?.ToUniversalTime(),
             RedactedValue = finding.RedactedValue,
             Snippet = finding.Snippet,
+            SnippetMatchStart = finding.SnippetMatchStart,
             DetectedAt = finding.DetectedAtUtc,
             EvidenceJson = finding.EvidenceJson ?? string.Empty,
             LlmValidationStatus = finding.LlmValidationStatus,
@@ -292,8 +293,27 @@ internal static class CliAnalysisRunner
             }
 
             finding.IsMetadata = string.IsNullOrWhiteSpace(finding.Evidence);
-            finding.RedactedValue = finding.IsMetadata ? "[METADATA MATCH]" : string.Empty;
-            finding.Snippet = finding.IsMetadata ? string.Empty : finding.Evidence ?? string.Empty;
+            if (finding.IsMetadata)
+            {
+                finding.RedactedValue = "[METADATA MATCH]";
+                finding.ResourcePath = CliFindingFormatter.ParseMetadataPath(finding.ResourcePath);
+            }
+            else
+            {
+                var evidence = CliConsoleFormat.NormalizeEvidenceText(CliConsoleFormat.StripAnsi(finding.Evidence));
+                if (CliConsoleFormat.TryReadHighlight(evidence, out var snippet, out var start, out var length))
+                {
+                    finding.Snippet = snippet;
+                    finding.RedactedValue = snippet.Substring(start, length);
+                    finding.SnippetMatchStart = start;
+                }
+                else
+                {
+                    finding.Snippet = evidence;
+                }
+
+                finding.Evidence = finding.Snippet;
+            }
             findings.Add(finding);
         }
 

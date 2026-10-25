@@ -22,6 +22,8 @@ public sealed class ScanFinding
     public string Owner { get; set; } = "Unknown";
     public DateTimeOffset? LastEditedAtUtc { get; set; }
     public string Snippet { get; set; } = string.Empty;
+    /// <summary>Offset of the matched value in the normalized display snippet, when known.</summary>
+    public int? SnippetMatchStart { get; set; }
     public List<AclEntry> AclEntries { get; set; } = [];
     public string EvidenceJson { get; set; } = string.Empty;
     public string LlmValidationCandidate { get; set; } = string.Empty;

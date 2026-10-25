@@ -98,6 +98,7 @@ internal sealed class CliOutputCapture
                 Evidence = evidence,
                 RedactedValue = finding.RedactedValue,
                 Snippet = finding.Snippet,
+                SnippetMatchStart = finding.SnippetMatchStart,
                 DetectedAtUtc = finding.DetectedAt,
                 EvidenceJson = finding.EvidenceJson,
                 LlmValidationStatus = finding.LlmValidationStatus,

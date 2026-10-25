@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Analyze evidence highlighting
+
+- Preserve marked match locations when replaying standard CLI logs and saving results as JSON. Repeated analysis keeps a single highlight on the original occurrence; evidence without a reliable match location is displayed without a guessed highlight.
+- Match literal asterisks before interpreting legacy masks, and avoid matching masked prefixes inside unrelated words or choosing between ambiguous tokens.
+- Recover raw metadata paths from their display wrappers without accumulating highlight markers or removing literal bracket pairs in filenames and parent directories.
+
 ### LLM validation
 
 - Disable Ollama thinking by default with an explicit `think: false`. Add `--llm-think off|on|low|medium|high|xhigh` to all scan commands and `analyze` to choose a mode or a model-supported level.

@@ -50,6 +50,8 @@ internal sealed class CliOutputFindingRecord
     public string? Evidence { get; set; }
     public string RedactedValue { get; set; } = string.Empty;
     public string Snippet { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SnippetMatchStart { get; set; }
     public DateTime DetectedAtUtc { get; set; }
     public string? EvidenceJson { get; set; }
     public LlmValidationStatus? LlmValidationStatus { get; set; }
