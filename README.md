@@ -75,6 +75,7 @@ Options:
   --ollama-url <ollama-url>                     Base URL for the Ollama server. [default: http://localhost:11434]
   --ollama-model <ollama-model>                 Ollama model to use for classifier validation. If omitted with --llm-validate, an interactive prompt is used when possible.
   --llm-timeout-seconds <llm-timeout-seconds>   Timeout for each Ollama validation request in seconds. [default: 20]
+  --llm-think <off|on|low|medium|high|xhigh>     Ollama thinking mode or level for validation. [default: off]
   --snaffler, --snaffler-mode                   Render console and CLI text output in Snaffler's logging style.
   -r, --rules <rules>                           Path to a folder containing sifting rules (JSON). If not provided, bundled defaults are used.
   -o, --output <output>                         Write scan output to a file. Resumed scans append; new scans replace it.
@@ -190,6 +191,13 @@ Scan a local disk and then refine the results on another machine with a local LL
 ```powershell
 .\sift.exe local --path C:\ --output findings.json --output-format json
 .\sift.exe analyze --input findings.json --llm-validate --ollama-model gemma4:31b --sensitive-only --output findings.log
+```
+
+LLM validation disables thinking by default by explicitly sending `think: false` to Ollama. All scan commands and `analyze` accept `--llm-think off|on|low|medium|high|xhigh`: `off` sends `false`, `on` sends `true`, and named levels are passed to Ollama as strings. Named levels require support from the selected model. Changing the thinking setting starts a separate resume scope for scans using LLM validation.
+
+Enable thinking when validating with Qwen:
+```powershell
+.\sift.exe analyze --input findings.json --llm-validate --ollama-model qwen3.8 --llm-think on --llm-timeout-seconds 120
 ```
 
 Analyze results in a terminal without rescanning, translating to snafflers output style:

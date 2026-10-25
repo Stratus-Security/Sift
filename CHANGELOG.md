@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### LLM validation
+
+- Disable Ollama thinking by default with an explicit `think: false`. Add `--llm-think off|on|low|medium|high|xhigh` to all scan commands and `analyze` to choose a mode or a model-supported level.
+- Include the thinking setting in validation cache keys and LLM-enabled scan resume scopes so changing it does not reuse earlier validation results.
+
 ### Binary scan diagnostics
 
 - Keep expected PDF OCR, malformed/encrypted Office document, embedded-content and archive-limit failures at debug level, including the remote scanner's follow-up diagnostics. Preserve extracted-text findings, incomplete counts, exit code 3 and pending resume entries.

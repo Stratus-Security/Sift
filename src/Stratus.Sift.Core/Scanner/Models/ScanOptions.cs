@@ -1,3 +1,5 @@
+using Stratus.Sift.Core.Enums;
+
 namespace Stratus.Sift.Scanner.Models;
 
 public class ScanOptions
@@ -46,6 +48,8 @@ public class ScanOptions
     public string OllamaModel { get; set; } = string.Empty;
 
     public int LlmTimeoutSeconds { get; set; } = 20;
+
+    public LlmThinkingLevel LlmThinkingLevel { get; set; } = LlmThinkingLevel.Off;
 
     public long MaxDiskReadBytesPerSecond { get; set; }
 

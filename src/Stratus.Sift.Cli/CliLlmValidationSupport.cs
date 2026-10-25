@@ -28,6 +28,7 @@ internal static class CliLlmValidationSupport
             {
                 BaseUrl = options.OllamaUrl,
                 TimeoutSeconds = options.TimeoutSeconds,
+                ThinkingLevel = options.ThinkingLevel,
                 Model = model
             });
 
@@ -61,6 +62,7 @@ internal static class CliLlmValidationSupport
             {
                 BaseUrl = options.OllamaUrl,
                 TimeoutSeconds = options.TimeoutSeconds,
+                ThinkingLevel = options.ThinkingLevel,
                 Model = model
             });
     }

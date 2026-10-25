@@ -675,6 +675,7 @@ internal static class CliResumeIdentity
         Append(hash, llmOptions?.Enabled == true ? "llm" : "no-llm");
         Append(hash, llmOptions?.SensitiveOnly == true ? "sensitive-only" : "all-findings");
         Append(hash, llmOptions?.OllamaModel ?? string.Empty);
+        if (llmOptions?.Enabled == true) { Append(hash, "llm-thinking-v1"); Append(hash, llmOptions.ThinkingLevel.ToString()); }
         Append(hash, credential?.QualifiedUserName ?? $"current:{Environment.UserDomainName}\\{Environment.UserName}");
         Append(hash, credential?.UsesNtHash == true
             ? Convert.ToHexString(credential.NtHash!)
@@ -703,6 +704,7 @@ internal static class CliResumeIdentity
         Append(hash, llmOptions?.Enabled == true ? "llm" : "no-llm");
         Append(hash, llmOptions?.SensitiveOnly == true ? "sensitive-only" : "all-findings");
         Append(hash, llmOptions?.OllamaModel ?? string.Empty);
+        if (llmOptions?.Enabled == true) { Append(hash, "llm-thinking-v1"); Append(hash, llmOptions.ThinkingLevel.ToString()); }
         foreach (var item in configuration.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
         {
             Append(hash, item.Key.ToUpperInvariant());

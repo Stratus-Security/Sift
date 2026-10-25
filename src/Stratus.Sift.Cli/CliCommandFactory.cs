@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.CommandLine.Parsing;
 using System.Net;
 using Stratus.Sift.Core;
+using Stratus.Sift.Core.Enums;
 
 namespace Stratus.Sift.Cli;
 
@@ -77,6 +78,8 @@ internal static class CliCommandFactory
             Description = "Ollama model to use for classifier validation. If omitted with --llm-validate, an interactive prompt is used when possible."
         };
 
+        var llmThinkingLevelOption = CreateLlmThinkingLevelOption();
+
         var llmTimeoutSecondsOption = new Option<int>("--llm-timeout-seconds")
         {
             Description = "Timeout for each Ollama validation request in seconds.",
@@ -98,6 +101,7 @@ internal static class CliCommandFactory
             ollamaUrlOption,
             ollamaModelOption,
             llmTimeoutSecondsOption,
+            llmThinkingLevelOption,
             snafflerModeOption,
             verboseOption,
             outputOption,
@@ -109,7 +113,7 @@ internal static class CliCommandFactory
             return await ExecuteAsync(() => CliAnalysisRunner.RunAnalyzeAsync(
                 result.GetValue(inputOption)!,
                 result.GetValue(sensitiveOnlyOption),
-                BuildAnalyzeLlmOptions(result, llmValidateOption, sensitiveOnlyOption, ollamaUrlOption, ollamaModelOption, llmTimeoutSecondsOption),
+                BuildAnalyzeLlmOptions(result, llmValidateOption, sensitiveOnlyOption, ollamaUrlOption, ollamaModelOption, llmTimeoutSecondsOption, llmThinkingLevelOption),
                 BuildOutputOptions(result, outputOption, outputFormatOption, snafflerModeOption, verboseOption),
                 cancellationToken), cancellationToken);
         });
@@ -138,6 +142,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaUrl,
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
+            commonOptions.LlmThinkingLevel,
             commonOptions.SnafflerMode,
             commonOptions.Verbose,
             commonOptions.NoBanner,
@@ -204,6 +209,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaUrl,
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
+            commonOptions.LlmThinkingLevel,
             commonOptions.SnafflerMode,
             commonOptions.Verbose,
             commonOptions.NoBanner,
@@ -327,6 +333,7 @@ internal static class CliCommandFactory
             commonOptions.OllamaUrl,
             commonOptions.OllamaModel,
             commonOptions.LlmTimeoutSeconds,
+            commonOptions.LlmThinkingLevel,
             commonOptions.SnafflerMode,
             commonOptions.Verbose,
             commonOptions.NoBanner,
@@ -426,6 +433,7 @@ internal static class CliCommandFactory
             options.OllamaUrl,
             options.OllamaModel,
             options.LlmTimeoutSeconds,
+            options.LlmThinkingLevel,
             options.SnafflerMode,
             options.Verbose,
             options.NoBanner,
@@ -458,7 +466,7 @@ internal static class CliCommandFactory
                 result.GetValue(options.Binary),
                 result.GetValue(options.EnumOnly),
                 result.GetValue(options.Rules),
-                BuildLlmOptions(result, options.LlmValidate, options.LlmSensitiveOnly, options.OllamaUrl, options.OllamaModel, options.LlmTimeoutSeconds),
+                BuildLlmOptions(result, options.LlmValidate, options.LlmSensitiveOnly, options.OllamaUrl, options.OllamaModel, options.LlmTimeoutSeconds, options.LlmThinkingLevel),
                 BuildOutputOptions(result, options.Output, options.OutputFormat, options.SnafflerMode, options.Verbose),
                 fullScan: !result.GetValue(options.Resume),
                 cancellationToken: cancellationToken,
@@ -532,7 +540,7 @@ internal static class CliCommandFactory
         {
             tokenOption, browserOption, workspaceUrlOption, browserChannelOption, channelOption, fullScanOption, configOption, common.Resume,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
-            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode, common.Verbose,
+            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.LlmThinkingLevel, common.SnafflerMode, common.Verbose,
             common.NoBanner, common.Rules, common.Output, common.OutputFormat
         };
         AddResumeValidator(command, common.Resume, common.EnumOnly);
@@ -655,7 +663,7 @@ internal static class CliCommandFactory
             urlOption, emailOption, cloudIdOption, tokenOption, projectOption, spaceOption, jqlOption,
             fullScanOption, common.Resume, configOption,
             common.Binary, common.EnumOnly, common.LlmValidate, common.LlmSensitiveOnly,
-            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.SnafflerMode, common.Verbose,
+            common.OllamaUrl, common.OllamaModel, common.LlmTimeoutSeconds, common.LlmThinkingLevel, common.SnafflerMode, common.Verbose,
             common.NoBanner, common.Rules, common.Output, common.OutputFormat
         };
         AddResumeValidator(command, common.Resume, common.EnumOnly);
@@ -721,6 +729,24 @@ internal static class CliCommandFactory
         }
     }
 
+    private static Option<LlmThinkingLevel> CreateLlmThinkingLevelOption()
+    {
+        var option = new Option<LlmThinkingLevel>("--llm-think")
+        {
+            Description = "Ollama thinking: off, on, low, medium, high, or xhigh. Named levels require model support.",
+            HelpName = "off|on|low|medium|high|xhigh",
+            DefaultValueFactory = _ => LlmThinkingLevel.Off
+        };
+        option.Validators.Add(result =>
+        {
+            if (result.Tokens.Count == 1 && !Enum.GetNames<LlmThinkingLevel>().Contains(result.Tokens[0].Value, StringComparer.OrdinalIgnoreCase))
+            {
+                result.AddError("The --llm-think value must be off, on, low, medium, high, or xhigh.");
+            }
+        });
+        return option;
+    }
+
     private static CommonScanOptions CreateCommonScanOptions()
     {
         var outputFormatOption = new Option<string>("--output-format")
@@ -777,6 +803,8 @@ internal static class CliCommandFactory
             Description = "Ollama model to use for classifier validation. If omitted with --llm-validate, an interactive prompt is used when possible."
         };
 
+        var llmThinkingLevelOption = CreateLlmThinkingLevelOption();
+
         var llmTimeoutSecondsOption = new Option<int>("--llm-timeout-seconds")
         {
             Description = "Timeout for each Ollama validation request in seconds.",
@@ -824,6 +852,7 @@ internal static class CliCommandFactory
             ollamaUrlOption,
             ollamaModelOption,
             llmTimeoutSecondsOption,
+            llmThinkingLevelOption,
             snafflerModeOption,
             verboseOption,
             noBannerOption,
@@ -1254,6 +1283,8 @@ internal static class CliCommandFactory
             Description = "Ollama model to use for classifier validation. If omitted with --llm-validate, an interactive prompt is used when possible."
         };
 
+        var llmThinkingLevelOption = CreateLlmThinkingLevelOption();
+
         var llmTimeoutSecondsOption = new Option<int>("--llm-timeout-seconds")
         {
             Description = "Timeout for each Ollama validation request in seconds.",
@@ -1311,6 +1342,7 @@ internal static class CliCommandFactory
             ollamaUrlOption,
             ollamaModelOption,
             llmTimeoutSecondsOption,
+            llmThinkingLevelOption,
             snafflerModeOption,
             verboseOption,
             noBannerOption,
@@ -1347,10 +1379,10 @@ internal static class CliCommandFactory
 
     private static CliLlmOptions? BuildLlmOptions(ParseResult result, CommonScanOptions options)
     {
-        return BuildLlmOptions(result, options.LlmValidate, options.LlmSensitiveOnly, options.OllamaUrl, options.OllamaModel, options.LlmTimeoutSeconds);
+        return BuildLlmOptions(result, options.LlmValidate, options.LlmSensitiveOnly, options.OllamaUrl, options.OllamaModel, options.LlmTimeoutSeconds, options.LlmThinkingLevel);
     }
 
-    private static CliLlmOptions? BuildAnalyzeLlmOptions(ParseResult result, Option<bool> llmValidate, Option<bool> sensitiveOnly, Option<string> ollamaUrl, Option<string> ollamaModel, Option<int> llmTimeoutSeconds)
+    private static CliLlmOptions? BuildAnalyzeLlmOptions(ParseResult result, Option<bool> llmValidate, Option<bool> sensitiveOnly, Option<string> ollamaUrl, Option<string> ollamaModel, Option<int> llmTimeoutSeconds, Option<LlmThinkingLevel> llmThinkingLevel)
     {
         if (!result.GetValue(llmValidate))
         {
@@ -1362,10 +1394,11 @@ internal static class CliCommandFactory
             result.GetValue(ollamaUrl) ?? "http://localhost:11434",
             result.GetValue(ollamaModel) ?? string.Empty,
             result.GetValue(llmTimeoutSeconds),
-            result.GetValue(sensitiveOnly));
+            result.GetValue(sensitiveOnly),
+            result.GetValue(llmThinkingLevel));
     }
 
-    private static CliLlmOptions? BuildLlmOptions(ParseResult result, Option<bool> llmValidate, Option<bool> llmSensitiveOnly, Option<string> ollamaUrl, Option<string> ollamaModel, Option<int> llmTimeoutSeconds)
+    private static CliLlmOptions? BuildLlmOptions(ParseResult result, Option<bool> llmValidate, Option<bool> llmSensitiveOnly, Option<string> ollamaUrl, Option<string> ollamaModel, Option<int> llmTimeoutSeconds, Option<LlmThinkingLevel> llmThinkingLevel)
     {
         if (!result.GetValue(llmValidate))
         {
@@ -1377,7 +1410,8 @@ internal static class CliCommandFactory
             result.GetValue(ollamaUrl) ?? "http://localhost:11434",
             result.GetValue(ollamaModel) ?? string.Empty,
             result.GetValue(llmTimeoutSeconds),
-            result.GetValue(llmSensitiveOnly));
+            result.GetValue(llmSensitiveOnly),
+            result.GetValue(llmThinkingLevel));
     }
 
     private sealed record CommonScanOptions(
@@ -1388,6 +1422,7 @@ internal static class CliCommandFactory
         Option<string> OllamaUrl,
         Option<string> OllamaModel,
         Option<int> LlmTimeoutSeconds,
+        Option<LlmThinkingLevel> LlmThinkingLevel,
         Option<bool> SnafflerMode,
         Option<bool> Verbose,
         Option<bool> NoBanner,
@@ -1425,6 +1460,7 @@ internal static class CliCommandFactory
         Option<string> OllamaUrl,
         Option<string> OllamaModel,
         Option<int> LlmTimeoutSeconds,
+        Option<LlmThinkingLevel> LlmThinkingLevel,
         Option<bool> SnafflerMode,
         Option<bool> Verbose,
         Option<bool> NoBanner,

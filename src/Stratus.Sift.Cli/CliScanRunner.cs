@@ -1117,6 +1117,7 @@ internal static class CliScanRunner
             OllamaUrl = llmOptions?.OllamaUrl ?? "http://localhost:11434",
             OllamaModel = llmOptions?.OllamaModel ?? string.Empty,
             LlmTimeoutSeconds = llmOptions?.TimeoutSeconds ?? 20,
+            LlmThinkingLevel = llmOptions?.ThinkingLevel ?? Stratus.Sift.Core.Enums.LlmThinkingLevel.Off,
             MaxDiskReadBytesPerSecond = maxReadBytesPerSecond,
             Diagnostics = diagnostics
         };

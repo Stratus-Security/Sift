@@ -93,6 +93,13 @@ public sealed partial class OllamaLlmClassifierValidator : ILlmClassifierValidat
             {
                 Model = _options.Model,
                 Prompt = prompt,
+                Think = _options.ThinkingLevel switch
+                {
+                    LlmThinkingLevel.Off => JsonSerializer.SerializeToElement(false, JsonContext.Boolean),
+                    LlmThinkingLevel.On => JsonSerializer.SerializeToElement(true, JsonContext.Boolean),
+                    var level when Enum.IsDefined(level) => JsonSerializer.SerializeToElement(level.ToString().ToLowerInvariant(), JsonContext.String),
+                    _ => throw new ArgumentOutOfRangeException(nameof(_options.ThinkingLevel), "Unsupported LLM thinking level.")
+                },
                 Stream = false,
                 Format = StructuredOutputSchema,
                 Options = new OllamaGenerateOptions
@@ -247,7 +254,7 @@ public sealed partial class OllamaLlmClassifierValidator : ILlmClassifierValidat
     {
         var valueHash = string.IsNullOrWhiteSpace(request.ValueHash) ? ComputeSha256(request.Candidate) : request.ValueHash;
         var snippetHash = string.IsNullOrWhiteSpace(request.SnippetHash) ? ComputeSha256(request.Snippet) : request.SnippetHash;
-        return string.Join('|', request.ClassifierName, valueHash, snippetHash, _options.Model, request.PromptVersion);
+        return string.Join('|', request.ClassifierName, valueHash, snippetHash, _options.Model, _options.ThinkingLevel, request.PromptVersion);
     }
 
     private Uri BuildUri(string relativePath)
@@ -280,6 +287,7 @@ public sealed partial class OllamaLlmClassifierValidator : ILlmClassifierValidat
     {
         public string Model { get; set; } = string.Empty;
         public string Prompt { get; set; } = string.Empty;
+        public JsonElement Think { get; set; }
         public bool Stream { get; set; }
         public JsonElement Format { get; set; }
         public OllamaGenerateOptions? Options { get; set; }
@@ -308,6 +316,8 @@ public sealed partial class OllamaLlmClassifierValidator : ILlmClassifierValidat
     [JsonSerializable(typeof(OllamaGenerateRequest))]
     [JsonSerializable(typeof(OllamaGenerateResponse))]
     [JsonSerializable(typeof(OllamaValidationVerdict))]
+    [JsonSerializable(typeof(bool))]
+    [JsonSerializable(typeof(string))]
     private sealed partial class OllamaJsonContext : JsonSerializerContext;
 
     private static JsonElement BuildStructuredOutputSchema()
