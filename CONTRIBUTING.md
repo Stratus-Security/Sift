@@ -11,6 +11,8 @@ dotnet build .\Stratus.Sift.slnx --configuration Release --no-restore
 dotnet test .\Stratus.Sift.slnx --configuration Release --no-build
 ```
 
+Use an installed .NET 10 runtime version 10.0.14 or later for source or framework-dependent runs. The documented Native AOT release flow bundles the patched runtime pinned in the CLI project; custom non-AOT self-contained builds should also target a patched runtime.
+
 By contributing, you confirm that you have the right to submit the work under the repository's AGPL-3.0-only licence.
 
 Record user-visible upgrades and fixes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md), and update the relevant README examples or coverage limits. The release workflow includes those notes in GitHub release descriptions. Build outputs, local scan results and tenant-validation logs belong in Git-ignored local directories such as `artifacts/`; keep required, licensed test fixtures under `tests/`.

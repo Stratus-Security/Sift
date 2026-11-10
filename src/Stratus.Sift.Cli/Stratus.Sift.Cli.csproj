@@ -29,6 +29,7 @@
     <PackageReference Include="SMBLibrary" Version="1.5.7.1" />
     <PackageReference Include="DnsClient" Version="1.8.0" />
     <PackageReference Include="Kerberos.NET" Version="4.6.168" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
     <PackageReference Include="System.DirectoryServices.Protocols" Version="10.0.10" />
     <PackageReference Include="System.CommandLine" Version="2.0.5" />
   </ItemGroup>
@@ -36,6 +37,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <!-- Keep the bundled runtime/compiler on the security patch used by the RID locks. -->
+    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
     <DefineConstants>$(DefineConstants);SIFT_NATIVE_AOT</DefineConstants>
     <NoWarn>$(NoWarn);IL2104;IL3053</NoWarn>
   </PropertyGroup>

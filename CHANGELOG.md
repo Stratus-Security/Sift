@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Dependency security
+
+- Pin `System.Security.Cryptography.Pkcs` to 8.0.2 to resolve the two CMS denial-of-service advisories inherited through Kerberos.NET. Refresh the CLI, test and all six platform lockfiles.
+- Bundle the patched .NET 10.0.14 runtime/compiler in Native AOT releases to resolve the Brotli decoder advisory found while validating platform restores.
+
 ### Analyze evidence highlighting
 
 - Preserve marked match locations when replaying standard CLI logs and saving results as JSON. Repeated analysis keeps a single highlight on the original occurrence; evidence without a reliable match location is displayed without a guessed highlight.
