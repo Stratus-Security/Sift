@@ -296,9 +296,16 @@ internal static class CliCommandFactory
 
         var deviceOption = new Option<string>("--device")
         {
-            Description = "Single device hostname, IPv4 address, or UNC share root."
+            Description = "Single device hostname, IP address, or UNC share/folder path. UNC paths scan only that folder and its descendants."
         };
         deviceOption.Aliases.Add("-d");
+        deviceOption.Validators.Add(result =>
+        {
+            var device = result.GetValue(deviceOption);
+            if (string.IsNullOrWhiteSpace(device)) return;
+            try { SmbDeviceTarget.Parse(device); }
+            catch (ArgumentException exception) { result.AddError($"--device: {exception.Message}"); }
+        });
 
         var targetsFileOption = new Option<NetworkTargetFile?>("--targets-file")
         {
@@ -704,6 +711,11 @@ internal static class CliCommandFactory
             Console.Error.WriteLine("Scan cancelled.");
             return CliExitCodes.Cancelled;
         }
+        catch (CliRuleLoadException exception)
+        {
+            Console.Error.WriteLine($"Error: {exception.Message}");
+            return CliExitCodes.Failed;
+        }
     }
 
     private static void SetConnectorValue(IDictionary<string, string> config, string key, string? value)
@@ -878,7 +890,7 @@ internal static class CliCommandFactory
 
         var ntHashOption = new Option<string>("--nt-hash")
         {
-            Description = "32-character NT hash for explicit NTLMv2 SMB authentication. Command-line values may be retained in shell history or process listings."
+            Description = "NT hash for NTLMv2 SMB authentication: NTHASH, :NTHASH, LMHASH:NTHASH, or a pwdump record. Command-line values may be retained in shell history or process listings."
         };
         ntHashOption.Aliases.Add("-H");
 
@@ -1108,7 +1120,7 @@ internal static class CliCommandFactory
 
             if (hasNtHash && !CliWindowsCredential.IsValidNtHash(resolvedNtHash!.Trim()))
             {
-                result.AddError("The NT hash must be exactly 32 hexadecimal characters.");
+                result.AddError(CliWindowsCredential.NtHashFormatError);
                 return;
             }
 

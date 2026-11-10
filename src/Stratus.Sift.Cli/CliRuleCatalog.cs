@@ -14,6 +14,8 @@ internal sealed record CliRuleCatalog(
     public bool UsesLegacyPolicies { get; set; }
 }
 
+internal sealed class CliRuleLoadException(string message, Exception innerException) : Exception(message, innerException);
+
 internal static class CliRuleCatalogLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -43,12 +45,12 @@ internal static class CliRuleCatalogLoader
         {
             try
             {
-                var json = await File.ReadAllTextAsync(file, cancellationToken);
+                var json = await CliRuleTextReader.ReadAsync(file, cancellationToken);
                 LoadDocument(json, file, catalog);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                logger.LogError(exception, "Could not parse scanner rules from {File}", file);
+                throw new CliRuleLoadException($"Could not load scanner rules from '{file}': {exception.Message}", exception);
             }
         }
 
@@ -88,13 +90,12 @@ internal static class CliRuleCatalogLoader
             {
                 await using var stream = assembly.GetManifestResourceStream(resource)
                     ?? throw new InvalidOperationException($"Embedded resource '{resource}' was not found.");
-                using var reader = new StreamReader(stream);
-                var json = await reader.ReadToEndAsync(cancellationToken);
+                var json = await CliRuleTextReader.ReadAsync(stream, resource, cancellationToken);
                 LoadDocument(json, resource, catalog);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                logger.LogError(exception, "Could not load bundled scanner rules from {Resource}", resource);
+                throw new CliRuleLoadException($"Could not load bundled scanner rules from '{resource}': {exception.Message}", exception);
             }
         }
 

@@ -27,6 +27,25 @@ public class IgnoreRulePruningTests
     }
 
     [Fact]
+    public void UncDirectoryPathWildcard_PrunesJapaneseFolderAndItsContents()
+    {
+        var rules = new List<IgnoreRule>
+        {
+            new()
+            {
+                Pattern = @"\\devicename\sharename\資料*",
+                MatchTarget = RuleTarget.DirectoryPath,
+                IsEnabled = true
+            }
+        };
+
+        Assert.True(IgnoreRuleEvaluator.ShouldPruneDirectory(@"\\devicename\sharename\資料", rules));
+        Assert.True(IgnoreRuleEvaluator.ShouldPruneDirectory(@"\\devicename\sharename\資料\nested", rules));
+        Assert.True(IgnoreRuleEvaluator.ShouldIgnore(@"\\devicename\sharename\資料\file.txt", rules));
+        Assert.False(IgnoreRuleEvaluator.ShouldPruneDirectory(@"\\othername\sharename\資料", rules));
+    }
+
+    [Fact]
     public void EnumeratePath_SkipsIgnoredDirectorySubtree()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"));

@@ -84,7 +84,7 @@ Options:
   --resume                                      Continue from durable checkpoints saved by an earlier scan with the same target, credentials, rules, and scan settings.
   -u, --username <username>                     Windows username for SMB/LDAP impersonation. Accepts user, domain\user, or user@domain.
   -p, --password <password>                     Windows password for SMB/LDAP impersonation.
-  -H, --nt-hash <nt-hash>                       32-character NT hash for explicit NTLMv2 SMB authentication. Targeted network scans only.
+  -H, --nt-hash <nt-hash>                       NT hash, :NT, LM:NT pair, or pwdump record for NTLMv2 SMB authentication. Targeted network scans only.
   --nt-hash-env <variable>                      Read the NT hash from an environment variable instead of a command-line value.
   -d, --domain <domain>                         Windows/AD domain for impersonation when --username is not already qualified.
   -l, --local                                   Use the local machine account namespace instead of a domain account.
@@ -131,6 +131,14 @@ Scan a specific computer:
 .\sift.exe network --device SRV01 --output srv01-findings.log
 ```
 
+Scan only one folder within a share, including its descendants:
+
+```powershell
+.\sift.exe network -d "\\SRV01\Shared\Parent\資料" --output folder-findings.log
+```
+
+UNC folder targets retain the full path and use separate resume checkpoints from the share root and sibling folders.
+
 Scan a mixed list of subnets and hosts:
 
 ```powershell
@@ -150,7 +158,7 @@ fileserver.example.test  # a hostname can have an inline comment
 
 Use one IPv4 address, IPv6 address, hostname, or CIDR per line. Blank lines, surrounding whitespace, optional quotes, and `#`, `;`, or `//` comments are accepted; inline comments must follow whitespace. UTF-8 and BOM-marked UTF-16 files are supported. Repeated hosts and overlapping ranges are deduplicated before discovery. IPv4 CIDRs omit network and broadcast addresses except for `/31` and `/32`; IPv6 CIDRs include every address. Hostname aliases that resolve to the same IP are not merged.
 
-`--target-file` and `-t` are aliases for `--targets-file`. Choose one of `--targets-file`, `--subnet`, or `--device`. The existing authentication, DNS, enumeration, binary, and resume options also work with target files. Files are validated before any network discovery; invalid entries report their filename and line number. Target files accept hosts and CIDRs; use `--device` for UNC share roots. Files are limited to 8 MiB, 200,000 lines, and 65,536 expanded targets; oversized ranges fail before expansion. The same target expansion limit applies to `--subnet`.
+`--target-file` and `-t` are aliases for `--targets-file`. Choose one of `--targets-file`, `--subnet`, or `--device`. The existing authentication, DNS, enumeration, binary, and resume options also work with target files. Files are validated before any network discovery; invalid entries report their filename and line number. Target files accept hosts and CIDRs; use `--device` for UNC share or folder paths. Files are limited to 8 MiB, 200,000 lines, and 65,536 expanded targets; oversized ranges fail before expansion. The same target expansion limit applies to `--subnet`.
 
 Scan all shares in a domain from an unmanaged device:
 ```powershell
@@ -185,7 +193,19 @@ On Linux, `network` supports explicit domain passwords, target-local passwords (
 
 For Linux domain scans, supply the AD DNS domain with `--domain` or a qualified `--username`, or use a ticket whose realm identifies the domain. `--dns-server` can resolve controller SRV records and target hostnames without changing the system resolver. The TLS certificate must match the controller's DNS hostname; a trusted CA is still required when connecting to an IP supplied by DNS.
 
-Sift accepts the NT hash only. It does not accept LM hashes, `LM:NT` pairs, NetNTLM challenge responses, or Kerberos keys. Supplying the hash through `--nt-hash` may retain it in shell history or process listings; use `--nt-hash-env` when that matters.
+`--nt-hash` (`-H`) and `--nt-hash-env` accept these forms. Surrounding whitespace and optional quotes are trimmed; hexadecimal letters are case-insensitive.
+
+| Input | NT hash used |
+| --- | --- |
+| `NTHASH` | The supplied 32 hexadecimal characters |
+| `:NTHASH` | The hash after the leading colon |
+| `LMHASH:NTHASH` | The NT half of the pair |
+| `NT:NTHASH`, `NTLM:NTHASH`, `$NT$NTHASH` | The labelled NT hash |
+| `user:RID:LMHASH:NTHASH:::` | The fourth field of a pwdump/secretsdump record |
+
+Only the raw NT hash is used for authentication. The username and domain/local scope still come from `--username` and `--domain`/`--local`, including when a dump record is supplied. NetNTLM challenge/response captures and Kerberos keys cannot be used as NT hashes. Equivalent input formats keep the same credential resume identity.
+
+Supplying the hash through `--nt-hash` may retain it in shell history or process listings; use `--nt-hash-env` when that matters.
 
 Scan a local disk and then refine the results on another machine with a local LLM:
 ```powershell
@@ -193,7 +213,6 @@ Scan a local disk and then refine the results on another machine with a local LL
 .\sift.exe analyze --input findings.json --llm-validate --ollama-model gemma4:31b --sensitive-only --output findings.log
 ```
 
-LLM validation disables thinking by default by explicitly sending `think: false` to Ollama. All scan commands and `analyze` accept `--llm-think off|on|low|medium|high|xhigh`: `off` sends `false`, `on` sends `true`, and named levels are passed to Ollama as strings. Named levels require support from the selected model. Changing the thinking setting starts a separate resume scope for scans using LLM validation.
 
 Enable thinking when validating with Qwen:
 ```powershell
@@ -375,7 +394,7 @@ Pass a rule directory to any scan command with `--rules`:
 
 Sift reads every `.json` file below that directory. A file may contain one rule or an array of rules. File and folder names are only for organisation. Comments, trailing commas and case-insensitive property names are accepted.
 
-The custom directory is the complete catalogue for that scan. It replaces the bundled rules rather than adding to them. Include every sifting rule and ignore rule that you want to use. If Sift cannot load any sifting rules, it uses the bundled sifting rules and retains any custom ignore rules.
+The custom directory is the complete catalogue for that scan. It replaces the bundled rules rather than adding to them. Include every sifting rule and ignore rule that you want to use. An ignore-only directory uses the bundled sifting rules and retains the custom ignore rules.
 
 ### Example custom rule
 

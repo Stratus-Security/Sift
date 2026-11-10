@@ -117,7 +117,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
 
     private static HostDiscoveryResult DiscoverHostDrives(
         SmbKerberosConnection connection,
-        SmbHostTarget hostTarget,
+        SmbDeviceTarget hostTarget,
         CliWindowsCredential? credential,
         bool allowNtlmFallback,
         Func<string, bool>? shouldPruneDirectory,
@@ -164,7 +164,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
 
     private static void DiscoverSharesOnHost(
         SmbKerberosConnection connection,
-        SmbHostTarget hostTarget,
+        SmbDeviceTarget hostTarget,
         HostDiscoveryResult result,
         Func<string, bool>? shouldPruneDirectory,
         Action<string>? onCurrentPath,
@@ -174,11 +174,17 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         using var session = SmbKerberosSession.Connect(connection);
         cancellationToken.ThrowIfCancellationRequested();
         result.Authenticated = true;
-        var shareNames = session.Client.ListShares(out var listStatus);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (listStatus != NTStatus.STATUS_SUCCESS)
+        IEnumerable<string> shareNames;
+        if (hostTarget.Share is { } explicitShare)
         {
-            throw new InvalidOperationException($"share enumeration failed with {FormatStatus(listStatus)}");
+            shareNames = [explicitShare];
+        }
+        else
+        {
+            shareNames = session.Client.ListShares(out var listStatus);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (listStatus != NTStatus.STATUS_SUCCESS)
+                throw new InvalidOperationException($"share enumeration failed with {FormatStatus(listStatus)}");
         }
 
         var readableShares = new List<string>();
@@ -192,11 +198,11 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         foreach (var shareName in candidateShares)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!session.CanReadShare(shareName, out var accessStatus))
+            if (!session.CanReadShare(shareName, out var accessStatus, hostTarget.RootDirectory))
             {
                 if (hostTarget.Share != null)
                 {
-                    var warning = $"{connection.DisplayHost}\\{shareName}: {connection.AuthenticationProtocol} authentication succeeded, but the share is not readable ({FormatStatus(accessStatus)}).";
+                    var warning = $"{hostTarget.UncPath}: {connection.AuthenticationProtocol} authentication succeeded, but the requested folder is not readable ({FormatStatus(accessStatus)}).";
                     result.Warnings.Add(warning);
                 }
 
@@ -212,7 +218,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         foreach (var shareName in selectedShares)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            result.Drives.Add(new SmbKerberosDrive(connection, shareName, shouldPruneDirectory, onCurrentPath));
+            result.Drives.Add(new SmbKerberosDrive(connection, shareName, shouldPruneDirectory, onCurrentPath, hostTarget.RootDirectory));
         }
     }
 
@@ -269,7 +275,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             unchecked((int)0x80090311);   // SEC_E_NO_AUTHENTICATING_AUTHORITY
     }
 
-    private async Task<IReadOnlyList<SmbHostTarget>> GetHostTargetsAsync(
+    private async Task<IReadOnlyList<SmbDeviceTarget>> GetHostTargetsAsync(
         FileSystemScanTarget target,
         CliWindowsCredential? credential,
         bool strictKerberos,
@@ -292,40 +298,26 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 dnsServer,
                 cancellationToken, progress).ConfigureAwait(false);
             return hosts
-                .Select(host => new SmbHostTarget(host, null))
+                .Select(host => new SmbDeviceTarget(host, null))
                 .ToArray();
         }
 
         return GetNetworkHostTargets(target);
     }
 
-    internal static IReadOnlyList<SmbHostTarget> GetNetworkHostTargets(FileSystemScanTarget target)
+    internal static IReadOnlyList<SmbDeviceTarget> GetNetworkHostTargets(FileSystemScanTarget target)
     {
         return target.Mode switch
         {
-            FileSystemScanMode.Device => [ParseDeviceTarget(target.Value)],
+            FileSystemScanMode.Device => [SmbDeviceTarget.Parse(target.Value)],
             FileSystemScanMode.Subnet => SmbDiscoveryService.EnumerateSubnetHosts(target.Value)
-                .Select(host => new SmbHostTarget(host, null))
+                .Select(host => new SmbDeviceTarget(host, null))
                 .ToArray(),
             FileSystemScanMode.TargetsFile => (target.TargetList?.Hosts ?? throw new ArgumentException("Network target file was not loaded."))
-                .Select(host => new SmbHostTarget(host, null))
+                .Select(host => new SmbDeviceTarget(host, null))
                 .ToArray(),
             _ => throw new ArgumentException($"Kerberos SMB discovery does not support target mode '{target.Mode}'.")
         };
-    }
-
-    private static SmbHostTarget ParseDeviceTarget(string value)
-    {
-        var normalized = value.Trim();
-        if (!normalized.StartsWith(@"\\", StringComparison.Ordinal))
-        {
-            return new SmbHostTarget(normalized, null);
-        }
-
-        var parts = normalized.TrimStart('\\').Split('\\', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return parts.Length >= 2
-            ? new SmbHostTarget(parts[0], parts[1])
-            : new SmbHostTarget(parts[0], null);
     }
 
     internal Task<SmbKerberosConnection> ResolveConnectionAsync(
@@ -486,8 +478,6 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         };
     }
 
-    internal sealed record SmbHostTarget(string Host, string? Share);
-
     private readonly record struct KdcLookupKey(string Realm, IPAddress? DnsServer);
 }
 
@@ -522,14 +512,16 @@ internal sealed class SmbKerberosDrive(
     SmbKerberosConnection connection,
     string shareName,
     Func<string, bool>? shouldPruneDirectory,
-    Action<string>? onCurrentPath) : IRemoteDrive, IRemoteDriveEnumerationReportProvider, IDisposable
+    Action<string>? onCurrentPath,
+    string rootDirectory = "") : IRemoteDrive, IRemoteDriveEnumerationReportProvider, IDisposable
 {
     private readonly SmbKerberosSessionPool _contentSessions = new(connection, shareName);
     private readonly List<RemoteDriveEnumerationFailure> _enumerationFailures = [];
 
-    public string Id => $"{connection.KerberosHostName}/{shareName}";
-    public string Name => $@"\\{connection.DisplayHost}\{shareName}";
-    public string ConnectionId => $"smb-{connection.AuthenticationProtocol.ToString().ToLowerInvariant()}://{connection.KerberosHostName}/{Uri.EscapeDataString(shareName)}";
+    public string Id => $"{connection.KerberosHostName}/{shareName}" + (rootDirectory.Length == 0 ? string.Empty : $"/{rootDirectory}");
+    public string Name => $@"\\{connection.DisplayHost}\{shareName}" + (rootDirectory.Length == 0 ? string.Empty : $@"\{rootDirectory}");
+    public string ConnectionId => $"smb-{connection.AuthenticationProtocol.ToString().ToLowerInvariant()}://{connection.KerberosHostName}/{Uri.EscapeDataString(shareName)}"
+        + (rootDirectory.Length == 0 ? string.Empty : $"/{Uri.EscapeDataString(rootDirectory)}");
     public string WebUrl => Name;
     public DatastoreType DriveType => DatastoreType.FileSystem;
     public long? TotalSize => null;
@@ -572,10 +564,12 @@ internal sealed class SmbKerberosDrive(
         EnumerationFailureCount = 0;
         _enumerationFailures.Clear();
         var pending = ParseCheckpoint(deltaToken);
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { string.Empty };
+        // A saved stack must never widen a nested target back to its share or siblings.
+        if (pending.Any(directory => !IsWithinRoot(directory))) pending.Clear();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootDirectory };
         if (pending.Count == 0)
         {
-            pending.Push(string.Empty);
+            pending.Push(rootDirectory);
         }
         else
         {
@@ -595,13 +589,15 @@ internal sealed class SmbKerberosDrive(
             var directoryPath = string.IsNullOrEmpty(directory)
                 ? $@"\\{connection.DisplayHost}\{shareName}"
                 : $@"\\{connection.DisplayHost}\{shareName}\{directory}";
+            if (shouldPruneDirectory?.Invoke(directoryPath) == true) continue;
             onCurrentPath?.Invoke(directoryPath);
             IReadOnlyList<FileDirectoryInformation> entries;
             try
             {
                 entries = listDirectory(directory);
             }
-            catch (Exception exception) when (directory.Length > 0 && exception is not OperationCanceledException)
+            catch (Exception exception) when (!directory.Equals(rootDirectory, StringComparison.OrdinalIgnoreCase)
+                && exception is not OperationCanceledException)
             {
                 // Attempt each folder once this run. Keep crawling siblings, but do not
                 // save a stack that has discarded an unvisited subtree.
@@ -652,6 +648,14 @@ internal sealed class SmbKerberosDrive(
 
         return string.Empty;
     }
+
+    private bool IsWithinRoot(string directory)
+        => !directory.StartsWith('\\')
+            && !directory.Contains('/')
+            && !directory.Split('\\').Any(segment => segment is "." or "..")
+            && (rootDirectory.Length == 0
+                || directory.Equals(rootDirectory, StringComparison.OrdinalIgnoreCase)
+                || directory.StartsWith(rootDirectory + "\\", StringComparison.OrdinalIgnoreCase));
 
     internal static string CreateCheckpoint(Stack<string> pending)
         => "sift-smb-v3:" + string.Join('.', pending.Select(Encode));
@@ -905,7 +909,7 @@ internal sealed class SmbKerberosSession : IDisposable
         }
     }
 
-    internal bool CanReadShare(string shareName, out NTStatus status)
+    internal bool CanReadShare(string shareName, out NTStatus status, string directoryPath = "")
     {
         ISMBFileStore? store = null;
         object? handle = null;
@@ -920,7 +924,7 @@ internal sealed class SmbKerberosSession : IDisposable
             status = store.CreateFile(
                 out handle,
                 out _,
-                string.Empty,
+                directoryPath,
                 (AccessMask)DirectoryAccessMask.FILE_LIST_DIRECTORY | (AccessMask)DirectoryAccessMask.FILE_READ_ATTRIBUTES | AccessMask.SYNCHRONIZE,
                 FileAttributes.Directory,
                 ShareAccess.Read | ShareAccess.Write | ShareAccess.Delete,

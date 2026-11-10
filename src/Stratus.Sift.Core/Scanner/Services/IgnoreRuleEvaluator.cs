@@ -1,4 +1,6 @@
 using System.IO.Enumeration;
+using System.Net;
+using System.Text;
 using Stratus.Sift.Core.Enums;
 using Stratus.Sift.Core.Models;
 
@@ -112,9 +114,9 @@ public static class IgnoreRuleEvaluator
     {
         return rule.MatchTarget switch
         {
-            RuleTarget.FileName => FileSystemName.MatchesSimpleExpression(rule.Pattern, name),
+            RuleTarget.FileName => FileSystemName.MatchesSimpleExpression(NormalizeUnicode(rule.Pattern), name),
             RuleTarget.FileExtension => FileSystemName.MatchesSimpleExpression(
-                rule.Pattern.StartsWith('*') ? rule.Pattern : "*" + rule.Pattern,
+                NormalizeUnicode(rule.Pattern.StartsWith('*') ? rule.Pattern : "*" + rule.Pattern),
                 name),
             RuleTarget.DirectoryName => MatchesDirectoryName(normalizedPath, rule.Pattern),
             RuleTarget.DirectoryPath or RuleTarget.Content => MatchesDirectoryPath(normalizedPath, rule.Pattern),
@@ -156,9 +158,44 @@ public static class IgnoreRuleEvaluator
             return false;
         }
 
-        return HasWildcard(normalizedPattern)
-            ? FileSystemName.MatchesSimpleExpression(normalizedPattern, normalizedPath)
-            : normalizedPath.StartsWith(normalizedPattern, StringComparison.OrdinalIgnoreCase);
+        if (MatchesPath(normalizedPattern, normalizedPath)) return true;
+
+        // SMB discovery may expand a short host name to its FQDN. Compare the
+        // share/path separately only when the literal hosts identify that pair.
+        return TryGetUncHost(normalizedPattern, out var patternHost, out var patternSeparator)
+            && TryGetUncHost(normalizedPath, out var pathHost, out var pathSeparator)
+            && EquivalentUncHosts(patternHost, pathHost)
+            && MatchesPath(normalizedPattern[patternSeparator..], normalizedPath[pathSeparator..]);
+    }
+
+    private static bool MatchesPath(string pattern, string path)
+        // FileSystemName treats backslashes as escapes; path separators are literal.
+        => HasWildcard(pattern)
+            ? FileSystemName.MatchesSimpleExpression(pattern.Replace("\\", "\\\\"), path)
+            : path.StartsWith(pattern, StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryGetUncHost(string path, out string host, out int separator)
+    {
+        separator = path.StartsWith(@"\\", StringComparison.Ordinal) ? path.IndexOf('\\', 2) : -1;
+        host = separator > 2 ? path[2..separator].TrimEnd('.') : string.Empty;
+        return host.Length > 0 && !HasWildcard(host);
+    }
+
+    private static bool EquivalentUncHosts(string first, string second)
+    {
+        if (first.Equals(second, StringComparison.OrdinalIgnoreCase)) return true;
+        if (IPAddress.TryParse(first, out _) || IPAddress.TryParse(second, out _)
+            || first.EndsWith(".ipv6-literal.net", StringComparison.OrdinalIgnoreCase)
+            || second.EndsWith(".ipv6-literal.net", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var firstDot = first.IndexOf('.');
+        var secondDot = second.IndexOf('.');
+        // Preserve an explicit domain restriction when both hosts include one.
+        if ((firstDot < 0) == (secondDot < 0)) return false;
+        return firstDot < 0
+            ? first.Equals(second[..secondDot], StringComparison.OrdinalIgnoreCase)
+            : second.Equals(first[..firstDot], StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool MatchesShareName(string normalizedPath, string pattern)
@@ -240,7 +277,18 @@ public static class IgnoreRuleEvaluator
 
     private static string NormalizePath(string path)
     {
-        return path.Replace('/', '\\');
+        var normalized = NormalizeUnicode(path.Replace('/', '\\'));
+        return normalized.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)
+            ? @"\\" + normalized[8..]
+            : normalized;
+    }
+
+    private static string NormalizeUnicode(string text)
+    {
+        try { return text.Normalize(NormalizationForm.FormC); }
+        // NTFS can expose names with unpaired surrogates. Preserve their literal
+        // representation rather than failing enumeration of the surrounding tree.
+        catch (ArgumentException) { return text; }
     }
 
     private static bool HasWildcard(string pattern)

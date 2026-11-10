@@ -41,6 +41,11 @@
 
 ### Network scans and resume
 
+- Honor the complete UNC folder path supplied to `network --device` (`-d`) instead of scanning its entire share. Keep nested targets separate in resume state and preserve the folder suffix when rewriting hosts through custom DNS.
+- Match literal path separators in wildcard directory ignores, including full UNC paths with Japanese names.
+- Make full UNC ignores tolerate short hostnames and FQDNs in either direction without conflating different explicit domains, shares or IP addresses. Normalize extended UNC paths and canonically equivalent Unicode text.
+- Accept raw NT hashes, leading-colon hashes, LM:NT pairs, labelled hashes and pwdump/secretsdump records through both direct and environment-variable inputs. Normalize them to the same NT hash bytes and reject challenge/response captures.
+- Decode rule files with strict UTF-8 or BOM-marked UTF-16/UTF-32. Stop startup with conversion instructions for invalid encodings, and fail on unreadable or malformed rules instead of silently omitting exclusions.
 - Add `network --targets-file` (`--target-file`, `-t`) for mixed IPv4/IPv6 addresses, hostnames and CIDRs, one per line. Accept comments, whitespace, optional quotes, UTF-8 and BOM-marked UTF-16; validate entries before discovery and deduplicate repeated hosts/ranges within bounded expansion limits.
 - Keep interrupted or failed files/subtrees pending, and advance checkpoints only after processing and journal updates succeed. Detect same-size remote edits using server versions/timestamps; refresh metadata and skip unchanged content downloads on resume.
 - Harden resume-journal recovery, cleanup and synchronization with `System.Threading.Lock` for synchronous state and an asynchronous gate for durable writes. Keep partial progress usable without treating omitted content as complete.

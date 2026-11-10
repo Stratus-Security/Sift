@@ -40,6 +40,56 @@ public sealed class UnifiedRuleTests : IDisposable
         Assert.True(IgnoreRuleEvaluator.ShouldPruneDirectory(@"\\server\ADMIN$", catalog.IgnoreRules));
     }
 
+    [Theory]
+    [InlineData("DirectoryPath")]
+    [InlineData("DirectoryName")]
+    public async Task JapaneseSubstringIgnore_LoadsAndPrunesSmbAndFilesystemFolders(string matchTarget)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_directory, "ignore.json"), $$"""
+            { "Pattern": "*資料*", "MatchTarget": "{{matchTarget}}", "IsEnabled": true }
+            """);
+        var catalog = await CliRuleCatalogLoader.LoadAsync(_directory, NullLogger.Instance);
+        bool Prune(string path) => IgnoreRuleEvaluator.ShouldPruneDirectory(path, catalog.IgnoreRules);
+
+        using var drive = new SmbKerberosDrive(
+            new SmbKerberosConnection(System.Net.IPAddress.Loopback, "server", null, null,
+                SmbAuthenticationProtocol.Ntlm, false),
+            "Data", Prune, null);
+        var listed = new List<string>();
+        await drive.ProcessDirectoriesAsync(path =>
+        {
+            listed.Add(path);
+            return path switch
+            {
+                "" =>
+                [
+                    new SMBLibrary.FileDirectoryInformation
+                    {
+                        FileName = "old-資料-backup", FileAttributes = SMBLibrary.FileAttributes.Directory
+                    },
+                    new SMBLibrary.FileDirectoryInformation
+                    {
+                        FileName = "keep", FileAttributes = SMBLibrary.FileAttributes.Directory
+                    }
+                ],
+                "keep" => [],
+                _ => throw new InvalidOperationException("Entered an ignored folder: " + path)
+            };
+        }, null, _ => Task.CompletedTask);
+        Assert.Equal(["", "keep"], listed);
+        Assert.True(IgnoreRuleEvaluator.ShouldIgnore(@"\\server\Data\old-資料-backup\file.txt", catalog.IgnoreRules));
+
+        var fixture = Path.Combine(_directory, "fixture");
+        Directory.CreateDirectory(Path.Combine(fixture, "old-資料-backup"));
+        await File.WriteAllTextAsync(Path.Combine(fixture, "old-資料-backup", "ignored.txt"), "ignored");
+        await File.WriteAllTextAsync(Path.Combine(fixture, "keep.txt"), "included");
+        var enumerator = new Stratus.Sift.FileSystem.StandardFileSystemEnumerator(
+            NullLogger<Stratus.Sift.FileSystem.StandardFileSystemEnumerator>.Instance);
+        var entries = enumerator.EnumerateScanCandidates(fixture, path => Prune(path.ToString())).ToList();
+        Assert.Contains(entries, entry => entry.Name == "keep.txt");
+        Assert.DoesNotContain(entries, entry => entry.Path.Contains("資料", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task UnifiedRule_LoadsDetectionAndReportingSettingsTogether()
     {

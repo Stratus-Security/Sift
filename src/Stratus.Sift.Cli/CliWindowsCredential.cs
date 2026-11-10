@@ -1,6 +1,7 @@
 using System.Net.NetworkInformation;
 using System.Net;
 using System.Security.Cryptography;
+using System.Globalization;
 
 namespace Stratus.Sift.Cli;
 
@@ -110,9 +111,15 @@ internal sealed record CliWindowsCredential(
             isLocalMachineAccount);
     }
 
-    internal static bool IsValidNtHash(string? value)
+    internal const string NtHashFormatError =
+        "The NT hash must be exactly 32 hexadecimal characters. Accepted forms: NTHASH, :NTHASH, LMHASH:NTHASH, "
+        + "NTLM:NTHASH, $NT$NTHASH, or user:RID:LMHASH:NTHASH:::. NetNTLM challenge/response captures are not NT hashes.";
+
+    internal static bool IsValidNtHash(string? value) => TryGetNtHash(value.AsSpan(), out _);
+
+    private static bool IsHexHash(ReadOnlySpan<char> value)
     {
-        if (value is null || value.Length != 32)
+        if (value.Length != 32)
         {
             return false;
         }
@@ -130,13 +137,61 @@ internal sealed record CliWindowsCredential(
 
     private static byte[] ParseNtHash(string value)
     {
-        var trimmed = value.Trim();
-        if (!IsValidNtHash(trimmed))
+        if (!TryGetNtHash(value.AsSpan(), out var hash))
         {
-            throw new ArgumentException("The NT hash must be exactly 32 hexadecimal characters.", nameof(value));
+            throw new ArgumentException(NtHashFormatError, nameof(value));
         }
 
-        return Convert.FromHexString(trimmed);
+        return Convert.FromHexString(hash);
+    }
+
+    private static bool TryGetNtHash(ReadOnlySpan<char> value, out ReadOnlySpan<char> hash)
+    {
+        hash = default;
+        value = value.Trim();
+        if (value.Length >= 2 && (value[0] is '\'' or '"') && value[^1] == value[0])
+            value = value[1..^1].Trim();
+        if (value.IndexOfAny('\r', '\n') >= 0) return false;
+        if (value.StartsWith("$NT$", StringComparison.OrdinalIgnoreCase)) value = value[4..];
+        if (IsHexHash(value))
+        {
+            hash = value;
+            return true;
+        }
+
+        var firstColon = value.IndexOf(':');
+        if (firstColon < 0) return false;
+        var first = value[..firstColon].Trim();
+        var rest = value[(firstColon + 1)..].Trim();
+        var secondColon = rest.IndexOf(':');
+        if (secondColon < 0)
+        {
+            if (!(first.IsEmpty || IsHexHash(first)
+                    || first.Equals("NT", StringComparison.OrdinalIgnoreCase)
+                    || first.Equals("NTLM", StringComparison.OrdinalIgnoreCase))
+                || !IsHexHash(rest))
+                return false;
+            hash = rest;
+            return true;
+        }
+
+        // Pwdump/secretsdump records put the raw NT hash in the fourth field.
+        // Never search arbitrary fields for a hex string: captured NetNTLM
+        // responses can also contain 32-character hex fields.
+        var rid = rest[..secondColon].Trim();
+        if (first.IsEmpty || (!rid.IsEmpty && !uint.TryParse(rid, NumberStyles.None, CultureInfo.InvariantCulture, out _)))
+            return false;
+        rest = rest[(secondColon + 1)..];
+        var thirdColon = rest.IndexOf(':');
+        if (thirdColon < 0) return false;
+        var lm = rest[..thirdColon].Trim();
+        if (!lm.IsEmpty && !IsHexHash(lm)) return false;
+        rest = rest[(thirdColon + 1)..];
+        var fourthColon = rest.IndexOf(':');
+        var nt = (fourthColon < 0 ? rest : rest[..fourthColon]).Trim();
+        if (!IsHexHash(nt)) return false;
+        hash = nt;
+        return true;
     }
 
     private static bool IsLocalMachineQualifier(string value)

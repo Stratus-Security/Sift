@@ -33,7 +33,7 @@
   { "Pattern": "*\\wsuscontent*", "MatchTarget": "DirectoryPath", "Description": "WSUS", "IsEnabled": true },
   { "Pattern": "*\\Application Data\\Microsoft\\CLR Security Config*", "MatchTarget": "DirectoryPath", "Description": "CLR Security", "IsEnabled": true },
   { "Pattern": "*\\servicing\\LCU*", "MatchTarget": "DirectoryPath", "Description": "LCU", "IsEnabled": true },
-  { "Pattern": "*Windows Kits\\\\10*", "MatchTarget": "DirectoryPath", "Description": "Windows Kits", "IsEnabled": true },
+  { "Pattern": "*Windows Kits\\10*", "MatchTarget": "DirectoryPath", "Description": "Windows Kits", "IsEnabled": true },
   { "Pattern": "*Git\\mingw64*", "MatchTarget": "DirectoryPath", "Description": "Git", "IsEnabled": true },
   { "Pattern": "*Git\\usr\\lib*", "MatchTarget": "DirectoryPath", "Description": "Git", "IsEnabled": true },
   { "Pattern": "*ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore*", "MatchTarget": "DirectoryPath", "Description": ".NET Breadcrumbs", "IsEnabled": true },

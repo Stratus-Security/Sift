@@ -384,25 +384,11 @@ internal sealed partial class SmbDiscoveryService
         return trimmed.Trim();
     }
 
-    private static bool TryExtractExplicitShareRoot(string value, out string root)
+    internal static bool TryExtractExplicitShareRoot(string value, out string root)
     {
-        root = string.Empty;
-        if (!value.StartsWith(@"\\", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var segments = value
-            .TrimStart('\\')
-            .Split('\\', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        if (segments.Length < 2)
-        {
-            return false;
-        }
-
-        root = $@"\\{segments[0]}\{segments[1]}";
-        return true;
+        var target = SmbDeviceTarget.Parse(value);
+        root = target.UncPath ?? string.Empty;
+        return target.Share is not null;
     }
 
     internal async Task<IReadOnlyList<string>> ResolveExplicitShareRootsAsync(
@@ -410,10 +396,8 @@ internal sealed partial class SmbDiscoveryService
         IPAddress dnsServer,
         CancellationToken cancellationToken)
     {
-        var segments = explicitRoot
-            .TrimStart('\\')
-            .Split('\\', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var addresses = await _dnsResolver.ResolveHostAddressesAsync(segments[0], dnsServer, cancellationToken).ConfigureAwait(false);
+        var target = SmbDeviceTarget.Parse(explicitRoot);
+        var addresses = await _dnsResolver.ResolveHostAddressesAsync(target.Host, dnsServer, cancellationToken).ConfigureAwait(false);
         return CreateExplicitShareRoots(explicitRoot, addresses);
     }
 
@@ -421,11 +405,10 @@ internal sealed partial class SmbDiscoveryService
         string explicitRoot,
         IEnumerable<IPAddress> addresses)
     {
-        var segments = explicitRoot
-            .TrimStart('\\')
-            .Split('\\', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var target = SmbDeviceTarget.Parse(explicitRoot);
+        if (target.Share is null) throw new ArgumentException("An explicit UNC target must include a share.", nameof(explicitRoot));
         return addresses
-            .Select(address => $@"\\{FormatUncHost(address)}\{segments[1]}")
+            .Select(address => (target with { Host = FormatUncHost(address) }).UncPath!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
