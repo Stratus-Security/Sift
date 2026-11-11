@@ -235,6 +235,8 @@ Note: Use the same command and output path to continue the same scan; output is 
 
 SMB scans continue through readable folders when another folder's listing fails. Failed files and subtrees remain pending, block unsafe directory checkpoints, and report a partial result with exit code `3`. Each folder is attempted once per crawl; `--resume` retries pending work and skips unchanged files using size and server creation/write/change timestamps. Files without usable timestamps are inspected again. Older SMB directory checkpoints restart enumeration because they may have omitted unreadable subtrees.
 
+SMB scan connections, file opens/reads/closes and directory listings have a two-minute deadline and honor scan cancellation. A timed-out session is discarded, its unfinished work stays pending for `--resume`, and remaining work continues. Late calls and cleanup are isolated and capped across shares so they cannot block the checkpoint barrier indefinitely or write into reused scan buffers.
+
 ## Scan sources
 
 Sift includes commands for:

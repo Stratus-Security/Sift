@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### SMB scan stalls
+
+- Apply a two-minute deadline and cancellation to synchronous SMB scan connections, file opens/reads/closes and directory listings. Discard timed-out sessions, continue remaining work and retain failed files/subtrees for resume instead of waiting indefinitely at a checkpoint.
+- Isolate late calls from scanner buffers and session reuse, and bound outstanding SMB calls and cleanup across shares. Add regression coverage for blocked reads, cancellation, late connections, cleanup, sibling traversal and checkpoint completion.
+
 ### Dependency security
 
 - Pin `System.Security.Cryptography.Pkcs` to 8.0.2 to resolve the two CMS denial-of-service advisories inherited through Kerberos.NET. Refresh the CLI, test and all six platform lockfiles.
