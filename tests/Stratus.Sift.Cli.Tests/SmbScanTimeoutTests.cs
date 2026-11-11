@@ -17,6 +17,87 @@ public sealed class SmbScanTimeoutTests
     private static SmbKerberosConnection Connection => new(IPAddress.Loopback, "server", null, null,
         SmbAuthenticationProtocol.Ntlm, IsKerberosReady: false);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TimeoutInterruptsTransport_AndMoreThan32FailuresDoNotExhaustCallCapacity(bool cancel)
+    {
+        // The previous implementation retained every timed-out call indefinitely;
+        // after 32 calls even healthy sessions could no longer start any work.
+        for (var index = 0; index < 36; index++)
+        {
+            using var release = new ManualResetEventSlim();
+            using var cancellation = new CancellationTokenSource();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var store = Store();
+            store.Proxy.Read = () => { entered.TrySetResult(); release.Wait(); return [1]; };
+            using var pool = new SmbKerberosSessionPool(Connection, "Data", () =>
+                new SmbScanSession(() => new SmbScanSession.Connection(store.Store, () => closed.TrySetResult()),
+                    Deadline, release.Set));
+            try
+            {
+                using var stream = await SmbKerberosReadStream.OpenAsync(pool, "stalled.txt", 0, 1, cancellation.Token);
+                var read = stream.ReadAsync(new byte[1].AsMemory(), cancellation.Token).AsTask();
+                if (cancel)
+                {
+                    await entered.Task.WaitAsync(TestLimit);
+                    cancellation.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read.WaitAsync(TestLimit));
+                }
+                else
+                    await Assert.ThrowsAsync<RemoteContentUnavailableException>(() => read.WaitAsync(TestLimit));
+                await closed.Task.WaitAsync(TestLimit);
+                Assert.Equal(0, store.Proxy.CloseCalls);
+            }
+            finally { release.Set(); }
+        }
+
+        using var healthy = new SmbScanOperation<object>(() => new object(), _ => { }, TestLimit);
+        Assert.Equal(42, await healthy.RunAsync(_ => 42, "healthy SMB call after failures", default).WaitAsync(TestLimit));
+    }
+
+    [Fact]
+    public async Task BlockingTransportInterrupt_DoesNotBlockDeadlineOrDispose()
+    {
+        using var releaseCall = new ManualResetEventSlim();
+        using var releaseInterrupt = new ManualResetEventSlim();
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var interruptEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var interruptFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var operation = new SmbScanOperation<object>(() => new object(), _ => closed.TrySetResult(), Deadline, () =>
+        {
+            interruptEntered.TrySetResult();
+            releaseInterrupt.Wait();
+            interruptFinished.TrySetResult();
+        });
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(() => operation.RunAsync(_ =>
+            {
+                releaseCall.Wait();
+                return 1;
+            }, "stalled SMB operation", default).WaitAsync(TestLimit));
+            await interruptEntered.Task.WaitAsync(TestLimit);
+            operation.Dispose();
+            Assert.False(closed.Task.IsCompleted);
+        }
+        finally { releaseCall.Set(); releaseInterrupt.Set(); }
+        await Task.WhenAll(closed.Task, interruptFinished.Task).WaitAsync(TestLimit);
+    }
+
+    [Fact]
+    public void CustomTimeout_LowersWireResponseTimeout_AndKeepsResumeIdentity()
+    {
+        var configured = Connection with { OperationTimeoutSeconds = 10 };
+        Assert.Equal(TimeSpan.FromSeconds(10), configured.OperationTimeout);
+        Assert.Equal(10_000, configured.ResponseTimeoutMs);
+        Assert.Equal(30_000, Connection.ResponseTimeoutMs);
+        using var original = new SmbKerberosDrive(Connection, "Data", null, null);
+        using var changed = new SmbKerberosDrive(configured, "Data", null, null);
+        Assert.Equal(original.ConnectionId, changed.ConnectionId);
+    }
+
     [Fact]
     public async Task StalledRead_IsDeferredWithoutLateBufferWrites_AndNextFileUsesFreshSession()
     {

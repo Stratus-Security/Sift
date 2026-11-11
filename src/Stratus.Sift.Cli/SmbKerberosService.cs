@@ -18,6 +18,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
 {
     private const int HostParallelism = 16;
     internal const int ResponseTimeoutMs = 30_000;
+    internal const int DefaultOperationTimeoutSeconds = 120;
     private static readonly TimeSpan TcpConnectTimeout = TimeSpan.FromSeconds(10);
 
     internal async Task<SmbKerberosDiscoveryResult> DiscoverDrivesAsync(
@@ -28,8 +29,10 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         Func<string, bool>? shouldPruneDirectory,
         Action<string>? onCurrentPath,
         CancellationToken cancellationToken,
-        CliDiscoveryProgress? progress = null)
+        CliDiscoveryProgress? progress = null,
+        int smbTimeoutSeconds = DefaultOperationTimeoutSeconds)
     {
+        if (smbTimeoutSeconds is < 1 or > 3600) throw new ArgumentOutOfRangeException(nameof(smbTimeoutSeconds));
         var hostTargets = await GetHostTargetsAsync(
             target,
             credential,
@@ -60,13 +63,13 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
                 var failed = false;
                 try
                 {
-                    var connection = await ResolveConnectionAsync(hostTarget.Host, credential, dnsServer, token, kdcLookups);
+                    var connection = await ResolveConnectionAsync(hostTarget.Host, credential, dnsServer, token, kdcLookups, smbTimeoutSeconds);
                     await CheckTcpConnectionAsync(connection.Address, token).ConfigureAwait(false);
                     var result = await SmbHostOperation.RunAsync(
                         operationToken => DiscoverHostDrives(
                             connection, hostTarget, credential, allowNtlmFallback,
                             shouldPruneDirectory, onCurrentPath, operationToken),
-                        $"SMB discovery for {hostTarget.Host}", token).ConfigureAwait(false);
+                        $"SMB discovery for {hostTarget.Host}", token, connection.OperationTimeout).ConfigureAwait(false);
 
                     foreach (var drive in result.Drives)
                     {
@@ -332,7 +335,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         CliWindowsCredential? credential,
         IPAddress? dnsServer,
         CancellationToken cancellationToken,
-        ConcurrentDictionary<KdcLookupKey, Lazy<Task<string?>>>? kdcLookups)
+        ConcurrentDictionary<KdcLookupKey, Lazy<Task<string?>>>? kdcLookups,
+        int smbTimeoutSeconds = DefaultOperationTimeoutSeconds)
     {
         var normalizedHost = host.Trim().TrimStart('\\').TrimEnd('.');
         var realm = GetCredentialRealm(credential);
@@ -356,7 +360,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         if (!IsUsableKerberosHostName(kerberosHostName))
         {
             probeResult = await SmbHostOperation.RunAsync(
-                _ => TryProbeSmbTarget(address), $"SMB name probe for {address}", cancellationToken).ConfigureAwait(false);
+                _ => TryProbeSmbTarget(address, Math.Min(ResponseTimeoutMs, smbTimeoutSeconds * 1000)),
+                $"SMB name probe for {address}", cancellationToken, TimeSpan.FromSeconds(smbTimeoutSeconds)).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(probeResult?.DnsHostName))
             {
                 kerberosHostName = probeResult.DnsHostName;
@@ -391,7 +396,8 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
             credential,
             SmbAuthenticationProtocol.Kerberos,
             kerberosReady,
-            kdcHost);
+            kdcHost,
+            smbTimeoutSeconds);
     }
 
     private async Task<string?> ResolveKdcHostAsync(string realm, IPAddress? dnsServer, CancellationToken cancellationToken)
@@ -409,9 +415,9 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         }
     }
 
-    private static SmbTargetNameProbeResult? TryProbeSmbTarget(IPAddress address)
+    private static SmbTargetNameProbeResult? TryProbeSmbTarget(IPAddress address, int responseTimeoutMs)
     {
-        var client = new SMB2Client(ResponseTimeoutMs);
+        var client = new SMB2Client(responseTimeoutMs);
         try
         {
             if (!client.Connect(address, SMBTransportType.DirectTCPTransport))
@@ -430,7 +436,7 @@ internal sealed class SmbKerberosService(SmbDiscoveryService discoveryService, C
         }
         finally
         {
-            try { client.Disconnect(); } catch { }
+            SmbClientTransport.Abort(client);
         }
     }
 
@@ -503,9 +509,12 @@ internal sealed record SmbKerberosConnection(
     CliWindowsCredential? Credential,
     SmbAuthenticationProtocol AuthenticationProtocol,
     bool IsKerberosReady,
-    string? KdcHost = null)
+    string? KdcHost = null,
+    int OperationTimeoutSeconds = SmbKerberosService.DefaultOperationTimeoutSeconds)
 {
     internal string DisplayHost => KerberosHostName;
+    internal TimeSpan OperationTimeout => TimeSpan.FromSeconds(OperationTimeoutSeconds);
+    internal int ResponseTimeoutMs => Math.Min(SmbKerberosService.ResponseTimeoutMs, checked(OperationTimeoutSeconds * 1000));
 }
 
 internal sealed class SmbKerberosDrive(
@@ -794,13 +803,18 @@ internal sealed class SmbKerberosSession : IDisposable
 
     internal SMB2Client Client { get; }
 
-    internal static SmbKerberosSession Connect(SmbKerberosConnection connection)
+    internal static SmbKerberosSession Connect(SmbKerberosConnection connection, SMB2Client? client = null)
     {
-        var client = new SMB2Client(SmbKerberosService.ResponseTimeoutMs);
-        if (!client.Connect(connection.Address, SMBTransportType.DirectTCPTransport))
+        client ??= new SMB2Client(connection.ResponseTimeoutMs);
+        try
         {
-            try { client.Disconnect(); } catch { }
-            throw new SmbConnectionException($"SMB negotiation failed for {connection.Address}:445.");
+            if (!client.Connect(connection.Address, SMBTransportType.DirectTCPTransport))
+                throw new SmbConnectionException($"SMB negotiation failed for {connection.Address}:445.");
+        }
+        catch
+        {
+            SmbClientTransport.Abort(client);
+            throw;
         }
 
         var credential = connection.Credential;
@@ -898,7 +912,7 @@ internal sealed class SmbKerberosSession : IDisposable
         }
         catch
         {
-            try { client.Disconnect(); } catch { }
+            SmbClientTransport.Abort(client);
             throw;
         }
 
@@ -924,7 +938,7 @@ internal sealed class SmbKerberosSession : IDisposable
         catch
         {
             (authentication as IDisposable)?.Dispose();
-            try { client.Disconnect(); } catch { }
+            SmbClientTransport.Abort(client);
             throw;
         }
     }
@@ -984,7 +998,7 @@ internal sealed class SmbKerberosSession : IDisposable
     internal void Abort()
     {
         if (_disposed) return;
-        try { Client.Disconnect(); } catch { }
+        SmbClientTransport.Abort(Client);
         (_authentication as IDisposable)?.Dispose();
         _disposed = true;
     }
@@ -1199,14 +1213,21 @@ internal sealed class SmbScanSession : IDisposable
     private readonly SmbScanOperation<Connection> _operations;
 
     internal SmbScanSession(SmbKerberosConnection connection, string shareName)
-        : this(() =>
+    {
+        // Keep the client available even while connect/login is running so the
+        // deadline can disconnect a stalled transport before the call returns.
+        var client = new SMB2Client(connection.ResponseTimeoutMs);
+        _operations = new(() =>
         {
-            var session = SmbKerberosShareSession.Connect(connection, shareName);
-            return new Connection(session.Store, session.Dispose);
-        }) { }
+            var session = SmbKerberosShareSession.Connect(connection, shareName, client);
+            // File handles are closed before reuse. Dropped sessions should not
+            // issue tree-disconnect/logoff requests against an unresponsive peer.
+            return new Connection(session.Store, session.Abort);
+        }, resource => resource.Close(), connection.OperationTimeout, () => SmbClientTransport.Abort(client));
+    }
 
-    internal SmbScanSession(Func<Connection> connect, TimeSpan? deadline = null)
-        => _operations = new(connect, connection => connection.Close(), deadline);
+    internal SmbScanSession(Func<Connection> connect, TimeSpan? deadline = null, Action? interrupt = null)
+        => _operations = new(connect, connection => connection.Close(), deadline, interrupt);
 
     internal bool IsAvailable => _operations.IsAvailable;
     internal Task<T> RunAsync<T>(Func<SmbKerberosStore, T> operation, string description, CancellationToken token)
@@ -1225,9 +1246,9 @@ internal sealed class SmbKerberosShareSession : IDisposable
         Store = store;
     }
 
-    internal static SmbKerberosShareSession Connect(SmbKerberosConnection connection, string shareName)
+    internal static SmbKerberosShareSession Connect(SmbKerberosConnection connection, string shareName, SMB2Client? client = null)
     {
-        var session = SmbKerberosSession.Connect(connection);
+        var session = SmbKerberosSession.Connect(connection, client);
         try
         {
             return new SmbKerberosShareSession(session, session.ConnectShare(shareName));
@@ -1239,6 +1260,8 @@ internal sealed class SmbKerberosShareSession : IDisposable
             throw;
         }
     }
+
+    internal void Abort() => _session.Abort();
 
     public void Dispose()
     {

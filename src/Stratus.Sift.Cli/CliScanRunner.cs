@@ -321,6 +321,7 @@ internal static class CliScanRunner
                 allowNtlmFallback: !kerberos,
                 dnsServer,
                 fullScan,
+                performanceOptions.SmbTimeoutSeconds,
                 diagnostics,
                 cancellationToken);
         }
@@ -351,12 +352,15 @@ internal static class CliScanRunner
         bool allowNtlmFallback,
         IPAddress? dnsServer,
         bool fullScan,
+        int smbTimeoutSeconds,
         CliScanDiagnostics diagnostics,
         CancellationToken cancellationToken)
     {
         var kerberosService = session.Host.Services.GetRequiredService<SmbKerberosService>();
         var usesNtHash = credential?.UsesNtHash == true;
         var discoveryProgress = display.BeginDiscovery(target.Mode == FileSystemScanMode.Domain);
+        if (smbTimeoutSeconds != SmbKerberosService.DefaultOperationTimeoutSeconds)
+            display.WriteEvent($"SMB operation timeout: {smbTimeoutSeconds} seconds.", ConsoleColor.Cyan);
         display.WriteEvent(
             usesNtHash
                 ? "Authentication mode: explicit NTLMv2 pass-the-hash; Kerberos is disabled."
@@ -382,7 +386,8 @@ internal static class CliScanRunner
                 path => IgnoreRuleEvaluator.ShouldPruneDirectory(path, session.IgnoreRules),
                 display.SetCurrentPath,
                 cancellationToken,
-                discoveryProgress);
+                discoveryProgress,
+                smbTimeoutSeconds);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

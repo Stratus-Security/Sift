@@ -7,13 +7,15 @@ namespace Stratus.Sift.Cli;
 internal sealed class SmbScanOperation<TResource>(
     Func<TResource> create,
     Action<TResource> dispose,
-    TimeSpan? deadline = null) : IDisposable where TResource : class
+    TimeSpan? deadline = null,
+    Action? interrupt = null) : IDisposable where TResource : class
 {
     private readonly object _sync = new();
     private readonly TimeSpan _deadline = deadline ?? TimeSpan.FromMinutes(2);
     private TResource? _resource;
     private bool _busy;
     private bool _disposed;
+    private int _interruptStarted;
 
     internal bool IsAvailable { get { lock (_sync) return !_disposed; } }
 
@@ -97,18 +99,34 @@ internal sealed class SmbScanOperation<TResource>(
     public void Dispose()
     {
         TResource? idle;
+        bool busy;
         lock (_sync)
         {
             if (_disposed) return;
             _disposed = true;
-            // The in-flight call owns the session until it returns. In particular,
-            // never close or reuse its handles while a late read can still run.
-            if (_busy) return;
-            idle = _resource;
-            _resource = null;
+            // Interrupt only the transport while a call owns the session. Keep
+            // authentication/handle cleanup with that call until it returns.
+            busy = _busy;
+            idle = busy ? null : _resource;
+            if (!busy) _resource = null;
         }
+        if (busy && interrupt != null && Interlocked.Exchange(ref _interruptStarted, 1) == 0)
+            SmbScanOperationSlots.Observe(InterruptAsync());
         if (idle == null) return;
         SmbScanOperationSlots.Observe(DisposeIdleAsync(idle));
+    }
+
+    private async Task InterruptAsync()
+    {
+        // Do not queue interrupts behind the very calls they must unblock, or
+        // depend on a thread pool whose workers may all be in synchronous SMB I/O.
+        await SmbScanOperationSlots.InterruptSlots.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await Task.Factory.StartNew(interrupt!, CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default).ConfigureAwait(false);
+        }
+        finally { SmbScanOperationSlots.InterruptSlots.Release(); }
     }
 
     private async Task DisposeIdleAsync(TResource resource)
@@ -123,6 +141,7 @@ internal sealed class SmbScanOperation<TResource>(
 internal static class SmbScanOperationSlots
 {
     internal static readonly SemaphoreSlim Slots = new(32, 32);
+    internal static readonly SemaphoreSlim InterruptSlots = new(32, 32);
 
     internal static void Observe(Task task) => _ = task.ContinueWith(
         completed => _ = completed.Exception,

@@ -3,7 +3,8 @@ namespace Stratus.Sift.Cli;
 internal sealed record CliFilesystemPerformanceOptions(
     int Threads = 0,
     long MaxReadBytesPerSecond = 0,
-    string? DiagnosticsOutputPath = null)
+    string? DiagnosticsOutputPath = null,
+    int SmbTimeoutSeconds = SmbKerberosService.DefaultOperationTimeoutSeconds)
 {
     public int ResolveWorkerCount() => Threads > 0
         ? Threads

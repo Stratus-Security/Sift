@@ -183,6 +183,7 @@ internal static class CliCommandFactory
     {
         var commonOptions = CreateCommonScanOptions();
         var performanceOptions = CreateFilesystemPerformanceOptions();
+        var smbTimeoutOption = CreateSmbTimeoutOption();
         var credentialOptions = CreateWindowsCredentialOptions("-d");
         var kerberosOption = CreateKerberosOption();
         var dnsServerOption = CreateDnsServerOption();
@@ -226,6 +227,7 @@ internal static class CliCommandFactory
             kerberosOption,
             dnsServerOption,
             domainControllerOption,
+            smbTimeoutOption,
             performanceOptions.Threads,
             performanceOptions.MaxReadMiBPerSecond,
             performanceOptions.DiagnosticsOutput
@@ -275,7 +277,7 @@ internal static class CliCommandFactory
                 credential,
                 BuildLlmOptions(result, commonOptions),
                 BuildOutputOptions(result, commonOptions),
-                performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions),
+                performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions, smbTimeoutOption),
                 kerberos: result.GetValue(kerberosOption),
                 dnsServer: ParseDnsServer(result, dnsServerOption),
                 fullScan: !result.GetValue(commonOptions.Resume),
@@ -325,6 +327,7 @@ internal static class CliCommandFactory
 
         var commonOptions = CreateCommonScanOptions();
         var performanceOptions = CreateFilesystemPerformanceOptions();
+        var smbTimeoutOption = CreateSmbTimeoutOption();
         var credentialOptions = CreateWindowsCredentialOptions("-a");
         var kerberosOption = CreateKerberosOption();
         var dnsServerOption = CreateDnsServerOption();
@@ -356,6 +359,7 @@ internal static class CliCommandFactory
             credentialOptions.Local,
             kerberosOption,
             dnsServerOption,
+            smbTimeoutOption,
             performanceOptions.Threads,
             performanceOptions.MaxReadMiBPerSecond,
             performanceOptions.DiagnosticsOutput
@@ -407,7 +411,7 @@ internal static class CliCommandFactory
                 credential,
                 BuildLlmOptions(result, commonOptions),
                 BuildOutputOptions(result, commonOptions),
-                performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions),
+                performanceOptions: BuildFilesystemPerformanceOptions(result, performanceOptions, smbTimeoutOption),
                 kerberos: result.GetValue(kerberosOption),
                 dnsServer: ParseDnsServer(result, dnsServerOption),
                 fullScan: !result.GetValue(commonOptions.Resume),
@@ -959,7 +963,8 @@ internal static class CliCommandFactory
 
     private static CliFilesystemPerformanceOptions BuildFilesystemPerformanceOptions(
         ParseResult result,
-        FilesystemPerformanceOptions options)
+        FilesystemPerformanceOptions options,
+        Option<int>? smbTimeoutOption = null)
     {
         var readMiB = result.GetValue(options.MaxReadMiBPerSecond);
         long readBytes;
@@ -977,7 +982,26 @@ internal static class CliCommandFactory
         return new CliFilesystemPerformanceOptions(
             result.GetValue(options.Threads),
             readBytes,
-            result.GetValue(options.DiagnosticsOutput));
+            result.GetValue(options.DiagnosticsOutput),
+            smbTimeoutOption == null ? SmbKerberosService.DefaultOperationTimeoutSeconds : result.GetValue(smbTimeoutOption));
+    }
+
+    private static Option<int> CreateSmbTimeoutOption()
+    {
+        var option = new Option<int>("--smb-timeout-seconds")
+        {
+            Description = "Maximum time for an SMB operation in seconds (1-3600). Failed work remains pending for resume; transient file opens may retry.",
+            DefaultValueFactory = _ => SmbKerberosService.DefaultOperationTimeoutSeconds
+        };
+        option.Validators.Add(result =>
+        {
+            // Conversion failures already have a parser error; GetValue would
+            // throw instead of returning that error for non-integer input.
+            if (!int.TryParse(result.Tokens.FirstOrDefault()?.Value, out var seconds)) return;
+            if (seconds is < 1 or > 3600)
+                result.AddError("The --smb-timeout-seconds value must be between 1 and 3600.");
+        });
+        return option;
     }
 
     private static Option<bool> CreateKerberosOption()
