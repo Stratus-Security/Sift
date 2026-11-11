@@ -4,6 +4,7 @@
 
 ### SMB scan stalls
 
+- Prefer `--smb-timeout` with durations such as `20s`, `2m` and `1h`, while retaining bare seconds and the `--smb-timeout-seconds` alias. Keep the default, bounds and resume identity unchanged.
 - Add `--smb-timeout-seconds` (1–3600, default 120) to `network` and `domain`. Apply it to managed SMB discovery and scan calls, cap underlying response waits when a shorter deadline is chosen, and preserve resume identities when changing the timeout.
 - Actively disconnect timed-out/cancelled scan transports on a separate bounded interrupt path. Keep late-call ownership and buffer safety while releasing call capacity when the transport unwinds; discard sessions without additional graceful SMB cleanup requests. Cover more than 32 successive failures followed by healthy work.
 - Apply a two-minute deadline and cancellation to synchronous SMB scan connections, file opens/reads/closes and directory listings. Discard timed-out sessions, continue remaining work and retain failed files/subtrees for resume instead of waiting indefinitely at a checkpoint.

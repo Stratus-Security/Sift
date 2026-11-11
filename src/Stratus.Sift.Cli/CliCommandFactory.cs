@@ -988,19 +988,31 @@ internal static class CliCommandFactory
 
     private static Option<int> CreateSmbTimeoutOption()
     {
-        var option = new Option<int>("--smb-timeout-seconds")
+        var option = new Option<int>("--smb-timeout")
         {
-            Description = "Maximum time for an SMB operation in seconds (1-3600). Failed work remains pending for resume; transient file opens may retry.",
-            DefaultValueFactory = _ => SmbKerberosService.DefaultOperationTimeoutSeconds
+            Description = "Maximum time for an SMB operation: 20s, 2m, 1h, or bare seconds (1-3600). Failed work remains pending for resume; transient file opens may retry.",
+            HelpName = "duration",
+            Arity = ArgumentArity.ExactlyOne,
+            DefaultValueFactory = _ => SmbKerberosService.DefaultOperationTimeoutSeconds,
+            CustomParser = result =>
+            {
+                if (result.Tokens.Count == 1)
+                {
+                    var value = result.Tokens[0].Value.Trim();
+                    var multiplier = 1;
+                    if (value.EndsWith("s", StringComparison.OrdinalIgnoreCase)) value = value[..^1];
+                    else if (value.EndsWith("m", StringComparison.OrdinalIgnoreCase)) { value = value[..^1]; multiplier = 60; }
+                    else if (value.EndsWith("h", StringComparison.OrdinalIgnoreCase)) { value = value[..^1]; multiplier = 3600; }
+                    if (int.TryParse(value, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out var amount)
+                        && amount > 0 && amount <= 3600 / multiplier)
+                        return amount * multiplier;
+                }
+                result.AddError("The --smb-timeout value must be between 1s and 1h. Use whole seconds, minutes or hours, for example 20s, 2m, 1h, or 20.");
+                return 0;
+            }
         };
-        option.Validators.Add(result =>
-        {
-            // Conversion failures already have a parser error; GetValue would
-            // throw instead of returning that error for non-integer input.
-            if (!int.TryParse(result.Tokens.FirstOrDefault()?.Value, out var seconds)) return;
-            if (seconds is < 1 or > 3600)
-                result.AddError("The --smb-timeout-seconds value must be between 1 and 3600.");
-        });
+        option.Aliases.Add("--smb-timeout-seconds");
         return option;
     }
 

@@ -236,16 +236,24 @@ public class CliNetworkScanTests
     }
 
     [Theory]
-    [InlineData("network", 1)]
-    [InlineData("network", 10)]
-    [InlineData("domain", 3600)]
-    public void BuildRootCommand_AcceptsSmbTimeout(string command, int seconds)
+    [InlineData("network", "--smb-timeout", "1s", 1)]
+    [InlineData("network", "--smb-timeout", "20s", 20)]
+    [InlineData("network", "--smb-timeout", "20S", 20)]
+    [InlineData("network", "--smb-timeout", "20", 20)]
+    [InlineData("domain", "--smb-timeout", "2m", 120)]
+    [InlineData("domain", "--smb-timeout", "1h", 3600)]
+    [InlineData("network", "--smb-timeout", "60m", 3600)]
+    [InlineData("network", "--smb-timeout", "3600s", 3600)]
+    [InlineData("network", "--smb-timeout-seconds", "1", 1)]
+    [InlineData("network", "--smb-timeout-seconds", "10", 10)]
+    [InlineData("domain", "--smb-timeout-seconds", "3600", 3600)]
+    public void BuildRootCommand_AcceptsSmbTimeout(string command, string flag, string value, int seconds)
     {
         var args = command == "network" ? new[] { command, "--device", "server" } : new[] { command };
-        var result = Program.BuildRootCommand().Parse([.. args, "--smb-timeout-seconds", seconds.ToString()]);
+        var result = Program.BuildRootCommand().Parse([.. args, flag, value]);
         Assert.Empty(result.Errors);
         var option = Assert.IsType<System.CommandLine.Option<int>>(
-            result.CommandResult.Command.Options.Single(option => option.Name == "--smb-timeout-seconds"));
+            result.CommandResult.Command.Options.Single(option => option.Name == "--smb-timeout"));
         Assert.Equal(seconds, result.GetValue(option));
     }
 
@@ -256,7 +264,34 @@ public class CliNetworkScanTests
     [InlineData("invalid")]
     public void BuildRootCommand_RejectsInvalidSmbTimeout(string seconds)
     {
-        var result = Program.BuildRootCommand().Parse(["network", "--device", "server", "--smb-timeout-seconds", seconds]);
+        foreach (var flag in new[] { "--smb-timeout", "--smb-timeout-seconds" })
+        {
+            var result = Program.BuildRootCommand().Parse(["network", "--device", "server", flag, seconds]);
+            Assert.NotEmpty(result.Errors);
+        }
+    }
+
+    [Theory]
+    [InlineData("0s")]
+    [InlineData("-1s")]
+    [InlineData("61m")]
+    [InlineData("2h")]
+    [InlineData("999999999999999h")]
+    [InlineData("20ms")]
+    [InlineData("1.5s")]
+    [InlineData("1m20s")]
+    [InlineData("s")]
+    [InlineData("")]
+    public void BuildRootCommand_RejectsInvalidSmbDuration(string duration)
+    {
+        var result = Program.BuildRootCommand().Parse(["network", "--device", "server", "--smb-timeout", duration]);
+        Assert.NotEmpty(result.Errors);
+    }
+
+    [Fact]
+    public void BuildRootCommand_RequiresSmbTimeoutValue()
+    {
+        var result = Program.BuildRootCommand().Parse(["network", "--device", "server", "--smb-timeout"]);
         Assert.NotEmpty(result.Errors);
     }
 
@@ -265,7 +300,7 @@ public class CliNetworkScanTests
     {
         var result = Program.BuildRootCommand().Parse(["network", "--device", "server"]);
         var option = Assert.IsType<System.CommandLine.Option<int>>(
-            result.CommandResult.Command.Options.Single(option => option.Name == "--smb-timeout-seconds"));
+            result.CommandResult.Command.Options.Single(option => option.Name == "--smb-timeout"));
         Assert.Equal(120, result.GetValue(option));
     }
 
